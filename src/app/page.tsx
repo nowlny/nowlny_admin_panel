@@ -1,65 +1,294 @@
-import Image from "next/image";
+"use client";
+
+import React, { useState, useEffect } from "react";
+import Sidebar from "./components/Sidebar";
+import Header from "./components/Header";
+import OverviewSection from "./components/OverviewSection";
+import RestaurantsSection from "./components/RestaurantsSection";
+import CustomersSection from "./components/CustomersSection";
+import OrdersSection from "./components/OrdersSection";
+import DriversSection from "./components/DriversSection";
+import PromosSection from "./components/PromosSection";
+import ReportsSection from "./components/ReportsSection";
+import SettingsSection from "./components/SettingsSection";
+
+import { 
+  loadDb, 
+  saveDb, 
+  Restaurant, 
+  Customer, 
+  Driver, 
+  Order, 
+  PromoCode, 
+  SystemSettings, 
+  SystemNotification 
+} from "./data/mockData";
 
 export default function Home() {
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [activeTab, setActiveTab] = useState("overview");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(false);
+
+  // Stateful DB
+  const [db, setDb] = useState<ReturnType<typeof loadDb> | null>(null);
+
+  // Initialize theme from localStorage/system preferences on mount
+  useEffect(() => {
+    let darkPreference = false;
+    try {
+      const stored = window.localStorage.getItem("nowlny_theme");
+      if (stored) {
+        darkPreference = stored === "dark";
+      } else {
+        darkPreference = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      }
+    } catch (e) {
+      darkPreference = false;
+    }
+    setIsDarkMode(darkPreference);
+  }, []);
+
+  // Update DOM and localstorage when theme state changes
+  useEffect(() => {
+    try {
+      if (isDarkMode) {
+        document.documentElement.classList.add("dark");
+        window.localStorage.setItem("nowlny_theme", "dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+        window.localStorage.setItem("nowlny_theme", "light");
+      }
+    } catch (e) {
+      // safe fallback for iframe security containers
+    }
+  }, [isDarkMode]);
+
+  // Load database from localStorage on mount (hydration safety check)
+  useEffect(() => {
+    const loadedData = loadDb();
+    setDb(loadedData);
+    setIsHydrated(true);
+  }, []);
+
+  // Sync to localStorage on React state changes
+  const updateDb = (newDb: ReturnType<typeof loadDb>) => {
+    setDb(newDb);
+    saveDb(newDb);
+  };
+
+  if (!isHydrated || !db) {
+    return (
+      <div className="fixed inset-0 bg-zinc-950 flex flex-col items-center justify-center space-y-4">
+        <div className="h-12 w-12 rounded-2xl bg-gradient-to-tr from-orange-500 to-red-600 flex items-center justify-center animate-pulse shadow-lg shadow-orange-500/20">
+          <span className="text-white font-black text-xl">N</span>
+        </div>
+        <div className="text-center space-y-1">
+          <h2 className="text-xs font-bold text-white uppercase tracking-widest">NOWLNY DELIVERIES</h2>
+          <p className="text-[10px] text-zinc-500 font-semibold uppercase tracking-widest">Booting administrative interface...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Count pending cues for Sidebar badges
+  const pendingOrdersCount = db.orders.filter(o => o.status === "Pending").length;
+  const pendingRestaurantsCount = db.restaurants.filter(r => r.status === "Pending").length;
+  const pendingDriversCount = db.drivers.filter(d => d.verificationStatus === "Pending").length;
+
+  // Global Actions handlers
+  const handleUpdateRestaurant = (updatedRest: Restaurant) => {
+    const nextRestaurants = db.restaurants.map(r => r.id === updatedRest.id ? updatedRest : r);
+    updateDb({ ...db, restaurants: nextRestaurants });
+  };
+
+  const handleUpdateCustomer = (updatedCust: Customer) => {
+    const nextCustomers = db.customers.map(c => c.id === updatedCust.id ? updatedCust : c);
+    updateDb({ ...db, customers: nextCustomers });
+  };
+
+  const handleUpdateDriver = (updatedDriver: Driver) => {
+    const nextDrivers = db.drivers.map(d => d.id === updatedDriver.id ? updatedDriver : d);
+    updateDb({ ...db, drivers: nextDrivers });
+  };
+
+  const handleUpdateOrder = (updatedOrder: Order) => {
+    const nextOrders = db.orders.map(o => o.id === updatedOrder.id ? updatedOrder : o);
+    updateDb({ ...db, orders: nextOrders });
+  };
+
+  const handleUpdatePromos = (nextPromos: PromoCode[]) => {
+    updateDb({ ...db, promos: nextPromos });
+  };
+
+  const handleUpdateSettings = (nextSettings: SystemSettings) => {
+    updateDb({ ...db, settings: nextSettings });
+  };
+
+  // Notification methods
+  const handleMarkNotificationRead = (notifId: string) => {
+    const nextNotifs = db.notifications.map(n => n.id === notifId ? { ...n, read: true } : n);
+    updateDb({ ...db, notifications: nextNotifs });
+  };
+
+  const handleClearAllNotifications = () => {
+    updateDb({ ...db, notifications: [] });
+  };
+
+  const handleSendNotification = (
+    title: string, 
+    body: string, 
+    recipient: 'all' | 'customers' | 'restaurants' | 'drivers'
+  ) => {
+    const newNotif: SystemNotification = {
+      id: `notif-${Date.now()}`,
+      title,
+      body,
+      recipientType: recipient,
+      timestamp: new Date().toISOString(),
+      read: false
+    };
+
+    const nextNotifs = [newNotif, ...db.notifications];
+    updateDb({ ...db, notifications: nextNotifs });
+  };
+
+  // Fast-track Overview Approvals
+  const handleApproveRestaurantFromOverview = (restId: string) => {
+    const target = db.restaurants.find(r => r.id === restId);
+    if (target) {
+      handleUpdateRestaurant({ ...target, status: "Active" });
+      handleSendNotification(
+        "Restaurant Approved",
+        `Merchant ${target.name} has been approved by the platform team and is now live.`,
+        "restaurants"
+      );
+    }
+  };
+
+  const handleApproveDriverFromOverview = (driverId: string) => {
+    const target = db.drivers.find(d => d.id === driverId);
+    if (target) {
+      handleUpdateDriver({ ...target, verificationStatus: "Verified", status: "Offline" });
+      handleSendNotification(
+        "Rider Approved",
+        `Rider ${target.name} has passed vehicle verification and can now login.`,
+        "drivers"
+      );
+    }
+  };
+
+  // Section Routing
+  const renderActiveSection = () => {
+    switch (activeTab) {
+      case "overview":
+        return (
+          <OverviewSection 
+            db={db} 
+            setActiveTab={setActiveTab}
+            onApproveRestaurant={handleApproveRestaurantFromOverview}
+            onApproveDriver={handleApproveDriverFromOverview}
+          />
+        );
+      case "restaurants":
+        return (
+          <RestaurantsSection 
+            db={db} 
+            onUpdateRestaurant={handleUpdateRestaurant}
+            searchQuery={searchQuery}
+          />
+        );
+      case "customers":
+        return (
+          <CustomersSection 
+            db={db} 
+            onUpdateCustomer={handleUpdateCustomer}
+            searchQuery={searchQuery}
+          />
+        );
+      case "orders":
+        return (
+          <OrdersSection 
+            db={db} 
+            onUpdateOrder={handleUpdateOrder}
+            searchQuery={searchQuery}
+          />
+        );
+      case "drivers":
+        return (
+          <DriversSection 
+            db={db} 
+            onUpdateDriver={handleUpdateDriver}
+            searchQuery={searchQuery}
+          />
+        );
+      case "promos":
+        return (
+          <PromosSection 
+            db={db} 
+            onUpdatePromos={handleUpdatePromos}
+            searchQuery={searchQuery}
+          />
+        );
+      case "reports":
+        return (
+          <ReportsSection 
+            db={db} 
+            searchQuery={searchQuery}
+          />
+        );
+      case "settings":
+        return (
+          <SettingsSection 
+            db={db} 
+            onUpdateSettings={handleUpdateSettings}
+            onSendNotification={handleSendNotification}
+          />
+        );
+      default:
+        return <div className="p-8 text-xs font-bold">Routing Error</div>;
+    }
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="flex h-screen bg-zinc-50 dark:bg-black font-sans overflow-hidden text-zinc-900 dark:text-zinc-100 transition-colors duration-200">
+      {/* Sidebar Panel */}
+      <Sidebar 
+        activeTab={activeTab} 
+        setActiveTab={(tab) => {
+          setActiveTab(tab);
+          setSearchQuery(""); // Reset search query when changing screens
+        }}
+        pendingOrdersCount={pendingOrdersCount}
+        pendingRestaurantsCount={pendingRestaurantsCount}
+        pendingDriversCount={pendingDriversCount}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
+
+      {/* Main Workspace Frame */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
+        {/* Universal Operations Header */}
+        <Header 
+          title={activeTab}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          notifications={db.notifications}
+          onMarkNotificationRead={handleMarkNotificationRead}
+          onClearAllNotifications={handleClearAllNotifications}
+          onOpenSidebar={() => setSidebarOpen(true)}
+          isDarkMode={isDarkMode}
+          onToggleTheme={() => setIsDarkMode(!isDarkMode)}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+
+        {/* Scrollable Section Space */}
+        <main className="flex-1 overflow-y-auto p-4 sm:p-8 bg-zinc-50/50 dark:bg-zinc-950/20">
+          <div className="max-w-7xl mx-auto">
+            {renderActiveSection()}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
