@@ -1,25 +1,25 @@
 "use client";
 
 import React, { useState } from "react";
-import { 
-  UploadCloud, 
-  FileText, 
-  Image as ImageIcon, 
-  Sparkles, 
-  Check, 
-  Loader2, 
-  Plus, 
-  Trash2, 
-  AlertCircle, 
-  Eye, 
-  DollarSign, 
+import {
+  UploadCloud,
+  FileText,
+  Image as ImageIcon,
+  Sparkles,
+  Check,
+  Loader2,
+  Plus,
+  Trash2,
+  AlertCircle,
+  Eye,
+  DollarSign,
   X,
   Store,
   ChevronRight,
   TrendingUp,
   FolderPlus,
   ToggleLeft,
-  ToggleRight
+  ToggleRight,
 } from "lucide-react";
 import { Restaurant, MenuItem, MenuCategory, loadDb } from "../data/mockData";
 
@@ -40,7 +40,7 @@ interface ParsedMenuData {
 
 export default function RestaurantMenuSection({
   restaurant,
-  onUpdateRestaurant
+  onUpdateRestaurant,
 }: RestaurantMenuSectionProps) {
   // Real Google Gemini API states
   const [geminiApiKey, setGeminiApiKey] = useState(() => {
@@ -73,9 +73,15 @@ export default function RestaurantMenuSection({
     fileMime: string;
     fileSize: string;
   } | null>(null);
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
+  const [toast, setToast] = useState<{
+    message: string;
+    type: "success" | "error" | "info";
+  } | null>(null);
 
-  const showToast = (message: string, type: "success" | "error" | "info" = "success") => {
+  const showToast = (
+    message: string,
+    type: "success" | "error" | "info" = "success",
+  ) => {
     setToast({ message, type });
     setTimeout(() => {
       setToast(null);
@@ -85,7 +91,7 @@ export default function RestaurantMenuSection({
   // Menu editor states
   const [selectedCategoryTab, setSelectedCategoryTab] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
-  
+
   // Manual Add Item modal states
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newItemName, setNewItemName] = useState("");
@@ -97,11 +103,14 @@ export default function RestaurantMenuSection({
 
   // Categories present in the restaurant
   const currentCategories = restaurant.menu;
-  
+
   // Flat list of all items for searching
-  const allItems: MenuItem[] = currentCategories.reduce<MenuItem[]>((acc, cat) => {
-    return [...acc, ...cat.items];
-  }, []);
+  const allItems: MenuItem[] = currentCategories.reduce<MenuItem[]>(
+    (acc, cat) => {
+      return [...acc, ...cat.items];
+    },
+    [],
+  );
 
   // Filtered menu items
   const getFilteredItems = () => {
@@ -109,15 +118,16 @@ export default function RestaurantMenuSection({
     if (selectedCategoryTab === "all") {
       list = allItems;
     } else {
-      const cat = currentCategories.find(c => c.id === selectedCategoryTab);
+      const cat = currentCategories.find((c) => c.id === selectedCategoryTab);
       list = cat ? cat.items : [];
     }
 
     if (searchQuery.trim() !== "") {
-      list = list.filter(item => 
-        item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.category.toLowerCase().includes(searchQuery.toLowerCase())
+      list = list.filter(
+        (item) =>
+          item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          item.category.toLowerCase().includes(searchQuery.toLowerCase()),
       );
     }
     return list;
@@ -125,10 +135,13 @@ export default function RestaurantMenuSection({
 
   const filteredItems = getFilteredItems();
 
-
-
   // Real Google Gemini 1.5 Flash API scanner
-  const runLiveGeminiScan = async (fileName: string, base64Data: string, fileMime: string, fileSize: string) => {
+  const runLiveGeminiScan = async (
+    fileName: string,
+    base64Data: string,
+    fileMime: string,
+    fileSize: string,
+  ) => {
     setIsParsing(true);
     setParseProgress(10);
     setParsingStep("Establishing bridge connection to Gemini AI...");
@@ -142,13 +155,17 @@ export default function RestaurantMenuSection({
       if (currentProgress < 95) {
         currentProgress += Math.floor(Math.random() * 5) + 2;
         setParseProgress(Math.min(95, currentProgress));
-        
+
         if (currentProgress > 25 && currentProgress <= 45) {
           setParsingStep("Multimodal vision model parsing files...");
         } else if (currentProgress > 45 && currentProgress <= 70) {
-          setParsingStep("Running Google Gemini 1.5 Flash OCR on text grids...");
+          setParsingStep(
+            "Running Google Gemini 1.5 Flash OCR on text grids...",
+          );
         } else if (currentProgress > 70) {
-          setParsingStep("Structuring extracted dishes into dynamic JSON schemas...");
+          setParsingStep(
+            "Structuring extracted dishes into dynamic JSON schemas...",
+          );
         }
       }
     }, 300);
@@ -157,20 +174,22 @@ export default function RestaurantMenuSection({
       const response = await fetch("/api/parse-menu", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           fileData: base64Data,
           mimeType: fileMime,
-          customApiKey: geminiApiKey
-        })
+          customApiKey: geminiApiKey,
+        }),
       });
 
       clearInterval(progressInterval);
 
       if (!response.ok) {
         const errorBody = await response.json();
-        throw new Error(errorBody.error || "Failed to scan menu via Gemini API.");
+        throw new Error(
+          errorBody.error || "Failed to scan menu via Gemini API.",
+        );
       }
 
       const parsedResult = await response.json();
@@ -182,20 +201,25 @@ export default function RestaurantMenuSection({
         setIsParsing(false);
         setParsedData({
           name: fileName,
-          type: fileMime.includes("pdf") ? "pdf" : fileMime.includes("sheet") || fileMime.includes("excel") || fileMime.includes("csv") ? "excel" : "image",
+          type: fileMime.includes("pdf")
+            ? "pdf"
+            : fileMime.includes("sheet") ||
+                fileMime.includes("excel") ||
+                fileMime.includes("csv")
+              ? "excel"
+              : "image",
           size: fileSize,
-          categories: parsedResult.categories || []
+          categories: parsedResult.categories || [],
         });
         setParseSuccess(true);
         showToast("Menu parsed successfully by Gemini AI!", "success");
       }, 500);
-
     } catch (err: any) {
       clearInterval(progressInterval);
       setIsParsing(false);
-      
+
       let friendlyMessage = err.message;
-      
+
       // Parse the nested API error if present in JSON format
       if (err.message.includes("Gemini API responded with error:")) {
         try {
@@ -211,7 +235,7 @@ export default function RestaurantMenuSection({
           // Ignore and use original message if parsing fails
         }
       }
-      
+
       setParsingError(friendlyMessage);
       showToast("Gemini parsing failed. See details below.", "error");
     }
@@ -223,7 +247,7 @@ export default function RestaurantMenuSection({
       lastUploadedFile.name,
       lastUploadedFile.base64Data,
       lastUploadedFile.fileMime,
-      lastUploadedFile.fileSize
+      lastUploadedFile.fileSize,
     );
   };
 
@@ -235,7 +259,7 @@ export default function RestaurantMenuSection({
 
       setCustomFileName(file.name);
       setParsingError(null);
-      
+
       const reader = new FileReader();
       reader.onload = async () => {
         if (reader.result) {
@@ -244,9 +268,14 @@ export default function RestaurantMenuSection({
             name: file.name,
             base64Data,
             fileMime: file.type || "image/png",
-            fileSize: mockSize
+            fileSize: mockSize,
           });
-          await runLiveGeminiScan(file.name, base64Data, file.type || "image/png", mockSize);
+          await runLiveGeminiScan(
+            file.name,
+            base64Data,
+            file.type || "image/png",
+            mockSize,
+          );
         }
       };
       reader.readAsDataURL(file);
@@ -259,10 +288,12 @@ export default function RestaurantMenuSection({
 
     let updatedMenu = [...restaurant.menu];
 
-    parsedData.categories.forEach(parsedCat => {
+    parsedData.categories.forEach((parsedCat) => {
       // Check if category already exists (case-insensitive)
-      let existingCat = updatedMenu.find(c => c.name.toLowerCase() === parsedCat.name.toLowerCase());
-      
+      let existingCat = updatedMenu.find(
+        (c) => c.name.toLowerCase() === parsedCat.name.toLowerCase(),
+      );
+
       const nextItems: MenuItem[] = parsedCat.items.map((item, idx) => ({
         id: `item-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`,
         name: item.name,
@@ -270,7 +301,7 @@ export default function RestaurantMenuSection({
         price: item.price,
         image: item.image || "",
         isAvailable: item.isAvailable,
-        category: existingCat ? existingCat.name : parsedCat.name
+        category: existingCat ? existingCat.name : parsedCat.name,
       }));
 
       if (existingCat) {
@@ -281,14 +312,14 @@ export default function RestaurantMenuSection({
         updatedMenu.push({
           id: `cat-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
           name: parsedCat.name,
-          items: nextItems
+          items: nextItems,
         });
       }
     });
 
     onUpdateRestaurant({
       ...restaurant,
-      menu: updatedMenu
+      menu: updatedMenu,
     });
 
     // Reset states
@@ -298,41 +329,51 @@ export default function RestaurantMenuSection({
     setLastUploadedFile(null);
 
     // Show nice alert/toast
-    showToast("AI Parsed Menu approved! Items successfully integrated into your live menu.", "success");
+    showToast(
+      "AI Parsed Menu approved! Items successfully integrated into your live menu.",
+      "success",
+    );
   };
 
   // Delete an item from the menu
   const handleDeleteItem = (itemId: string, catId: string) => {
-    if (!confirm("Are you sure you want to remove this item from your store menu?")) return;
+    if (
+      !confirm(
+        "Are you sure you want to remove this item from your store menu?",
+      )
+    )
+      return;
 
-    const updatedMenu = restaurant.menu.map(cat => {
-      if (cat.id === catId) {
-        return {
-          ...cat,
-          items: cat.items.filter(item => item.id !== itemId)
-        };
-      }
-      return cat;
-    }).filter(cat => cat.items.length > 0); // Keep categories even if empty, or filter them out if preferred. Let's keep them unless empty.
+    const updatedMenu = restaurant.menu
+      .map((cat) => {
+        if (cat.id === catId) {
+          return {
+            ...cat,
+            items: cat.items.filter((item) => item.id !== itemId),
+          };
+        }
+        return cat;
+      })
+      .filter((cat) => cat.items.length > 0); // Keep categories even if empty, or filter them out if preferred. Let's keep them unless empty.
 
     onUpdateRestaurant({
       ...restaurant,
-      menu: updatedMenu
+      menu: updatedMenu,
     });
   };
 
   // Toggle Item Availability
   const handleToggleAvailability = (itemId: string, catId: string) => {
-    const updatedMenu = restaurant.menu.map(cat => {
+    const updatedMenu = restaurant.menu.map((cat) => {
       if (cat.id === catId) {
         return {
           ...cat,
-          items: cat.items.map(item => {
+          items: cat.items.map((item) => {
             if (item.id === itemId) {
               return { ...item, isAvailable: !item.isAvailable };
             }
             return item;
-          })
+          }),
         };
       }
       return cat;
@@ -340,23 +381,27 @@ export default function RestaurantMenuSection({
 
     onUpdateRestaurant({
       ...restaurant,
-      menu: updatedMenu
+      menu: updatedMenu,
     });
   };
 
   // Edit Item Details (inline price update for quick admin utility)
-  const handleUpdatePrice = (itemId: string, catId: string, newPrice: number) => {
+  const handleUpdatePrice = (
+    itemId: string,
+    catId: string,
+    newPrice: number,
+  ) => {
     if (isNaN(newPrice) || newPrice <= 0) return;
-    const updatedMenu = restaurant.menu.map(cat => {
+    const updatedMenu = restaurant.menu.map((cat) => {
       if (cat.id === catId) {
         return {
           ...cat,
-          items: cat.items.map(item => {
+          items: cat.items.map((item) => {
             if (item.id === itemId) {
               return { ...item, price: newPrice };
             }
             return item;
-          })
+          }),
         };
       }
       return cat;
@@ -364,7 +409,7 @@ export default function RestaurantMenuSection({
 
     onUpdateRestaurant({
       ...restaurant,
-      menu: updatedMenu
+      menu: updatedMenu,
     });
   };
 
@@ -376,23 +421,28 @@ export default function RestaurantMenuSection({
       return;
     }
 
-    const categoryName = newItemCategory === "NEW" ? newCategoryName : newItemCategory;
+    const categoryName =
+      newItemCategory === "NEW" ? newCategoryName : newItemCategory;
     if (!categoryName) {
       showToast("Please specify a category.", "error");
       return;
     }
 
     let updatedMenu = [...restaurant.menu];
-    let existingCat = updatedMenu.find(c => c.name.toLowerCase() === categoryName.toLowerCase());
+    let existingCat = updatedMenu.find(
+      (c) => c.name.toLowerCase() === categoryName.toLowerCase(),
+    );
 
     const newItem: MenuItem = {
       id: `item-${Date.now()}`,
       name: newItemName,
       description: newItemDesc,
       price: parseFloat(newItemPrice),
-      image: newItemImage || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=300&auto=format&fit=crop&q=80",
+      image:
+        newItemImage ||
+        "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=300&auto=format&fit=crop&q=80",
       isAvailable: true,
-      category: existingCat ? existingCat.name : categoryName
+      category: existingCat ? existingCat.name : categoryName,
     };
 
     if (existingCat) {
@@ -401,13 +451,13 @@ export default function RestaurantMenuSection({
       updatedMenu.push({
         id: `cat-${Date.now()}`,
         name: categoryName,
-        items: [newItem]
+        items: [newItem],
       });
     }
 
     onUpdateRestaurant({
       ...restaurant,
-      menu: updatedMenu
+      menu: updatedMenu,
     });
 
     // Reset Form
@@ -418,22 +468,24 @@ export default function RestaurantMenuSection({
     setNewItemCategory("");
     setNewCategoryName("");
     setNewItemImage("");
-    
-    showToast(`"${newItemName}" successfully added to your store menu.`, "success");
+
+    showToast(
+      `"${newItemName}" successfully added to your store menu.`,
+      "success",
+    );
   };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-200">
-      
       {/* Banner / Store Header Info Card */}
       <div className="relative h-48 sm:h-56 rounded-3xl overflow-hidden shadow-md">
-        <img 
-          src={restaurant.banner} 
+        <img
+          src={restaurant.banner}
           alt={restaurant.name}
           className="absolute inset-0 w-full h-full object-cover"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent" />
-        
+
         <div className="absolute bottom-6 left-6 right-6 flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-2xl bg-white dark:bg-zinc-900 shadow-lg flex items-center justify-center text-4xl shrink-0 border-2 border-orange-500/20">
@@ -441,20 +493,30 @@ export default function RestaurantMenuSection({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">{restaurant.name}</h1>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
-                  restaurant.status === "Active" ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" :
-                  restaurant.status === "Pending" ? "bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse" :
-                  "bg-red-500/20 text-red-400 border border-red-500/30"
-                }`}>
+                <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                  {restaurant.name}
+                </h1>
+                <span
+                  className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                    restaurant.status === "Active"
+                      ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                      : restaurant.status === "Pending"
+                        ? "bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse"
+                        : "bg-red-500/20 text-red-400 border border-red-500/30"
+                  }`}
+                >
                   {restaurant.status}
                 </span>
               </div>
-              <p className="text-xs text-zinc-300 font-semibold mt-1">Cuisine: {restaurant.cuisine} • Total Items: {allItems.length}</p>
-              <p className="text-[10px] text-zinc-400 mt-0.5">{restaurant.address}</p>
+              <p className="text-xs text-zinc-300 font-semibold mt-1">
+                Cuisine: {restaurant.cuisine} • Total Items: {allItems.length}
+              </p>
+              <p className="text-[10px] text-zinc-400 mt-0.5">
+                {restaurant.address}
+              </p>
             </div>
           </div>
-          
+
           <button
             onClick={() => setIsAddModalOpen(true)}
             className="bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-lg shadow-orange-500/20 flex items-center gap-2 transition-all self-stretch sm:self-auto justify-center"
@@ -466,11 +528,12 @@ export default function RestaurantMenuSection({
 
       {/* AI MENU UPLOADER / PARSER SECTION */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        
         {/* Dropzone & AI Uploader - Left (or full if no parsed preview) */}
-        <div className={`bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm flex flex-col justify-between ${
-          parsedData ? "lg:col-span-6" : "lg:col-span-12"
-        } transition-all duration-300`}>
+        <div
+          className={`bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm flex flex-col justify-between ${
+            parsedData ? "lg:col-span-6" : "lg:col-span-12"
+          } transition-all duration-300`}
+        >
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -478,11 +541,16 @@ export default function RestaurantMenuSection({
                   <Sparkles className="w-5 h-5 animate-pulse" />
                 </span>
                 <div>
-                  <h3 className="text-sm font-bold text-zinc-900 dark:text-white">AI Menu Uploader & Parser</h3>
-                  <p className="text-[10px] text-zinc-400">Import menu lists from PDF flyer, Excel spreadsheets, or images in seconds!</p>
+                  <h3 className="text-sm font-bold text-zinc-900 dark:text-white">
+                    AI Menu Uploader & Parser
+                  </h3>
+                  <p className="text-[10px] text-zinc-400">
+                    Import menu lists from PDF flyer, Excel spreadsheets, or
+                    images in seconds!
+                  </p>
                 </div>
               </div>
-              
+
               <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 bg-purple-500/10 text-purple-600 rounded border border-purple-500/10 animate-pulse">
                 Powered by OCR
               </span>
@@ -494,13 +562,15 @@ export default function RestaurantMenuSection({
                 <div className="flex items-start gap-2.5 text-red-500 dark:text-red-400">
                   <AlertCircle className="w-4.5 h-4.5 shrink-0 mt-0.5" />
                   <div className="space-y-1">
-                    <p className="font-bold text-red-650 dark:text-red-400">Gemini Parsing Failure</p>
+                    <p className="font-bold text-red-650 dark:text-red-400">
+                      Gemini Parsing Failure
+                    </p>
                     <p className="text-[11px] text-zinc-650 dark:text-zinc-300 leading-normal font-medium">
                       {parsingError}
                     </p>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center gap-2.5 pt-1">
                   {lastUploadedFile && (
                     <button
@@ -508,7 +578,9 @@ export default function RestaurantMenuSection({
                       disabled={isParsing}
                       className="bg-red-500 hover:bg-red-650 disabled:opacity-50 text-white font-bold text-[10px] px-3.5 py-2 rounded-xl shadow-md shadow-red-500/10 flex items-center gap-1.5 transition-all"
                     >
-                      <Loader2 className={`w-3.5 h-3.5 ${isParsing ? "animate-spin" : ""}`} />
+                      <Loader2
+                        className={`w-3.5 h-3.5 ${isParsing ? "animate-spin" : ""}`}
+                      />
                       Retry Scan
                     </button>
                   )}
@@ -528,12 +600,17 @@ export default function RestaurantMenuSection({
                 <p className="text-xs font-black text-zinc-800 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
                   ⚙️ Google Gemini AI Credentials
                 </p>
-                <p className="text-[9px] text-zinc-400">Enter your key below to connect directly to the multimodal AI uploader.</p>
+                <p className="text-[9px] text-zinc-400">
+                  Enter your key below to connect directly to the multimodal AI
+                  uploader.
+                </p>
               </div>
 
               <div className="space-y-2 animate-in slide-in-from-top-2 duration-200">
                 <div className="space-y-1">
-                  <label className="text-[9px] font-black text-zinc-400 uppercase tracking-widest block">Google Gemini API Key</label>
+                  <label className="text-[9px] font-black text-zinc-400 uppercase tracking-widest block">
+                    Google Gemini API Key
+                  </label>
                   <input
                     type="password"
                     placeholder="Enter Gemini API Key (AIzaSy...)"
@@ -543,7 +620,18 @@ export default function RestaurantMenuSection({
                   />
                 </div>
                 <p className="text-[9px] text-zinc-400 leading-normal">
-                  💡 <strong>Safe & Secure</strong>: Transmitted securely to Gemini's API endpoints. Get a free API Key at <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-purple-500 font-bold hover:underline">Google AI Studio</a>. If you set <code>GEMINI_API_KEY</code> on your server environment, you can leave this blank!
+                  💡 <strong>Safe & Secure</strong>: Transmitted securely to
+                  Gemini's API endpoints. Get a free API Key at{" "}
+                  <a
+                    href="https://aistudio.google.com/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-purple-500 font-bold hover:underline"
+                  >
+                    Google AI Studio
+                  </a>
+                  . If you set <code>GEMINI_API_KEY</code> on your server
+                  environment, you can leave this blank!
                 </p>
               </div>
             </div>
@@ -552,17 +640,21 @@ export default function RestaurantMenuSection({
             <div className="border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 text-center bg-zinc-50/50 dark:bg-zinc-950/20 flex flex-col items-center justify-center space-y-3 hover:border-purple-500/30 transition-colors relative">
               <UploadCloud className="w-10 h-10 text-zinc-300 dark:text-zinc-700" />
               <div className="space-y-1">
-                <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">Drag & drop your store menu file here</p>
-                <p className="text-[10px] text-zinc-400">PDF, Excel (XLSX, CSV), PNG, JPG up to 10MB</p>
+                <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
+                  Drag & drop your store menu file here
+                </p>
+                <p className="text-[10px] text-zinc-400">
+                  PDF, Excel (XLSX, CSV), PNG, JPG up to 10MB
+                </p>
               </div>
-              
+
               <label className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/80 text-zinc-700 dark:text-zinc-300 font-bold text-[10px] px-3 py-2 rounded-lg cursor-pointer transition-all shadow-sm">
                 Browse Files
-                <input 
-                  type="file" 
-                  accept=".pdf, .xlsx, .xls, .csv, .png, .jpg, .jpeg, .webp" 
-                  onChange={handleCustomFileUpload} 
-                  className="hidden" 
+                <input
+                  type="file"
+                  accept=".pdf, .xlsx, .xls, .csv, .png, .jpg, .jpeg, .webp"
+                  onChange={handleCustomFileUpload}
+                  className="hidden"
                 />
               </label>
             </div>
@@ -579,12 +671,14 @@ export default function RestaurantMenuSection({
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   {parsingStep}
                 </span>
-                <span className="text-purple-600 dark:text-purple-400 font-black">{parseProgress}%</span>
+                <span className="text-purple-600 dark:text-purple-400 font-black">
+                  {parseProgress}%
+                </span>
               </div>
 
               {/* Progress bar wrapper */}
               <div className="h-1.5 w-full bg-zinc-100 dark:bg-zinc-850 rounded-full overflow-hidden">
-                <div 
+                <div
                   className="h-full bg-gradient-to-r from-purple-500 to-indigo-600 transition-all duration-300 rounded-full"
                   style={{ width: `${parseProgress}%` }}
                 />
@@ -603,8 +697,12 @@ export default function RestaurantMenuSection({
                     <Check className="w-4 h-4" />
                   </span>
                   <div>
-                    <h3 className="text-xs font-black text-zinc-900 dark:text-white uppercase tracking-wider">AI Parsed Menu Preview</h3>
-                    <p className="text-[9px] text-zinc-400 font-semibold truncate max-w-[200px]">Source: {parsedData.name}</p>
+                    <h3 className="text-xs font-black text-zinc-900 dark:text-white uppercase tracking-wider">
+                      AI Parsed Menu Preview
+                    </h3>
+                    <p className="text-[9px] text-zinc-400 font-semibold truncate max-w-[200px]">
+                      Source: {parsedData.name}
+                    </p>
                   </div>
                 </div>
 
@@ -623,15 +721,24 @@ export default function RestaurantMenuSection({
                       <FolderPlus className="w-3.5 h-3.5" />
                       Category: {cat.name}
                     </h4>
-                    
+
                     <div className="space-y-2">
                       {cat.items.map((item, itemIdx) => (
-                        <div key={itemIdx} className="p-3 bg-zinc-50 dark:bg-zinc-950/40 rounded-xl border border-zinc-150 dark:border-zinc-850 flex items-start justify-between gap-3 text-xs">
+                        <div
+                          key={itemIdx}
+                          className="p-3 bg-zinc-50 dark:bg-zinc-950/40 rounded-xl border border-zinc-150 dark:border-zinc-850 flex items-start justify-between gap-3 text-xs"
+                        >
                           <div className="min-w-0">
-                            <p className="font-bold text-zinc-800 dark:text-zinc-200 truncate">{item.name}</p>
-                            <p className="text-[10px] text-zinc-400 line-clamp-1 mt-0.5">{item.description}</p>
+                            <p className="font-bold text-zinc-800 dark:text-zinc-200 truncate">
+                              {item.name}
+                            </p>
+                            <p className="text-[10px] text-zinc-400 line-clamp-1 mt-0.5">
+                              {item.description}
+                            </p>
                           </div>
-                          <span className="font-extrabold text-orange-500 shrink-0">${item.price.toFixed(2)}</span>
+                          <span className="font-extrabold text-orange-500 shrink-0">
+                            ${item.price.toFixed(2)}
+                          </span>
                         </div>
                       ))}
                     </div>
@@ -651,7 +758,7 @@ export default function RestaurantMenuSection({
               >
                 Discard
               </button>
-              
+
               <button
                 onClick={handleApproveParsedMenu}
                 className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-lg shadow-purple-500/20 flex items-center justify-center gap-2 transition-all"
@@ -665,12 +772,16 @@ export default function RestaurantMenuSection({
 
       {/* MENU BROWSER & EDITOR TABLE */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm space-y-6">
-        
         {/* Search, Filter, Stats Section */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h3 className="text-sm font-bold text-zinc-900 dark:text-white">Store Menu Catalog</h3>
-            <p className="text-[10px] text-zinc-400">Search, edit pricing, or toggle availability of dishes listed in your store menu.</p>
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-white">
+              Store Menu Catalog
+            </h3>
+            <p className="text-[10px] text-zinc-400">
+              Search, edit pricing, or toggle availability of dishes listed in
+              your store menu.
+            </p>
           </div>
 
           <div className="w-full sm:w-64">
@@ -696,8 +807,8 @@ export default function RestaurantMenuSection({
           >
             All Items ({allItems.length})
           </button>
-          
-          {currentCategories.map(cat => (
+
+          {currentCategories.map((cat) => (
             <button
               key={cat.id}
               onClick={() => setSelectedCategoryTab(cat.id)}
@@ -716,18 +827,25 @@ export default function RestaurantMenuSection({
         {filteredItems.length === 0 ? (
           <div className="text-center p-12 border border-dashed border-zinc-200 dark:border-zinc-800 rounded-2xl flex flex-col items-center justify-center">
             <Store className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mb-3" />
-            <p className="text-xs font-bold text-zinc-800 dark:text-zinc-200">No matching menu items found</p>
-            <p className="text-[10px] text-zinc-400 mt-1">Try refining search query or upload a menu file to populate details.</p>
+            <p className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
+              No matching menu items found
+            </p>
+            <p className="text-[10px] text-zinc-400 mt-1">
+              Try refining search query or upload a menu file to populate
+              details.
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredItems.map(item => {
+            {filteredItems.map((item) => {
               // Find category ID of item
-              const cat = currentCategories.find(c => c.items.some(i => i.id === item.id));
+              const cat = currentCategories.find((c) =>
+                c.items.some((i) => i.id === item.id),
+              );
               const catId = cat ? cat.id : "";
 
               return (
-                <div 
+                <div
                   key={item.id}
                   className={`bg-zinc-50/50 dark:bg-zinc-950/20 border border-zinc-150 dark:border-zinc-800/80 p-4 rounded-2xl flex gap-4 hover:border-orange-500/20 hover:shadow-sm transition-all duration-200 group ${
                     !item.isAvailable ? "opacity-60" : ""
@@ -736,7 +854,11 @@ export default function RestaurantMenuSection({
                   {/* Item Image placeholder or loaded */}
                   <div className="w-16 h-16 rounded-xl bg-zinc-200 dark:bg-zinc-800 overflow-hidden shrink-0 border border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-2xl">
                     {item.image ? (
-                      <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
+                      <img
+                        src={item.image}
+                        alt={item.name}
+                        className="w-full h-full object-cover"
+                      />
                     ) : (
                       "🍲"
                     )}
@@ -757,7 +879,9 @@ export default function RestaurantMenuSection({
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <p className="text-[10px] text-zinc-400 line-clamp-2 mt-0.5">{item.description}</p>
+                      <p className="text-[10px] text-zinc-400 line-clamp-2 mt-0.5">
+                        {item.description}
+                      </p>
                     </div>
 
                     <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800/80 mt-2">
@@ -768,7 +892,13 @@ export default function RestaurantMenuSection({
                           type="number"
                           step="0.1"
                           value={item.price}
-                          onChange={(e) => handleUpdatePrice(item.id, catId, parseFloat(e.target.value))}
+                          onChange={(e) =>
+                            handleUpdatePrice(
+                              item.id,
+                              catId,
+                              parseFloat(e.target.value),
+                            )
+                          }
                           className="w-16 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold text-zinc-800 dark:text-zinc-200 px-1 py-0.5 rounded focus:outline-none focus:ring-1 focus:ring-orange-500"
                         />
                       </div>
@@ -805,7 +935,6 @@ export default function RestaurantMenuSection({
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 duration-150">
-            
             <div className="p-5 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-900/40">
               <div className="flex items-center gap-2">
                 <span className="p-2 bg-orange-500/10 text-orange-500 rounded-xl">
@@ -815,7 +944,7 @@ export default function RestaurantMenuSection({
                   Add Custom Menu Item
                 </h3>
               </div>
-              <button 
+              <button
                 onClick={() => setIsAddModalOpen(false)}
                 className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"
               >
@@ -823,10 +952,15 @@ export default function RestaurantMenuSection({
               </button>
             </div>
 
-            <form onSubmit={handleAddItemManually} className="p-6 space-y-4 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+            <form
+              onSubmit={handleAddItemManually}
+              className="p-6 space-y-4 text-xs font-semibold text-zinc-700 dark:text-zinc-300"
+            >
               {/* Item Name */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Dish Title *</label>
+                <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                  Dish Title *
+                </label>
                 <input
                   type="text"
                   required
@@ -840,7 +974,9 @@ export default function RestaurantMenuSection({
               {/* Price & Image */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Price ($ USD) *</label>
+                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    Price ($ USD) *
+                  </label>
                   <input
                     type="number"
                     step="0.01"
@@ -853,7 +989,9 @@ export default function RestaurantMenuSection({
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Image URL (Optional)</label>
+                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    Image URL (Optional)
+                  </label>
                   <input
                     type="text"
                     placeholder="https://images.unsplash..."
@@ -866,16 +1004,22 @@ export default function RestaurantMenuSection({
 
               {/* Category selector */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Category Selection *</label>
+                <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                  Category Selection *
+                </label>
                 <select
                   required
                   value={newItemCategory}
                   onChange={(e) => setNewItemCategory(e.target.value)}
                   className="w-full bg-zinc-50 border border-zinc-200 text-zinc-850 rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-orange-500 dark:bg-zinc-950/20 dark:border-zinc-800 dark:text-zinc-200 cursor-pointer"
                 >
-                  <option value="" disabled>Choose category...</option>
-                  {currentCategories.map(c => (
-                    <option key={c.id} value={c.name}>{c.name}</option>
+                  <option value="" disabled>
+                    Choose category...
+                  </option>
+                  {currentCategories.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.name}
+                    </option>
                   ))}
                   <option value="NEW">+ Create New Category...</option>
                 </select>
@@ -884,7 +1028,9 @@ export default function RestaurantMenuSection({
               {/* New Category Name (Only visible when NEW chosen) */}
               {newItemCategory === "NEW" && (
                 <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-150">
-                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">New Category Title *</label>
+                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    New Category Title *
+                  </label>
                   <input
                     type="text"
                     required
@@ -898,7 +1044,9 @@ export default function RestaurantMenuSection({
 
               {/* Description */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Dish Description</label>
+                <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                  Dish Description
+                </label>
                 <textarea
                   placeholder="Describe ingredients, cooking styles, allergen warnings..."
                   rows={3}
@@ -945,8 +1093,10 @@ export default function RestaurantMenuSection({
               <AlertCircle className="w-4 h-4" />
             </span>
           )}
-          <p className="text-[11px] font-bold text-white leading-normal">{toast.message}</p>
-          <button 
+          <p className="text-[11px] font-bold text-white leading-normal">
+            {toast.message}
+          </p>
+          <button
             onClick={() => setToast(null)}
             className="text-zinc-500 hover:text-white transition-colors ml-auto p-1"
           >
@@ -954,7 +1104,6 @@ export default function RestaurantMenuSection({
           </button>
         </div>
       )}
-
     </div>
   );
 }
