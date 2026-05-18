@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import Sidebar from "./components/Sidebar";
+import Sidebar, { Role } from "./components/Sidebar";
 import Header from "./components/Header";
 import OverviewSection from "./components/OverviewSection";
 import RestaurantsSection from "./components/RestaurantsSection";
@@ -11,6 +11,11 @@ import DriversSection from "./components/DriversSection";
 import PromosSection from "./components/PromosSection";
 import ReportsSection from "./components/ReportsSection";
 import SettingsSection from "./components/SettingsSection";
+
+// Restaurant-specific views
+import RestaurantOverviewSection from "./components/RestaurantOverviewSection";
+import RestaurantMenuSection from "./components/RestaurantMenuSection";
+import RestaurantSettingsSection from "./components/RestaurantSettingsSection";
 
 import { 
   loadDb, 
@@ -33,6 +38,9 @@ export default function Home() {
 
   // Stateful DB
   const [db, setDb] = useState<ReturnType<typeof loadDb> | null>(null);
+
+  // Access control role state
+  const [currentRole, setCurrentRole] = useState<Role>({ type: "admin" });
 
   // Initialize theme from localStorage/system preferences on mount
   useEffect(() => {
@@ -93,7 +101,10 @@ export default function Home() {
   }
 
   // Count pending cues for Sidebar badges
-  const pendingOrdersCount = db.orders.filter(o => o.status === "Pending").length;
+  const pendingOrdersCount = currentRole.type === 'restaurant'
+    ? db.orders.filter(o => o.status === "Pending" && o.restaurantId === currentRole.restaurantId).length
+    : db.orders.filter(o => o.status === "Pending").length;
+
   const pendingRestaurantsCount = db.restaurants.filter(r => r.status === "Pending").length;
   const pendingDriversCount = db.drivers.filter(d => d.verificationStatus === "Pending").length;
 
@@ -179,9 +190,25 @@ export default function Home() {
     }
   };
 
+  // Role Switching trigger
+  const handleRoleChange = (nextRole: Role) => {
+    setCurrentRole(nextRole);
+    if (nextRole.type === "admin") {
+      setActiveTab("overview");
+    } else {
+      setActiveTab("restaurant_overview");
+    }
+  };
+
   // Section Routing
   const renderActiveSection = () => {
+    // Check if store scope impersonation is active
+    const currentRest = currentRole.type === 'restaurant'
+      ? db.restaurants.find(r => r.id === currentRole.restaurantId)
+      : null;
+
     switch (activeTab) {
+      // Root Administrator Tabs
       case "overview":
         return (
           <OverviewSection 
@@ -246,6 +273,74 @@ export default function Home() {
             onSendNotification={handleSendNotification}
           />
         );
+
+      // Restaurant Partner Impersonated Tabs
+      case "restaurant_overview":
+        return currentRest ? (
+          <RestaurantOverviewSection 
+            restaurant={currentRest}
+            db={db}
+            setActiveTab={setActiveTab}
+            onUpdateOrder={handleUpdateOrder}
+          />
+        ) : (
+          <div className="p-8 text-xs font-bold text-red-500">Impersonation Error: Restaurant not found</div>
+        );
+
+      case "restaurant_menu":
+        return currentRest ? (
+          <RestaurantMenuSection 
+            restaurant={currentRest}
+            onUpdateRestaurant={handleUpdateRestaurant}
+          />
+        ) : (
+          <div className="p-8 text-xs font-bold text-red-500">Impersonation Error: Restaurant not found</div>
+        );
+
+      case "restaurant_orders":
+        if (currentRest) {
+          // Impersonate database with filtered context
+          const storeDb = {
+            ...db,
+            orders: db.orders.filter(o => o.restaurantId === currentRest.id)
+          };
+          return (
+            <OrdersSection 
+              db={storeDb} 
+              onUpdateOrder={handleUpdateOrder}
+              searchQuery={searchQuery}
+            />
+          );
+        }
+        return <div className="p-8 text-xs font-bold text-red-500">Impersonation Error</div>;
+
+      case "restaurant_reports":
+        if (currentRest) {
+          // Impersonate database for sales reports
+          const storeDb = {
+            ...db,
+            orders: db.orders.filter(o => o.restaurantId === currentRest.id),
+            restaurants: db.restaurants.filter(r => r.id === currentRest.id)
+          };
+          return (
+            <ReportsSection 
+              db={storeDb} 
+              searchQuery={searchQuery}
+            />
+          );
+        }
+        return <div className="p-8 text-xs font-bold text-red-500">Impersonation Error</div>;
+
+      case "restaurant_settings":
+        return currentRest ? (
+          <RestaurantSettingsSection 
+            restaurant={currentRest}
+            onUpdateRestaurant={handleUpdateRestaurant}
+          />
+        ) : (
+          <div className="p-8 text-xs font-bold text-red-500">Impersonation Error: Restaurant not found</div>
+        );
+
       default:
         return <div className="p-8 text-xs font-bold">Routing Error</div>;
     }
@@ -265,6 +360,9 @@ export default function Home() {
         pendingDriversCount={pendingDriversCount}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        currentRole={currentRole}
+        onChangeRole={handleRoleChange}
+        restaurants={db.restaurants}
       />
 
       {/* Main Workspace Frame */}
