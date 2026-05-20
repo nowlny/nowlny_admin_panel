@@ -17,7 +17,7 @@ import {
 import { Restaurant } from "../data/mockData";
 
 export interface Role {
-  type: 'admin' | 'restaurant';
+  type: 'admin' | 'restaurant' | 'restaurant_owner';
   restaurantId?: string;
 }
 
@@ -79,6 +79,10 @@ export default function Sidebar({
         { id: "system_users", label: "System Users", icon: Users2 },
         { id: "settings", label: "System Settings", icon: Settings },
       ];
+    } else if (currentRole.type === 'restaurant_owner') {
+      return [
+        { id: "restaurant_application", label: "Apply & Status", icon: Store }
+      ];
     } else {
       // Find current restaurant
       const currentRest = restaurants.find(r => r.id === currentRole.restaurantId);
@@ -132,44 +136,48 @@ export default function Sidebar({
               <span className={`text-[9px] px-1.5 py-0.5 rounded font-black border uppercase ${
                 currentRole.type === 'admin' 
                   ? "bg-orange-500/10 text-orange-400 border-orange-500/20" 
+                  : currentRole.type === 'restaurant_owner'
+                  ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
                   : "bg-purple-500/10 text-purple-400 border-purple-500/20"
               }`}>
-                {currentRole.type === 'admin' ? "Admin" : "Store"}
+                {currentRole.type === 'admin' ? "Admin" : currentRole.type === 'restaurant_owner' ? "Owner" : "Store"}
               </span>
             </h1>
             <p className="text-[10px] text-zinc-500 font-semibold tracking-widest uppercase">
-              {currentRole.type === 'admin' ? "Operations Portal" : "Merchant Hub"}
+              {currentRole.type === 'admin' ? "Operations Portal" : currentRole.type === 'restaurant_owner' ? "Partner Applicant" : "Merchant Hub"}
             </p>
           </div>
         </div>
 
         {/* ROLE IMPERSONATOR DRIP-DOWN */}
-        <div className="mx-4 mt-5 p-3 bg-zinc-900/60 border border-zinc-800/80 rounded-xl space-y-2">
-          <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block flex items-center gap-1">
-            <Users2 className="w-3.5 h-3.5" /> Access Authority
-          </label>
-          <select
-            value={currentRole.type === 'admin' ? 'admin' : currentRole.restaurantId}
-            onChange={(e) => {
-              const val = e.target.value;
-              if (val === 'admin') {
-                onChangeRole({ type: 'admin' });
-              } else {
-                onChangeRole({ type: 'restaurant', restaurantId: val });
-              }
-            }}
-            className="w-full bg-zinc-950 border border-zinc-800 text-[11px] font-bold text-white rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer"
-          >
-            <option value="admin">Platform Root Admin</option>
-            <optgroup label="Merchant Stores">
-              {restaurants.map(r => (
-                <option key={r.id} value={r.id}>
-                  {r.logo} {r.name}
-                </option>
-              ))}
-            </optgroup>
-          </select>
-        </div>
+        {currentRole.type !== 'restaurant_owner' && (
+          <div className="mx-4 mt-5 p-3 bg-zinc-900/60 border border-zinc-800/80 rounded-xl space-y-2">
+            <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block flex items-center gap-1">
+              <Users2 className="w-3.5 h-3.5" /> Access Authority
+            </label>
+            <select
+              value={currentRole.type === 'admin' ? 'admin' : currentRole.restaurantId}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === 'admin') {
+                  onChangeRole({ type: 'admin' });
+                } else {
+                  onChangeRole({ type: 'restaurant', restaurantId: val });
+                }
+              }}
+              className="w-full bg-zinc-950 border border-zinc-800 text-[11px] font-bold text-white rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer"
+            >
+              <option value="admin">Platform Root Admin</option>
+              <optgroup label="Merchant Stores">
+                {restaurants.map(r => (
+                  <option key={r.id} value={r.id}>
+                    {r.logo} {r.name}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </div>
+        )}
 
         {/* Navigation */}
         <nav className="flex-1 px-4 py-5 space-y-1.5 overflow-y-auto">
@@ -210,15 +218,15 @@ export default function Sidebar({
         <div className="p-4 border-t border-zinc-800 bg-zinc-900/30">
           <div className="flex items-center gap-3 px-2 py-1.5">
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-zinc-950 font-bold shadow text-xs uppercase shrink-0">
-              {currentRole.type === 'admin' ? "HA" : activeRestaurant?.logo || "ST"}
+              {currentRole.type === 'admin' ? "HA" : currentRole.type === 'restaurant_owner' ? "OW" : activeRestaurant?.logo || "ST"}
             </div>
             
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-white truncate">
-                {currentRole.type === 'admin' ? "Hassan Al-Sabeh" : activeRestaurant?.name}
+                {currentRole.type === 'admin' ? "Hassan Al-Sabeh" : currentRole.type === 'restaurant_owner' ? "Store Applicant" : activeRestaurant?.name}
               </p>
               <p className="text-[10px] text-zinc-500 truncate font-semibold">
-                {currentRole.type === 'admin' ? "Root Administrator" : `${activeRestaurant?.cuisine.split(',')[0]} Partner`}
+                {currentRole.type === 'admin' ? "Root Administrator" : currentRole.type === 'restaurant_owner' ? "Pending Registration" : `${activeRestaurant?.cuisine.split(',')[0]} Partner`}
               </p>
             </div>
 

@@ -18,6 +18,8 @@ import LoginScreen from "./components/LoginScreen";
 import RestaurantOverviewSection from "./components/RestaurantOverviewSection";
 import RestaurantMenuSection from "./components/RestaurantMenuSection";
 import RestaurantSettingsSection from "./components/RestaurantSettingsSection";
+import RestaurantApplicationSection from "./components/RestaurantApplicationSection";
+import { restaurantsService, RestaurantSubmission } from "../services/restaurants";
 
 import { 
   loadDb, 
@@ -44,6 +46,9 @@ export default function Home() {
 
   // Access control role state
   const [currentRole, setCurrentRole] = useState<Role>({ type: "admin" });
+
+  // Merchant submission state (for restaurant_owner JWT type)
+  const [merchantSubmission, setMerchantSubmission] = useState<RestaurantSubmission | null>(null);
 
   // Initialize theme from localStorage/system preferences on mount
   useEffect(() => {
@@ -90,6 +95,57 @@ export default function Home() {
     setIsHydrated(true);
   }, []);
 
+  // JWT token decoder (zero-dependency, client-side only)
+  const decodeToken = (token: string): Record<string, any> | null => {
+    try {
+      const payload = token.split('.')[1];
+      // Pad base64 string to multiple of 4
+      const padded = payload + '='.repeat((4 - payload.length % 4) % 4);
+      return JSON.parse(window.atob(padded));
+    } catch {
+      return null;
+    }
+  };
+
+  // Fetch and refresh merchant submission status (for restaurant_owner role)
+  const refetchSubmissionStatus = async () => {
+    try {
+      const data = await restaurantsService.getMySubmission();
+      setMerchantSubmission(data);
+      // If approved and has a linked restaurantId, switch to store dashboard
+      if (data.status === 'approved' && data.restaurantId) {
+        setCurrentRole({ type: 'restaurant', restaurantId: data.restaurantId });
+        handleTabChange('restaurant_overview');
+      }
+    } catch (err: any) {
+      // 404 means no submission yet – expected state for new owners
+      if (!err?.message?.includes('404')) {
+        console.error('Failed to fetch submission status:', err);
+      }
+      setMerchantSubmission(null);
+    }
+  };
+
+  // Decode JWT and determine role / initial tab whenever the token changes
+  useEffect(() => {
+    if (!authToken) return;
+
+    const decoded = decodeToken(authToken);
+    if (!decoded) return;
+
+    if (decoded.userType === 'restaurant_owner') {
+      // Keep role as restaurant_owner and fetch their submission
+      setCurrentRole({ type: 'restaurant_owner' });
+      handleTabChange('restaurant_application');
+      refetchSubmissionStatus();
+    } else {
+      // Default: treat as admin
+      setCurrentRole({ type: 'admin' });
+      handleTabChange('overview');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken]);
+
   // Sync tab state with URL hash to support browser back button
   useEffect(() => {
     const onHashChange = () => {
@@ -97,7 +153,13 @@ export default function Home() {
       if (hash) {
         setActiveTab(hash);
       } else {
-        setActiveTab(currentRole.type === "admin" ? "overview" : "restaurant_overview");
+        setActiveTab(
+        currentRole.type === "admin"
+          ? "overview"
+          : currentRole.type === "restaurant_owner"
+          ? "restaurant_application"
+          : "restaurant_overview"
+      );
       }
     };
 
@@ -377,6 +439,15 @@ export default function Home() {
           />
         ) : (
           <div className="p-8 text-xs font-bold text-red-500">Impersonation Error: Restaurant not found</div>
+        );
+
+      // Restaurant Owner (applicant) portal
+      case "restaurant_application":
+        return (
+          <RestaurantApplicationSection
+            initialSubmission={merchantSubmission}
+            onRefreshSubmissionStatus={refetchSubmissionStatus}
+          />
         );
 
       default:

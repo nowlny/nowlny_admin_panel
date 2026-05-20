@@ -52,6 +52,35 @@ export interface RestaurantResponse extends RestaurantCreate {
   menu?: any[]; // Keep flexible if not strictly defined
 }
 
+// Restaurant Submission interfaces
+export interface RestaurantSubmission {
+  id: string;
+  name: string;
+  description?: string;
+  logo?: string;
+  coverImage?: string;
+  email: string;
+  phone: string;
+  website?: string;
+  city: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  deliveryFee: number;
+  estimatedDeliveryMinutes: number;
+  cuisineType: string;
+  openingHours?: {
+    entries: OpeningHourEntry[];
+  };
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  rejectionReason?: string | null;
+  restaurantId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type RestaurantApplyPayload = RestaurantCreate;
+
 export const restaurantsService = {
   /**
    * Get all restaurants
@@ -107,6 +136,58 @@ export const restaurantsService = {
     return apiClient<void>(`/api/v1/restaurants/${id}/review`, {
       method: 'PATCH',
       body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * Get all restaurant applications (admin)
+   * GET /api/v1/restaurants/submissions
+   */
+  getSubmissions: () => {
+    return apiClient<RestaurantSubmission[]>('/api/v1/restaurants/submissions', {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Review a restaurant submission (admin)
+   * PATCH /api/v1/restaurants/submissions/{id}/review
+   */
+  reviewSubmission: (id: string, data: RestaurantReview) => {
+    return apiClient<void>(`/api/v1/restaurants/submissions/${id}/review`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * Apply to be a restaurant (merchant/owner)
+   * POST /api/v1/restaurants/me/apply
+   */
+  applyRestaurant: (data: RestaurantApplyPayload) => {
+    return apiClient<RestaurantSubmission>('/api/v1/restaurants/me/apply', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * Cancel own pending restaurant application (merchant/owner)
+   * PATCH /api/v1/restaurants/me/submission/cancel
+   */
+  cancelMySubmission: () => {
+    return apiClient<void>('/api/v1/restaurants/me/submission/cancel', {
+      method: 'PATCH',
+    });
+  },
+
+  /**
+   * Get own restaurant application status/details (merchant/owner)
+   * GET /api/v1/restaurants/me/submission
+   */
+  getMySubmission: () => {
+    return apiClient<RestaurantSubmission>('/api/v1/restaurants/me/submission', {
+      method: 'GET',
     });
   }
 };
