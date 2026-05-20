@@ -174,7 +174,7 @@ export default function RestaurantsSection({
                 <p className="text-xs text-orange-400 font-semibold">{selectedRest.cuisineType || "No cuisine set"}</p>
                 <div className="flex items-center gap-4 mt-2 text-[11px] text-zinc-400">
                   <span className="flex items-center gap-1"><MapPin className="w-3.5 h-3.5" /> {[selectedRest.address, selectedRest.city].filter(Boolean).join(", ") || "No address provided"}</span>
-                  <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Joined {selectedRest.joinedDate || selectedRest.createdAt ? new Date(selectedRest.joinedDate || selectedRest.createdAt).toLocaleDateString() : "N/A"}</span>
+                  <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Joined {selectedRest.joinedDate || selectedRest.createdAt ? new Date((selectedRest.joinedDate || selectedRest.createdAt) as string).toLocaleDateString() : "N/A"}</span>
                 </div>
               </div>
             </div>
