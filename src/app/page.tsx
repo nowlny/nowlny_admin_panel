@@ -11,6 +11,8 @@ import DriversSection from "./components/DriversSection";
 import PromosSection from "./components/PromosSection";
 import ReportsSection from "./components/ReportsSection";
 import SettingsSection from "./components/SettingsSection";
+import SystemUsersSection from "./components/SystemUsersSection";
+import LoginScreen from "./components/LoginScreen";
 
 // Restaurant-specific views
 import RestaurantOverviewSection from "./components/RestaurantOverviewSection";
@@ -35,6 +37,7 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [authToken, setAuthToken] = useState<string | null>(null);
 
   // Stateful DB
   const [db, setDb] = useState<ReturnType<typeof loadDb> | null>(null);
@@ -77,8 +80,37 @@ export default function Home() {
   useEffect(() => {
     const loadedData = loadDb();
     setDb(loadedData);
+    
+    // Check for auth token
+    const token = localStorage.getItem("token");
+    if (token) {
+      setAuthToken(token);
+    }
+    
     setIsHydrated(true);
   }, []);
+
+  // Sync tab state with URL hash to support browser back button
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash.replace("#", "");
+      if (hash) {
+        setActiveTab(hash);
+      } else {
+        setActiveTab(currentRole.type === "admin" ? "overview" : "restaurant_overview");
+      }
+    };
+
+    onHashChange(); // Trigger on mount
+
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [currentRole.type]);
+
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+    window.location.hash = tab;
+  };
 
   // Sync to localStorage on React state changes
   const updateDb = (newDb: ReturnType<typeof loadDb>) => {
@@ -98,6 +130,10 @@ export default function Home() {
         </div>
       </div>
     );
+  }
+
+  if (!authToken) {
+    return <LoginScreen onLoginSuccess={setAuthToken} />;
   }
 
   // Count pending cues for Sidebar badges
@@ -194,9 +230,9 @@ export default function Home() {
   const handleRoleChange = (nextRole: Role) => {
     setCurrentRole(nextRole);
     if (nextRole.type === "admin") {
-      setActiveTab("overview");
+      handleTabChange("overview");
     } else {
-      setActiveTab("restaurant_overview");
+      handleTabChange("restaurant_overview");
     }
   };
 
@@ -213,7 +249,7 @@ export default function Home() {
         return (
           <OverviewSection 
             db={db} 
-            setActiveTab={setActiveTab}
+            setActiveTab={handleTabChange}
             onApproveRestaurant={handleApproveRestaurantFromOverview}
             onApproveDriver={handleApproveDriverFromOverview}
           />
@@ -265,6 +301,8 @@ export default function Home() {
             searchQuery={searchQuery}
           />
         );
+      case "system_users":
+        return <SystemUsersSection />;
       case "settings":
         return (
           <SettingsSection 
@@ -280,7 +318,7 @@ export default function Home() {
           <RestaurantOverviewSection 
             restaurant={currentRest}
             db={db}
-            setActiveTab={setActiveTab}
+            setActiveTab={handleTabChange}
             onUpdateOrder={handleUpdateOrder}
           />
         ) : (
@@ -352,7 +390,7 @@ export default function Home() {
       <Sidebar 
         activeTab={activeTab} 
         setActiveTab={(tab) => {
-          setActiveTab(tab);
+          handleTabChange(tab);
           setSearchQuery(""); // Reset search query when changing screens
         }}
         pendingOrdersCount={pendingOrdersCount}

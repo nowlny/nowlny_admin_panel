@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   Store, 
   Search, 
@@ -9,195 +9,119 @@ import {
   Calendar, 
   DollarSign, 
   ShoppingBag, 
-  Clock, 
-  CheckCircle, 
-  XCircle, 
   AlertTriangle,
-  Plus, 
-  Edit3, 
-  Trash2, 
-  FileText, 
-  Eye,
-  Check,
-  ChevronRight,
-  ArrowLeft
+  ArrowLeft,
+  Loader2
 } from "lucide-react";
-import { Restaurant, MenuItem, MenuCategory, loadDb } from "../data/mockData";
+import { restaurantsService, RestaurantResponse } from "../../services/restaurants";
 
 interface RestaurantsSectionProps {
-  db: ReturnType<typeof loadDb>;
-  onUpdateRestaurant: (updatedRestaurant: Restaurant) => void;
+  // Keeping the props for backward compatibility in page.tsx layout, 
+  // but we will use real API data internally.
+  db?: any;
+  onUpdateRestaurant?: any;
   searchQuery: string;
 }
 
 export default function RestaurantsSection({
-  db,
-  onUpdateRestaurant,
   searchQuery
 }: RestaurantsSectionProps) {
-  const { restaurants } = db;
-  const [selectedRestId, setSelectedRestId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Pending' | 'Suspended'>('All');
-  
-  // Menu Editing Form States
-  const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
-  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
-  const [isAddingItem, setIsAddingItem] = useState<boolean>(false);
-  const [newItemCategory, setNewItemCategory] = useState<string | null>(null);
-  const [newCategoryName, setNewCategoryName] = useState<string>("");
-  const [isAddingCategory, setIsAddingCategory] = useState<boolean>(false);
+  const [restaurants, setRestaurants] = useState<RestaurantResponse[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // New item form inputs
-  const [itemFormName, setItemFormName] = useState("");
-  const [itemFormDesc, setItemFormDesc] = useState("");
-  const [itemFormPrice, setItemFormPrice] = useState("");
-  const [itemFormImg, setItemFormImg] = useState("");
+  const [selectedRestId, setSelectedRestId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'pending' | 'suspended'>('all');
+  
+  // Review form states
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+
+  const fetchRestaurants = async () => {
+    try {
+      setIsLoading(true);
+      const data = await restaurantsService.getRestaurants();
+      setRestaurants(data || []);
+      setError(null);
+    } catch (err: any) {
+      console.error("Failed to fetch restaurants:", err);
+      // Fallback dummy data if API is not yet available, to maintain UI integrity
+      setRestaurants([
+        {
+          id: "rest-1", name: "Al Baik", email: "albaik@nowlny.com", phone: "+966112345678",
+          cuisineType: "Fast Food", rating: 4.9, reviewsCount: 12000, status: "pending",
+          logo: "🍗", coverImage: "https://images.unsplash.com/photo-1550547660-d9450f859349?w=600&auto=format&fit=crop&q=80",
+          address: "Olaya St, Riyadh", city: "Riyadh", latitude: 24.68, longitude: 46.72,
+          deliveryFee: 5, estimatedDeliveryMinutes: 30, revenue: 0, ordersCount: 0, joinedDate: "2026-05-20"
+        },
+        {
+          id: "rest-2", name: "Shawarma House", email: "contact@shawarma.com", phone: "+96650000000",
+          cuisineType: "Middle Eastern", rating: 4.5, reviewsCount: 800, status: "active",
+          logo: "🥙", coverImage: "https://images.unsplash.com/photo-1529144415895-6aaf8be872fb?w=600&auto=format&fit=crop&q=80",
+          address: "Tahlia St, Riyadh", city: "Riyadh", latitude: 24.69, longitude: 46.71,
+          deliveryFee: 3, estimatedDeliveryMinutes: 20, revenue: 15400, ordersCount: 420, joinedDate: "2025-11-10"
+        }
+      ] as any);
+      setError("Could not connect to API. Showing local fallback data.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRestaurants();
+  }, []);
 
   const selectedRest = restaurants.find(r => r.id === selectedRestId);
 
   // Filter restaurants
   const filteredRestaurants = restaurants.filter(r => {
     const matchesSearch = r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.cuisine.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.address.toLowerCase().includes(searchQuery.toLowerCase());
+      (r.cuisineType || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (r.address || "").toLowerCase().includes(searchQuery.toLowerCase());
       
-    const matchesStatus = statusFilter === 'All' || r.status === statusFilter;
+    const matchesStatus = statusFilter === 'all' || r.status?.toLowerCase() === statusFilter.toLowerCase();
     
     return matchesSearch && matchesStatus;
   });
 
-  const handleStatusChange = (restId: string, newStatus: 'Active' | 'Pending' | 'Suspended') => {
-    const rest = restaurants.find(r => r.id === restId);
-    if (rest) {
-      const updated = { ...rest, status: newStatus };
-      onUpdateRestaurant(updated);
+  const handleStatusChange = async (restId: string, newStatus: string) => {
+    try {
+      await restaurantsService.updateRestaurant(restId, { status: newStatus });
+      fetchRestaurants();
+    } catch (err: any) {
+      alert(`Failed to update status: ${err.message}`);
     }
   };
 
-  // Add a new Category to Restaurant Menu
-  const handleAddCategory = () => {
-    if (!selectedRest || !newCategoryName.trim()) return;
-    
-    const newCat: MenuCategory = {
-      id: `cat-${selectedRest.id}-${Date.now()}`,
-      name: newCategoryName,
-      items: []
-    };
-
-    const updatedMenu = [...selectedRest.menu, newCat];
-    const updatedRest = { ...selectedRest, menu: updatedMenu };
-    
-    onUpdateRestaurant(updatedRest);
-    setNewCategoryName("");
-    setIsAddingCategory(false);
-  };
-
-  // Delete Category from Restaurant Menu
-  const handleDeleteCategory = (catId: string) => {
+  const handleReview = async (decision: 'approve' | 'reject') => {
     if (!selectedRest) return;
-    if (!confirm("Are you sure you want to delete this category and all its menu items?")) return;
-
-    const updatedMenu = selectedRest.menu.filter(c => c.id !== catId);
-    const updatedRest = { ...selectedRest, menu: updatedMenu };
-    onUpdateRestaurant(updatedRest);
-  };
-
-  // Save changes to an existing Menu Item
-  const handleSaveEditItem = () => {
-    if (!selectedRest || !editingItem) return;
-
-    const updatedMenu = selectedRest.menu.map(cat => {
-      if (cat.items.some(item => item.id === editingItem.id)) {
-        return {
-          ...cat,
-          items: cat.items.map(item => item.id === editingItem.id ? editingItem : item)
-        };
-      }
-      return cat;
-    });
-
-    const updatedRest = { ...selectedRest, menu: updatedMenu };
-    onUpdateRestaurant(updatedRest);
-    setEditingItem(null);
-  };
-
-  // Open form to add new item
-  const openAddItemForm = (catId: string) => {
-    setNewItemCategory(catId);
-    setItemFormName("");
-    setItemFormDesc("");
-    setItemFormPrice("");
-    setItemFormImg("");
-    setIsAddingItem(true);
-  };
-
-  // Submit adding a new Menu Item
-  const handleAddItem = () => {
-    if (!selectedRest || !newItemCategory) return;
-    if (!itemFormName.trim() || !itemFormPrice) {
-      alert("Name and Price are required.");
+    if (decision === 'reject' && !rejectionReason.trim()) {
+      alert("Please provide a rejection reason.");
       return;
     }
 
-    const targetCategory = selectedRest.menu.find(c => c.id === newItemCategory);
-    if (!targetCategory) return;
-
-    const newItem: MenuItem = {
-      id: `item-${selectedRest.id}-${Date.now()}`,
-      name: itemFormName,
-      description: itemFormDesc,
-      price: parseFloat(itemFormPrice),
-      image: itemFormImg || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=100&auto=format&fit=crop&q=80",
-      isAvailable: true,
-      category: targetCategory.name
-    };
-
-    const updatedMenu = selectedRest.menu.map(cat => {
-      if (cat.id === newItemCategory) {
-        return {
-          ...cat,
-          items: [...cat.items, newItem]
-        };
-      }
-      return cat;
-    });
-
-    const updatedRest = { ...selectedRest, menu: updatedMenu };
-    onUpdateRestaurant(updatedRest);
-    setIsAddingItem(false);
-    setNewItemCategory(null);
+    try {
+      await restaurantsService.reviewRestaurant(selectedRest.id, {
+        decision,
+        rejectionReason: decision === 'reject' ? rejectionReason : undefined
+      });
+      setIsReviewing(false);
+      setRejectionReason("");
+      fetchRestaurants();
+    } catch (err: any) {
+      alert(`Failed to review application: ${err.message}`);
+    }
   };
 
-  // Delete a Menu Item
-  const handleDeleteItem = (itemId: string) => {
-    if (!selectedRest) return;
-    if (!confirm("Delete this dish?")) return;
-
-    const updatedMenu = selectedRest.menu.map(cat => {
-      return {
-        ...cat,
-        items: cat.items.filter(item => item.id !== itemId)
-      };
-    });
-
-    const updatedRest = { ...selectedRest, menu: updatedMenu };
-    onUpdateRestaurant(updatedRest);
-  };
-
-  // Toggle Item availability status quickly
-  const handleToggleItemAvailability = (itemId: string, currentStatus: boolean) => {
-    if (!selectedRest) return;
-    
-    const updatedMenu = selectedRest.menu.map(cat => {
-      return {
-        ...cat,
-        items: cat.items.map(item => item.id === itemId ? { ...item, isAvailable: !currentStatus } : item)
-      };
-    });
-
-    const updatedRest = { ...selectedRest, menu: updatedMenu };
-    onUpdateRestaurant(updatedRest);
-  };
+  if (isLoading && restaurants.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center p-24 text-zinc-500">
+        <Loader2 className="w-8 h-8 animate-spin mb-4 text-orange-500" />
+        <p className="text-sm font-semibold">Loading merchants...</p>
+      </div>
+    );
+  }
 
   // Render detail view if open
   if (selectedRest) {
@@ -207,9 +131,7 @@ export default function RestaurantsSection({
         <button 
           onClick={() => {
             setSelectedRestId(null);
-            setEditingItem(null);
-            setIsAddingItem(false);
-            setIsAddingCategory(false);
+            setIsReviewing(false);
           }}
           className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-950 dark:hover:text-white transition-colors"
         >
@@ -221,14 +143,14 @@ export default function RestaurantsSection({
         <div className="relative bg-zinc-900 rounded-2xl overflow-hidden border border-zinc-800 shadow-lg">
           <div className="h-40 relative">
             <img 
-              src={selectedRest.banner} 
+              src={selectedRest.coverImage || "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"} 
               alt={selectedRest.name} 
               className="w-full h-full object-cover opacity-40"
             />
             <div className="absolute top-4 right-4 flex gap-2">
-              <span className={`text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border ${
-                selectedRest.status === "Active" ? "bg-emerald-500/90 text-white border-emerald-400" :
-                selectedRest.status === "Pending" ? "bg-amber-500/90 text-black border-amber-400 animate-pulse" :
+              <span className={`text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider ${
+                selectedRest.status === "active" ? "bg-emerald-500/90 text-white border-emerald-400" :
+                selectedRest.status === "pending" ? "bg-amber-500/90 text-black border-amber-400 animate-pulse" :
                 "bg-red-500/90 text-white border-red-400"
               }`}>
                 {selectedRest.status}
@@ -238,46 +160,54 @@ export default function RestaurantsSection({
           
           <div className="p-6 relative -mt-10 flex flex-col md:flex-row justify-between items-start md:items-end gap-6 bg-gradient-to-t from-zinc-950 via-zinc-950/95 to-zinc-950/40">
             <div className="flex gap-4 items-end">
-              <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">{selectedRest.logo}</span>
+              {selectedRest.logo ? (
+                typeof selectedRest.logo === 'string' && selectedRest.logo.length > 5 ? (
+                  <img src={selectedRest.logo} alt="logo" className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl object-cover" />
+                ) : (
+                  <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">{selectedRest.logo}</span>
+                )
+              ) : (
+                <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">🍽️</span>
+              )}
               <div>
                 <h3 className="text-xl font-bold text-white tracking-tight">{selectedRest.name}</h3>
-                <p className="text-xs text-orange-400 font-semibold">{selectedRest.cuisine}</p>
+                <p className="text-xs text-orange-400 font-semibold">{selectedRest.cuisineType || "No cuisine set"}</p>
                 <div className="flex items-center gap-4 mt-2 text-[11px] text-zinc-400">
-                  <span className="flex items-center gap-1"><MapPin className="w-3.5 h-3.5" /> {selectedRest.address}</span>
-                  <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Joined {selectedRest.joinedDate}</span>
+                  <span className="flex items-center gap-1"><MapPin className="w-3.5 h-3.5" /> {[selectedRest.address, selectedRest.city].filter(Boolean).join(", ") || "No address provided"}</span>
+                  <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Joined {selectedRest.joinedDate || selectedRest.createdAt ? new Date(selectedRest.joinedDate || selectedRest.createdAt).toLocaleDateString() : "N/A"}</span>
                 </div>
               </div>
             </div>
 
             {/* Admin Override Action Bar */}
             <div className="flex gap-2 shrink-0">
-              {selectedRest.status === "Pending" && (
+              {selectedRest.status === "pending" && !isReviewing && (
                 <>
                   <button 
-                    onClick={() => handleStatusChange(selectedRest.id, 'Active')}
+                    onClick={() => handleReview('approve')}
                     className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20"
                   >
                     Approve Application
                   </button>
                   <button 
-                    onClick={() => handleStatusChange(selectedRest.id, 'Suspended')}
+                    onClick={() => setIsReviewing(true)}
                     className="bg-zinc-800 hover:bg-red-500 hover:text-white text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
                   >
-                    Reject/Deny
+                    Reject Application
                   </button>
                 </>
               )}
-              {selectedRest.status === "Active" && (
+              {selectedRest.status === "active" && (
                 <button 
-                  onClick={() => handleStatusChange(selectedRest.id, 'Suspended')}
+                  onClick={() => handleStatusChange(selectedRest.id, 'suspended')}
                   className="bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
                 >
                   Suspend Merchant
                 </button>
               )}
-              {selectedRest.status === "Suspended" && (
+              {selectedRest.status === "suspended" && (
                 <button 
-                  onClick={() => handleStatusChange(selectedRest.id, 'Active')}
+                  onClick={() => handleStatusChange(selectedRest.id, 'active')}
                   className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
                 >
                   Activate Merchant
@@ -287,6 +217,34 @@ export default function RestaurantsSection({
           </div>
         </div>
 
+        {/* Rejection Form */}
+        {isReviewing && (
+          <div className="bg-red-500/5 border border-red-500/20 rounded-2xl p-6 animate-in slide-in-from-top-4 duration-200">
+            <h4 className="text-sm font-bold text-red-500 mb-2">Reject Merchant Application</h4>
+            <p className="text-xs text-zinc-400 mb-4">Please provide a reason for rejecting this restaurant. This will be sent to their email.</p>
+            <textarea 
+              value={rejectionReason}
+              onChange={e => setRejectionReason(e.target.value)}
+              placeholder="e.g. Missing required commercial registration document."
+              className="w-full bg-zinc-950 border border-red-500/30 text-zinc-200 text-sm rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-red-500 mb-4 h-24"
+            />
+            <div className="flex gap-2 justify-end">
+              <button 
+                onClick={() => setIsReviewing(false)}
+                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold px-4 py-2 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => handleReview('reject')}
+                className="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-lg"
+              >
+                Confirm Rejection
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Info Grid (Summary Payouts + Documents Verification) */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
@@ -295,7 +253,7 @@ export default function RestaurantsSection({
             </div>
             <div>
               <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Gross Income</p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">${selectedRest.revenue.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+              <p className="text-lg font-black text-zinc-900 dark:text-white">${(selectedRest.revenue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
             </div>
           </div>
 
@@ -305,7 +263,7 @@ export default function RestaurantsSection({
             </div>
             <div>
               <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Total Sales Orders</p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">{selectedRest.ordersCount} Orders</p>
+              <p className="text-lg font-black text-zinc-900 dark:text-white">{selectedRest.ordersCount || 0} Orders</p>
             </div>
           </div>
 
@@ -315,244 +273,11 @@ export default function RestaurantsSection({
             </div>
             <div>
               <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Review Rating</p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">{selectedRest.rating} ★ <span className="text-xs font-normal text-zinc-400">({selectedRest.reviewsCount} votes)</span></p>
+              <p className="text-lg font-black text-zinc-900 dark:text-white">{selectedRest.rating || 0} ★ <span className="text-xs font-normal text-zinc-400">({selectedRest.reviewsCount || (selectedRest as any).totalRatings || 0} votes)</span></p>
             </div>
           </div>
         </div>
 
-        {/* Main Work Area: MENU EDITOR */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
-          <div className="flex justify-between items-center mb-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
-            <div>
-              <h4 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-                <Store className="w-4 h-4 text-orange-500" /> Menu Catalog & Availability
-              </h4>
-              <p className="text-xs text-zinc-400">Admin override: Edit categories, items, and control online menus</p>
-            </div>
-            
-            <button
-              onClick={() => setIsAddingCategory(true)}
-              className="flex items-center gap-1.5 text-xs font-bold text-orange-500 border border-orange-500/20 bg-orange-500/5 hover:bg-orange-500/10 px-3 py-2 rounded-lg transition-all"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Category</span>
-            </button>
-          </div>
-
-          {/* Add Category Form */}
-          {isAddingCategory && (
-            <div className="mb-6 p-4 border border-orange-500/30 rounded-xl bg-orange-500/[0.01] flex items-end gap-3 animate-in slide-in-from-top-2 duration-150">
-              <div className="flex-1">
-                <label className="block text-[10px] font-bold text-zinc-500 uppercase mb-1">New Category Title</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Burgers, Hot Appetizers, Fresh Desserts"
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                  className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 rounded-lg p-2 text-xs focus:outline-none focus:ring-1 focus:ring-orange-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200"
-                />
-              </div>
-              <div className="flex gap-2 shrink-0">
-                <button
-                  onClick={handleAddCategory}
-                  className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold px-4 py-2 rounded-lg"
-                >
-                  Create Category
-                </button>
-                <button
-                  onClick={() => setIsAddingCategory(false)}
-                  className="bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold px-4 py-2 rounded-lg"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Menu Categories List */}
-          {selectedRest.menu.length === 0 ? (
-            <div className="p-12 text-center text-zinc-400 text-xs font-medium">
-              No categories exist. Click "Add Category" to get started!
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {selectedRest.menu.map((category) => (
-                <div key={category.id} className="border border-zinc-100 dark:border-zinc-800/80 rounded-xl p-4 space-y-4">
-                  <div className="flex justify-between items-center bg-zinc-50 dark:bg-zinc-800/30 p-2.5 rounded-lg">
-                    <h5 className="text-xs font-black text-zinc-900 dark:text-white uppercase tracking-wider">{category.name}</h5>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => openAddItemForm(category.id)}
-                        className="text-[10px] font-bold text-orange-500 hover:underline inline-flex items-center gap-1"
-                      >
-                        <Plus className="w-3.5 h-3.5" /> Add Dish
-                      </button>
-                      <button
-                        onClick={() => handleDeleteCategory(category.id)}
-                        className="text-[10px] font-bold text-red-500 hover:underline pl-2 border-l border-zinc-200 dark:border-zinc-800"
-                      >
-                        Delete Category
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Add dish form */}
-                  {isAddingItem && newItemCategory === category.id && (
-                    <div className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-xl bg-zinc-50 dark:bg-zinc-900/60 grid grid-cols-1 md:grid-cols-2 gap-4 animate-in slide-in-from-top-2 duration-150">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-zinc-400 uppercase">Dish Name</label>
-                        <input
-                          type="text"
-                          placeholder="Double Cheese Melt"
-                          value={itemFormName}
-                          onChange={(e) => setItemFormName(e.target.value)}
-                          className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 rounded-lg p-2 text-xs focus:ring-1 focus:ring-orange-500"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-zinc-400 uppercase">Price ($)</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          placeholder="8.50"
-                          value={itemFormPrice}
-                          onChange={(e) => setItemFormPrice(e.target.value)}
-                          className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 rounded-lg p-2 text-xs focus:ring-1 focus:ring-orange-500"
-                        />
-                      </div>
-                      <div className="md:col-span-2 space-y-1">
-                        <label className="text-[10px] font-bold text-zinc-400 uppercase">Description</label>
-                        <input
-                          type="text"
-                          placeholder="Gourmet patty with toasted brioche, cheddar slice, pickles and hot sauce."
-                          value={itemFormDesc}
-                          onChange={(e) => setItemFormDesc(e.target.value)}
-                          className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 rounded-lg p-2 text-xs focus:ring-1 focus:ring-orange-500"
-                        />
-                      </div>
-                      <div className="space-y-1 md:col-span-2">
-                        <label className="text-[10px] font-bold text-zinc-400 uppercase">Image URL (Optional)</label>
-                        <input
-                          type="text"
-                          placeholder="https://images.unsplash.com/photo-..."
-                          value={itemFormImg}
-                          onChange={(e) => setItemFormImg(e.target.value)}
-                          className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 rounded-lg p-2 text-xs focus:ring-1 focus:ring-orange-500"
-                        />
-                      </div>
-                      <div className="md:col-span-2 flex justify-end gap-2 mt-2">
-                        <button
-                          onClick={handleAddItem}
-                          className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold px-4 py-2 rounded-lg"
-                        >
-                          Add to Category
-                        </button>
-                        <button
-                          onClick={() => setIsAddingItem(false)}
-                          className="bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold px-4 py-2 rounded-lg"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Dishes Cards Grid */}
-                  {category.items.length === 0 ? (
-                    <div className="p-6 text-center text-zinc-400 text-[11px] font-medium border border-dashed border-zinc-200 dark:border-zinc-800 rounded-xl">
-                      Empty Category. Add a dish to populate.
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {category.items.map((item) => (
-                        <div 
-                          key={item.id} 
-                          className={`p-3.5 rounded-xl border flex gap-3 items-center transition-all bg-white dark:bg-zinc-900 ${
-                            !item.isAvailable ? "opacity-60 border-zinc-200 bg-zinc-50/50" : "border-zinc-200/60 dark:border-zinc-800 hover:border-orange-500/30"
-                          }`}
-                        >
-                          <img 
-                            src={item.image || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=100&auto=format&fit=crop&q=80"}
-                            alt={item.name} 
-                            className="w-14 h-14 rounded-lg object-cover bg-zinc-100 shadow-sm shrink-0"
-                          />
-                          <div className="flex-1 min-w-0">
-                            {editingItem?.id === item.id ? (
-                              <div className="space-y-1.5">
-                                <input 
-                                  type="text" 
-                                  value={editingItem.name} 
-                                  onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })}
-                                  className="w-full bg-zinc-50 border border-zinc-200 text-xs p-1 rounded font-bold"
-                                />
-                                <input 
-                                  type="number" 
-                                  step="0.01"
-                                  value={editingItem.price} 
-                                  onChange={(e) => setEditingItem({ ...editingItem, price: parseFloat(e.target.value) || 0 })}
-                                  className="w-20 bg-zinc-50 border border-zinc-200 text-xs p-1 rounded font-bold"
-                                />
-                                <textarea 
-                                  value={editingItem.description} 
-                                  onChange={(e) => setEditingItem({ ...editingItem, description: e.target.value })}
-                                  className="w-full bg-zinc-50 border border-zinc-200 text-[10px] p-1 rounded text-zinc-400"
-                                />
-                                <div className="flex gap-2">
-                                  <button onClick={handleSaveEditItem} className="text-[10px] bg-emerald-500 text-white font-bold px-2 py-0.5 rounded">Save</button>
-                                  <button onClick={() => setEditingItem(null)} className="text-[10px] bg-zinc-200 dark:bg-zinc-800 font-bold px-2 py-0.5 rounded">Cancel</button>
-                                </div>
-                              </div>
-                            ) : (
-                              <>
-                                <div className="flex justify-between items-start gap-1">
-                                  <h6 className="text-xs font-bold text-zinc-950 dark:text-white truncate">{item.name}</h6>
-                                  <span className="text-xs font-black text-orange-500">${item.price.toFixed(2)}</span>
-                                </div>
-                                <p className="text-[10px] text-zinc-400 mt-0.5 line-clamp-1 leading-normal">{item.description}</p>
-                                
-                                {/* Status Actions */}
-                                <div className="flex items-center justify-between mt-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
-                                  <div className="flex items-center gap-1.5">
-                                    <input 
-                                      type="checkbox"
-                                      checked={item.isAvailable}
-                                      onChange={() => handleToggleItemAvailability(item.id, item.isAvailable)}
-                                      className="rounded text-orange-500 w-3 h-3 cursor-pointer"
-                                      id={`avail-${item.id}`}
-                                    />
-                                    <label htmlFor={`avail-${item.id}`} className="text-[10px] text-zinc-400 font-semibold cursor-pointer select-none">
-                                      {item.isAvailable ? "Available" : "Sold Out"}
-                                    </label>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <button 
-                                      onClick={() => setEditingItem(item)}
-                                      className="text-zinc-400 hover:text-orange-500 transition-colors p-1"
-                                      title="Edit Dish"
-                                    >
-                                      <Edit3 className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button 
-                                      onClick={() => handleDeleteItem(item.id)}
-                                      className="text-zinc-400 hover:text-red-500 transition-colors p-1"
-                                      title="Delete Dish"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
     );
   }
@@ -560,24 +285,32 @@ export default function RestaurantsSection({
   // Registry Listing Grid
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
+      
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold p-4 rounded-xl flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4" />
+          {error}
+        </div>
+      )}
+
       {/* Search & Tabs Filter Row */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         {/* Status Filter Tab Buttons */}
         <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/80">
-          {(['All', 'Active', 'Pending', 'Suspended'] as const).map((filter) => (
+          {(['all', 'active', 'pending', 'suspended'] as const).map((filter) => (
             <button
               key={filter}
               onClick={() => setStatusFilter(filter)}
-              className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 ${
+              className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 capitalize ${
                 statusFilter === filter 
                   ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800" 
                   : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
               }`}
             >
               <span>{filter}</span>
-              {filter === 'Pending' && restaurants.filter(r => r.status === 'Pending').length > 0 && (
+              {filter === 'pending' && restaurants.filter(r => r.status?.toLowerCase() === 'pending').length > 0 && (
                 <span className="ml-1.5 bg-amber-500 text-black px-1.5 py-0.5 text-[9px] font-black rounded-full">
-                  {restaurants.filter(r => r.status === 'Pending').length}
+                  {restaurants.filter(r => r.status?.toLowerCase() === 'pending').length}
                 </span>
               )}
             </button>
@@ -608,14 +341,14 @@ export default function RestaurantsSection({
               {/* Banner Area */}
               <div className="h-32 relative">
                 <img 
-                  src={rest.banner} 
+                  src={rest.coverImage || "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"} 
                   alt={rest.name} 
                   className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300 opacity-80"
                 />
                 <div className="absolute top-3 right-3">
                   <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full shadow border ${
-                    rest.status === "Active" ? "bg-emerald-500/90 text-white border-emerald-400" :
-                    rest.status === "Pending" ? "bg-amber-500/95 text-black border-amber-400 animate-pulse" :
+                    rest.status === "active" ? "bg-emerald-500/90 text-white border-emerald-400" :
+                    rest.status === "pending" ? "bg-amber-500/95 text-black border-amber-400 animate-pulse" :
                     "bg-red-500/90 text-white border-red-400"
                   }`}>
                     {rest.status}
@@ -627,16 +360,20 @@ export default function RestaurantsSection({
               <div className="p-5 space-y-4 flex-1 flex flex-col justify-between">
                 <div>
                   <div className="flex gap-3 items-start">
-                    <span className="text-3xl p-1 bg-zinc-50 dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-700">{rest.logo}</span>
+                    {rest.logo && typeof rest.logo === 'string' && rest.logo.length > 5 ? (
+                      <img src={rest.logo} alt="logo" className="w-10 h-10 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-sm object-cover" />
+                    ) : (
+                      <span className="text-2xl p-1.5 bg-zinc-50 dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-700">{rest.logo || "🍽️"}</span>
+                    )}
                     <div className="min-w-0">
                       <h4 className="text-sm font-bold text-zinc-950 dark:text-white truncate group-hover:text-orange-500 transition-colors">{rest.name}</h4>
-                      <p className="text-[10px] text-zinc-400 font-medium truncate mt-0.5">{rest.cuisine}</p>
+                      <p className="text-[10px] text-zinc-400 font-medium truncate mt-0.5">{rest.cuisineType || "No cuisine set"}</p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-1.5 text-[10px] text-zinc-400 mt-3.5">
                     <MapPin className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                    <span className="truncate">{rest.address}</span>
+                    <span className="truncate">{[rest.address, rest.city].filter(Boolean).join(", ") || "No address provided"}</span>
                   </div>
                 </div>
 
@@ -644,12 +381,12 @@ export default function RestaurantsSection({
                 <div className="pt-4 border-t border-zinc-100 dark:border-zinc-800 grid grid-cols-2 gap-2 text-center text-xs">
                   <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
                     <p className="text-[9px] font-bold text-zinc-400 uppercase">GMV Sales</p>
-                    <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">${rest.revenue.toFixed(0)}</p>
+                    <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">${(rest.revenue || 0).toFixed(0)}</p>
                   </div>
                   <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
                     <p className="text-[9px] font-bold text-zinc-400 uppercase">Rating</p>
                     <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5 inline-flex items-center justify-center gap-0.5">
-                      {rest.rating} <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
+                      {rest.rating || 0} <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
                     </p>
                   </div>
                 </div>

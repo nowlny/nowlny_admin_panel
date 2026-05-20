@@ -76,6 +76,7 @@ export default function Sidebar({
         },
         { id: "promos", label: "Promo & Offers", icon: Ticket },
         { id: "reports", label: "Financials & Reports", icon: BarChart3 },
+        { id: "system_users", label: "System Users", icon: Users2 },
         { id: "settings", label: "System Settings", icon: Settings },
       ];
     } else {
@@ -223,13 +224,11 @@ export default function Sidebar({
 
             <button 
               className="text-zinc-500 hover:text-red-400 transition-colors p-1.5 hover:bg-zinc-800 rounded-lg shrink-0"
-              title="Switch to Admin"
+              title="Logout"
               onClick={() => {
-                if (currentRole.type === 'restaurant') {
-                  onChangeRole({ type: 'admin' });
-                  alert("Switched back to Root Administrator View.");
-                } else {
-                  alert("Root Admin Session active.");
+                if (confirm("Are you sure you want to log out of the admin panel?")) {
+                  localStorage.removeItem('token');
+                  window.location.reload();
                 }
               }}
             >
