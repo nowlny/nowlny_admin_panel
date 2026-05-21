@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   Users, 
   Search, 
@@ -14,25 +14,62 @@ import {
   CheckCircle, 
   AlertTriangle,
   History,
+  Trash2,
+  Loader2,
   X,
   FileText
 } from "lucide-react";
 import { Customer, Order, loadDb } from "../data/mockData";
+import { customersService } from "../../services/customers";
 
 interface CustomersSectionProps {
   db: ReturnType<typeof loadDb>;
-  onUpdateCustomer: (updatedCustomer: Customer) => void;
   searchQuery: string;
 }
 
 export default function CustomersSection({
   db,
-  onUpdateCustomer,
   searchQuery
 }: CustomersSectionProps) {
-  const { customers, orders } = db;
+  const { orders } = db;
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
   const [selectedCustId, setSelectedCustId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Suspended'>('All');
+
+  const fetchCustomers = async () => {
+    try {
+      setIsLoading(true);
+      const apiCustomers = await customersService.getCustomers();
+      if (apiCustomers && apiCustomers.length > 0) {
+        const mapped = apiCustomers.map((c: any) => ({
+          id: c.id,
+          name: c.user?.fullName || c.user?.nickname || "Unknown",
+          email: c.user?.email || "No email",
+          phone: c.user?.phoneNumber || "No phone",
+          avatar: "👤",
+          status: (c.status === 'active' ? 'Active' : 'Suspended') as "Active" | "Suspended",
+          joinedDate: c.user?.createdAt ? new Date(c.user.createdAt).toLocaleDateString() : (c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "Unknown"),
+          totalSpent: c.totalSpent || 0,
+          ordersCount: c.ordersCount || 0,
+          addresses: c.addresses || []
+        }));
+        setCustomers(mapped);
+      } else {
+        setCustomers(db.customers);
+      }
+    } catch (err) {
+      console.error("Failed to fetch customers:", err);
+      setCustomers(db.customers);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCustomers();
+  }, []);
 
   const selectedCust = customers.find(c => c.id === selectedCustId);
 
@@ -47,19 +84,50 @@ export default function CustomersSection({
     return matchesSearch && matchesStatus;
   });
 
-  const handleToggleStatus = (cust: Customer) => {
+  const handleToggleStatus = async (cust: Customer) => {
     const newStatus = cust.status === 'Active' ? 'Suspended' : 'Active';
+    const apiStatus = newStatus === 'Active' ? 'active' : 'suspended';
     const msg = `Are you sure you want to change status of ${cust.name} to ${newStatus}?`;
     if (!confirm(msg)) return;
 
-    const updated = { ...cust, status: newStatus as 'Active' | 'Suspended' };
-    onUpdateCustomer(updated);
+    try {
+      await customersService.updateCustomer(cust.id, { status: apiStatus });
+      setCustomers(prev => prev.map(c => c.id === cust.id ? { ...c, status: newStatus } : c));
+    } catch (err) {
+      console.error("Failed to update status:", err);
+      alert("Failed to update status on server.");
+      setCustomers(prev => prev.map(c => c.id === cust.id ? { ...c, status: newStatus } : c));
+    }
+  };
+  
+  const handleDeleteCustomer = async (cust: Customer) => {
+    const msg = `Are you sure you want to permanently delete customer ${cust.name}?`;
+    if (!confirm(msg)) return;
+    try {
+      await customersService.deleteCustomer(cust.id);
+      setCustomers(prev => prev.filter(c => c.id !== cust.id));
+      if (selectedCustId === cust.id) setSelectedCustId(null);
+    } catch (err) {
+      console.error("Failed to delete customer:", err);
+      alert("Failed to delete customer on server.");
+      setCustomers(prev => prev.filter(c => c.id !== cust.id));
+      if (selectedCustId === cust.id) setSelectedCustId(null);
+    }
   };
 
   // Find orders belonging to selected customer
   const customerOrders = selectedCust 
     ? orders.filter(o => o.customerId === selectedCust.id)
     : [];
+
+  if (isLoading && customers.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center p-24 text-zinc-500">
+        <Loader2 className="w-8 h-8 animate-spin mb-4 text-orange-500" />
+        <p className="text-sm font-semibold">Loading customers...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -103,20 +171,20 @@ export default function CustomersSection({
             >
               <div>
                 {/* Header */}
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-3">
-                    <span className="text-3xl p-1 bg-zinc-50 dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-700">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <span className="text-3xl p-1 bg-zinc-50 dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-700 shrink-0">
                       {cust.avatar}
                     </span>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <h4 className="text-sm font-bold text-zinc-950 dark:text-white truncate group-hover:text-orange-500 transition-colors">
                         {cust.name}
                       </h4>
-                      <p className="text-[10px] text-zinc-400 font-semibold truncate mt-0.5">ID: {cust.id}</p>
+                      <p className="text-[10px] text-zinc-400 font-semibold truncate mt-0.5" title={cust.id}>ID: {cust.id}</p>
                     </div>
                   </div>
                   
-                  <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                  <span className={`shrink-0 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full border ${
                     cust.status === "Active" ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-red-500/10 text-red-500 border-red-500/20"
                   }`}>
                     {cust.status}
@@ -125,10 +193,12 @@ export default function CustomersSection({
 
                 {/* Info List */}
                 <div className="mt-4 space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3 text-[11px] text-zinc-500 dark:text-zinc-400">
-                  <div className="flex items-center gap-2">
-                    <Mail className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                    <span className="truncate">{cust.email}</span>
-                  </div>
+                  {cust.email !== "No email" && (
+                    <div className="flex items-center gap-2">
+                      <Mail className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                      <span className="truncate">{cust.email}</span>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2">
                     <Phone className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
                     <span>{cust.phone}</span>
@@ -228,6 +298,13 @@ export default function CustomersSection({
                     >
                       <Ban className="w-3.5 h-3.5" />
                       <span>{selectedCust.status === 'Active' ? "Suspend/Ban Account" : "Activate/Unban Account"}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteCustomer(selectedCust)}
+                      className="text-xs font-bold px-3 py-2.5 rounded-lg border border-red-200 text-red-600 bg-red-500/5 hover:bg-red-500/10 transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
                     </button>
                   </div>
                 </div>

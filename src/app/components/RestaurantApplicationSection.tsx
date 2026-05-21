@@ -111,11 +111,13 @@ export default function RestaurantApplicationSection({
         coverImage: submission.coverImage || "",
         deliveryFee: submission.deliveryFee || 3,
         estimatedDeliveryMinutes: submission.estimatedDeliveryMinutes || 25,
-        city: submission.city || "Riyadh",
-        address: submission.address || "",
-        latitude: submission.latitude || 24.7136,
-        longitude: submission.longitude || 46.6753,
-        openingHours: submission.openingHours || formData.openingHours
+        city: submission.address?.city || "Riyadh",
+        address: submission.address?.street || "",
+        latitude: submission.address?.latitude || 24.7136,
+        longitude: submission.address?.longitude || 46.6753,
+        openingHours: submission.openingHours
+          ? { entries: submission.openingHours }
+          : formData.openingHours
       });
     }
     setIsApplying(true);
@@ -621,7 +623,7 @@ export default function RestaurantApplicationSection({
             </div>
             <div className="flex justify-between items-center text-zinc-400">
               <span>Contact Email</span>
-              <span className="font-bold text-zinc-700 dark:text-zinc-300">{submission.email}</span>
+              <span className="font-bold text-zinc-700 dark:text-zinc-300">{submission.email || "Not provided"}</span>
             </div>
             <div className="flex justify-between items-center text-zinc-400">
               <span>Submission Date</span>

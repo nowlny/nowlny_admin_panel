@@ -46,7 +46,8 @@ export default function SystemUsersSection() {
     try {
       setIsLoading(true);
       const data = await usersService.getSystemUsers();
-      setUsers(data || []);
+      const finalUsers = Array.isArray(data) ? data : (data && (data as any).data ? (data as any).data : []);
+      setUsers(finalUsers);
       setError(null);
     } catch (err: any) {
       console.error("Failed to fetch users:", err);

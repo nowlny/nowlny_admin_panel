@@ -18,6 +18,8 @@ import {
   FileText
 } from "lucide-react";
 import { restaurantsService, RestaurantResponse, RestaurantSubmission } from "../../services/restaurants";
+import AddRestaurantModal from "./AddRestaurantModal";
+import EditRestaurantModal from "./EditRestaurantModal";
 
 interface RestaurantsSectionProps {
   db?: any;
@@ -35,71 +37,66 @@ export default function RestaurantsSection({
 
   const [selectedRestId, setSelectedRestId] = useState<string | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'pending' | 'suspended'>('all');
+  const [viewMode, setViewMode] = useState<'merchants' | 'applications'>('merchants');
+  const [merchantStatus, setMerchantStatus] = useState<'all' | 'active' | 'suspended'>('all');
+  const [appStatus, setAppStatus] = useState<string>('pending');
+  const [appPage, setAppPage] = useState(1);
+  const [appTotalPages, setAppTotalPages] = useState(1);
+  const [appTotalItems, setAppTotalItems] = useState(0);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+
   
   // Review form states
   const [isReviewing, setIsReviewing] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
 
-  const fetchRestaurants = async () => {
+  const fetchMerchants = async () => {
     try {
       setIsLoading(true);
       let restsData: RestaurantResponse[] = [];
-      let subsData: RestaurantSubmission[] = [];
-
       try {
         restsData = await restaurantsService.getRestaurants();
       } catch (err) {
         console.error("Failed to fetch restaurants via API:", err);
       }
+      const finalRests = Array.isArray(restsData) ? restsData : (restsData && (restsData as any).data ? (restsData as any).data : []);
+      setRestaurants(finalRests);
+      setError(null);
+    } catch (err: any) {
+      console.error("General error in fetchMerchants:", err);
+      setError("An unexpected error occurred while loading data.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
+  const fetchSubmissions = async () => {
+    try {
+      setIsLoading(true);
+      let subsData: any = null;
       try {
-        subsData = await restaurantsService.getSubmissions();
+        subsData = await restaurantsService.getSubmissions({ status: appStatus, page: appPage, limit: 20 });
       } catch (err) {
         console.error("Failed to fetch submissions via API:", err);
       }
 
-      setRestaurants(restsData || []);
-      setSubmissions(subsData || []);
-
-      // If both are empty, use premium local fallback data
-      if ((!restsData || restsData.length === 0) && (!subsData || subsData.length === 0)) {
-        setRestaurants([
-          {
-            id: "rest-2", name: "Shawarma House", email: "contact@shawarma.com", phone: "+96650000000",
-            cuisineType: "Middle Eastern", rating: 4.5, reviewsCount: 800, status: "active",
-            logo: "🥙", coverImage: "https://images.unsplash.com/photo-1529144415895-6aaf8be872fb?w=600&auto=format&fit=crop&q=80",
-            address: "Tahlia St, Riyadh", city: "Riyadh", latitude: 24.69, longitude: 46.71,
-            deliveryFee: 3, estimatedDeliveryMinutes: 20, revenue: 15400, ordersCount: 420, joinedDate: "2025-11-10"
-          }
-        ] as any);
-
-        setSubmissions([
-          {
-            id: "sub-1", name: "Al Baik", email: "albaik@nowlny.com", phone: "+966112345678",
-            cuisineType: "Fast Food", status: "pending",
-            logo: "🍗", coverImage: "https://images.unsplash.com/photo-1550547660-d9450f859349?w=600&auto=format&fit=crop&q=80",
-            address: "Olaya St, Riyadh", city: "Riyadh", latitude: 24.68, longitude: 46.72,
-            deliveryFee: 5, estimatedDeliveryMinutes: 30, createdAt: "2026-05-20T12:00:00Z",
-            openingHours: {
-              entries: [
-                { day: "Monday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-                { day: "Tuesday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-                { day: "Wednesday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-                { day: "Thursday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-                { day: "Friday", is24Hours: true },
-                { day: "Saturday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-                { day: "Sunday", is24Hours: false, openTime: "08:00", closeTime: "23:00" }
-              ]
-            }
-          }
-        ]);
-        setError("Could not connect to API. Showing local fallback data.");
+      if (subsData && subsData.data) {
+        setSubmissions(subsData.data);
+        setAppTotalPages(subsData.totalPages || Math.ceil((subsData.total || 0) / 20) || 1);
+        setAppTotalItems(subsData.total || 0);
+      } else if (Array.isArray(subsData)) {
+        setSubmissions(subsData);
+        setAppTotalPages(1);
+        setAppTotalItems(subsData.length);
       } else {
-        setError(null);
+        setSubmissions([]);
+        setAppTotalPages(1);
+        setAppTotalItems(0);
       }
+      setError(null);
     } catch (err: any) {
-      console.error("General error in fetchRestaurants:", err);
+      console.error("General error in fetchSubmissions:", err);
       setError("An unexpected error occurred while loading data.");
     } finally {
       setIsLoading(false);
@@ -107,42 +104,57 @@ export default function RestaurantsSection({
   };
 
   useEffect(() => {
-    fetchRestaurants();
-  }, []);
+    if (viewMode === 'merchants') {
+      fetchMerchants();
+    } else {
+      fetchSubmissions();
+    }
+  }, [viewMode, appStatus, appPage]);
 
   const selectedRest = restaurants.find(r => r.id === selectedRestId);
   const selectedSubmission = submissions.find(s => s.id === selectedSubmissionId);
 
-  // Filter restaurants
+  // Filter restaurants locally (if you want local search/status for merchants)
   const filteredRestaurants = restaurants.filter(r => {
     const matchesSearch = r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (r.cuisineType || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
       (r.address || "").toLowerCase().includes(searchQuery.toLowerCase());
       
-    const matchesStatus = statusFilter === 'all' || r.status?.toLowerCase() === statusFilter.toLowerCase();
+    const matchesStatus = merchantStatus === 'all' || r.status?.toLowerCase() === merchantStatus.toLowerCase();
     
     return matchesSearch && matchesStatus;
   });
 
-  // Filter submissions (only display pending ones under the pending status tab)
+  // Filter submissions (search locally since backend doesn't have search query param yet, or assume it does)
   const filteredSubmissions = submissions.filter(s => {
     const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (s.cuisineType || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.address || "").toLowerCase().includes(searchQuery.toLowerCase());
+      (s.address?.street || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.address?.city || "").toLowerCase().includes(searchQuery.toLowerCase());
     
-    const matchesStatus = s.status === 'pending';
-    return matchesSearch && matchesStatus;
+    return matchesSearch;
   });
 
-  const isPendingTab = statusFilter === 'pending';
+  const isPendingTab = viewMode === 'applications';
   const displayList = isPendingTab ? filteredSubmissions : filteredRestaurants;
 
   const handleStatusChange = async (restId: string, newStatus: string) => {
     try {
       await restaurantsService.updateRestaurant(restId, { status: newStatus });
-      fetchRestaurants();
+      if (viewMode === 'merchants') fetchMerchants(); else fetchSubmissions();
     } catch (err: any) {
       alert(`Failed to update status: ${err.message}`);
+    }
+  };
+
+  const handleDeleteRestaurant = async (restId: string) => {
+    if (!confirm("Are you sure you want to delete this restaurant? This cannot be undone.")) return;
+    try {
+      await restaurantsService.deleteRestaurant(restId);
+      setSelectedRestId(null);
+      if (viewMode === 'merchants') fetchMerchants(); else fetchSubmissions();
+    } catch (err: any) {
+      alert(`Failed to delete restaurant: ${err.message}`);
     }
   };
 
@@ -161,7 +173,7 @@ export default function RestaurantsSection({
       setIsReviewing(false);
       setRejectionReason("");
       setSelectedSubmissionId(null);
-      fetchRestaurants();
+      if (viewMode === 'merchants') fetchMerchants(); else fetchSubmissions();
     } catch (err: any) {
       alert(`Failed to review application: ${err.message}`);
     }
@@ -222,7 +234,7 @@ export default function RestaurantsSection({
                 <h3 className="text-xl font-bold text-white tracking-tight">{selectedSubmission.name}</h3>
                 <p className="text-xs text-orange-400 font-semibold">{selectedSubmission.cuisineType || "No cuisine set"}</p>
                 <div className="flex items-center gap-4 mt-2 text-[11px] text-zinc-400">
-                  <span className="flex items-center gap-1"><MapPin className="w-3.5 h-3.5" /> {[selectedSubmission.address, selectedSubmission.city].filter(Boolean).join(", ") || "No address provided"}</span>
+                  <span className="flex items-center gap-1"><MapPin className="w-3.5 h-3.5" /> {[selectedSubmission.address?.street, selectedSubmission.address?.building, selectedSubmission.address?.city].filter(Boolean).join(", ") || "No address provided"}</span>
                   <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Submitted {selectedSubmission.createdAt ? new Date(selectedSubmission.createdAt).toLocaleDateString() : "N/A"}</span>
                 </div>
               </div>
@@ -286,7 +298,7 @@ export default function RestaurantsSection({
             </div>
             <div>
               <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Est. Delivery Time</p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">{selectedSubmission.estimatedDeliveryMinutes} Minutes</p>
+              <p className="text-lg font-black text-zinc-900 dark:text-white">{selectedSubmission.estimatedDeliveryMinutes ?? "N/A"} Minutes</p>
             </div>
           </div>
 
@@ -320,14 +332,14 @@ export default function RestaurantsSection({
                 <Mail className="w-4 h-4 text-zinc-400" />
                 <div>
                   <p className="font-semibold text-zinc-400 text-[10px] uppercase">Email Address</p>
-                  <p className="font-bold">{selectedSubmission.email}</p>
+                  <p className="font-bold">{selectedSubmission.email || "Not provided"}</p>
                 </div>
               </div>
               <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
                 <Phone className="w-4 h-4 text-zinc-400" />
                 <div>
                   <p className="font-semibold text-zinc-400 text-[10px] uppercase">Phone Number</p>
-                  <p className="font-bold">{selectedSubmission.phone}</p>
+                  <p className="font-bold">{selectedSubmission.phone || "Not provided"}</p>
                 </div>
               </div>
               {selectedSubmission.website && (
@@ -342,9 +354,9 @@ export default function RestaurantsSection({
               <div className="flex items-start gap-3 text-zinc-600 dark:text-zinc-300 pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
                 <MapPin className="w-4 h-4 text-zinc-400 mt-1" />
                 <div>
-                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">Exact Coordinates</p>
-                  <p className="font-bold">Latitude: {selectedSubmission.latitude}</p>
-                  <p className="font-bold">Longitude: {selectedSubmission.longitude}</p>
+                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">Address & Coordinates</p>
+                  <p className="font-bold">{[selectedSubmission.address?.street, selectedSubmission.address?.building, selectedSubmission.address?.city].filter(Boolean).join(", ") || "No address"}</p>
+                  <p className="font-bold">Lat: {selectedSubmission.address?.latitude ?? "N/A"}, Lng: {selectedSubmission.address?.longitude ?? "N/A"}</p>
                 </div>
               </div>
             </div>
@@ -353,8 +365,8 @@ export default function RestaurantsSection({
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-2xl shadow-sm space-y-4">
             <h4 className="text-sm font-extrabold text-zinc-900 dark:text-white border-b border-zinc-100 dark:border-zinc-800 pb-3">Proposed Opening Hours</h4>
             <div className="space-y-2.5 max-h-[220px] overflow-y-auto pr-2 custom-scrollbar">
-              {selectedSubmission.openingHours?.entries && selectedSubmission.openingHours.entries.length > 0 ? (
-                selectedSubmission.openingHours.entries.map((entry, idx) => (
+              {selectedSubmission.openingHours && selectedSubmission.openingHours.length > 0 ? (
+                selectedSubmission.openingHours.map((entry, idx) => (
                   <div key={idx} className="flex justify-between items-center text-xs border-b border-zinc-50 dark:border-zinc-800/40 pb-2">
                     <span className="font-bold text-zinc-700 dark:text-zinc-300">{entry.day}</span>
                     <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
@@ -433,7 +445,19 @@ export default function RestaurantsSection({
             </div>
 
             {/* Admin Override Action Bar */}
-            <div className="flex gap-2 shrink-0">
+            <div className="flex gap-2 shrink-0 flex-wrap justify-end">
+              <button 
+                onClick={() => setIsEditModalOpen(true)}
+                className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+              >
+                Edit Merchant
+              </button>
+              <button 
+                onClick={() => handleDeleteRestaurant(selectedRest.id)}
+                className="bg-zinc-800 hover:bg-red-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+              >
+                Delete
+              </button>
               {selectedRest.status === "active" && (
                 <button 
                   onClick={() => handleStatusChange(selectedRest.id, 'suspended')}
@@ -447,7 +471,7 @@ export default function RestaurantsSection({
                   onClick={() => handleStatusChange(selectedRest.id, 'active')}
                   className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
                 >
-                  Activate Merchant
+                  Reactivate Merchant
                 </button>
               )}
             </div>
@@ -502,39 +526,81 @@ export default function RestaurantsSection({
       )}
 
       {/* Search & Tabs Filter Row */}
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        {/* Status Filter Tab Buttons */}
-        <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/80">
-          {(['all', 'active', 'pending', 'suspended'] as const).map((filter) => {
-            const isPendingFilter = filter === 'pending';
-            // Count pending items dynamically
-            const pendingCount = submissions.filter(s => s.status === 'pending').length;
-
-            return (
+      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-2xl shadow-sm flex flex-col gap-4">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          
+          <div className="flex items-center gap-4">
+            {/* View Mode Switcher */}
+            <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/80">
               <button
-                key={filter}
-                onClick={() => setStatusFilter(filter)}
-                className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 capitalize ${
-                  statusFilter === filter 
-                    ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800" 
+                onClick={() => { setViewMode('merchants'); setSelectedRestId(null); setSelectedSubmissionId(null); }}
+                className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 ${
+                  viewMode === 'merchants' 
+                    ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm border border-zinc-200/30 dark:border-zinc-800" 
                     : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
                 }`}
               >
-                <span>{filter}</span>
-                {isPendingFilter && pendingCount > 0 && (
-                  <span className="ml-1.5 bg-amber-500 text-black px-1.5 py-0.5 text-[9px] font-black rounded-full animate-pulse">
-                    {pendingCount}
-                  </span>
-                )}
+                Merchants Registry
               </button>
-            );
-          })}
-        </div>
+              <button
+                onClick={() => { setViewMode('applications'); setSelectedRestId(null); setSelectedSubmissionId(null); }}
+                className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 ${
+                  viewMode === 'applications' 
+                    ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm border border-zinc-200/30 dark:border-zinc-800" 
+                    : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
+                }`}
+              >
+                Applications
+              </button>
+            </div>
 
-        {/* Counter summary */}
-        <span className="text-xs font-semibold text-zinc-500">
-          Showing {displayList.length} of {isPendingTab ? submissions.filter(s => s.status === 'pending').length : restaurants.length} {isPendingTab ? "applications" : "merchants"}
-        </span>
+            {/* Dynamic Filters based on view mode */}
+            <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800/50 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/80">
+              {viewMode === 'merchants' ? (
+                (['all', 'active', 'suspended'] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setMerchantStatus(filter)}
+                    className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all duration-200 capitalize ${
+                      merchantStatus === filter 
+                        ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800" 
+                        : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
+                    }`}
+                  >
+                    {filter}
+                  </button>
+                ))
+              ) : (
+                (['all', 'pending', 'approved', 'rejected', 'cancelled'] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => { setAppStatus(filter); setAppPage(1); }}
+                    className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all duration-200 capitalize ${
+                      appStatus === filter 
+                        ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800" 
+                        : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
+                    }`}
+                  >
+                    {filter}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Counter summary & Actions */}
+          <div className="flex items-center gap-4">
+            <span className="text-xs font-semibold text-zinc-500">
+              Showing {displayList.length} of {isPendingTab ? appTotalItems : restaurants.length} {isPendingTab ? "applications" : "merchants"}
+            </span>
+            <button 
+              onClick={() => setIsAddModalOpen(true)}
+              className="text-xs font-bold px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all shadow-sm"
+            >
+              Add Restaurant
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Grid of Restaurant / Submission Cards */}
@@ -598,7 +664,7 @@ export default function RestaurantsSection({
 
                     <div className="flex items-center gap-1.5 text-[10px] text-zinc-400 mt-3.5">
                       <MapPin className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                      <span className="truncate">{[item.address, item.city].filter(Boolean).join(", ") || "No address provided"}</span>
+                      <span className="truncate">{isSub ? [((item as any).address?.street), ((item as any).address?.city)].filter(Boolean).join(", ") || "No address provided" : [item.address, (item as any).city].filter(Boolean).join(", ") || "No address provided"}</span>
                     </div>
                   </div>
 
@@ -615,7 +681,7 @@ export default function RestaurantsSection({
                         <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
                           <p className="text-[9px] font-bold text-zinc-400 uppercase">Est. Delivery</p>
                           <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">
-                            {item.estimatedDeliveryMinutes} min
+                            {item.estimatedDeliveryMinutes ?? "N/A"} min
                           </p>
                         </div>
                       </>
@@ -640,6 +706,47 @@ export default function RestaurantsSection({
           })}
         </div>
       )}
+
+      {viewMode === 'applications' && appTotalPages > 1 && displayList.length > 0 && (
+        <div className="flex justify-center items-center gap-2 mt-8">
+          <button 
+            disabled={appPage === 1}
+            onClick={() => setAppPage(p => Math.max(1, p - 1))}
+            className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
+          >
+            Previous
+          </button>
+          <span className="text-xs font-semibold text-zinc-500">Page {appPage} of {appTotalPages}</span>
+          <button 
+            disabled={appPage === appTotalPages}
+            onClick={() => setAppPage(p => Math.min(appTotalPages, p + 1))}
+            className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
+          >
+            Next
+          </button>
+        </div>
+      )}
+
+      {/* Add Restaurant Modal */}
+      <AddRestaurantModal 
+        isOpen={isAddModalOpen} 
+        onClose={() => setIsAddModalOpen(false)} 
+        onSuccess={() => {
+          setIsAddModalOpen(false);
+          fetchMerchants();
+        }} 
+      />
+
+      {/* Edit Restaurant Modal */}
+      <EditRestaurantModal
+        isOpen={isEditModalOpen}
+        onClose={() => setIsEditModalOpen(false)}
+        restaurant={selectedRest || null}
+        onSuccess={() => {
+          setIsEditModalOpen(false);
+          fetchMerchants();
+        }}
+      />
     </div>
   );
 }

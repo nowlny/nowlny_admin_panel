@@ -44,6 +44,9 @@ export default function Home() {
   // Stateful DB
   const [db, setDb] = useState<ReturnType<typeof loadDb> | null>(null);
 
+  // Stats for the sidebar
+  const [pendingRestaurantsCount, setPendingRestaurantsCount] = useState(0);
+
   // Access control role state
   const [currentRole, setCurrentRole] = useState<Role>({ type: "admin" });
 
@@ -146,6 +149,30 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
 
+  // Fetch pending count from API for the sidebar
+  useEffect(() => {
+    // Only verify admin if there's a token and role is admin
+    if (authToken && currentRole.type === "admin") {
+      restaurantsService.getSubmissions({ status: 'pending', limit: 1 })
+        .then((subs: any) => {
+          if (subs && typeof subs.total === 'number') {
+            setPendingRestaurantsCount(subs.total);
+          } else if (subs && typeof subs === 'object' && Array.isArray(subs.data)) {
+            setPendingRestaurantsCount(subs.data.filter((s: any) => s.status === 'pending').length);
+          } else if (Array.isArray(subs)) {
+            setPendingRestaurantsCount(subs.filter(s => s.status === 'pending').length);
+          } else {
+            console.warn("Expected valid response from getSubmissions but got:", subs);
+            setPendingRestaurantsCount(0);
+          }
+        })
+        .catch(err => {
+          console.warn("Sidebar count fetch failed (ignoring):", err.message);
+          setPendingRestaurantsCount(0);
+        });
+    }
+  }, [currentRole.type, activeTab, authToken]);
+
   // Sync tab state with URL hash to support browser back button
   useEffect(() => {
     const onHashChange = () => {
@@ -203,7 +230,7 @@ export default function Home() {
     ? db.orders.filter(o => o.status === "Pending" && o.restaurantId === currentRole.restaurantId).length
     : db.orders.filter(o => o.status === "Pending").length;
 
-  const pendingRestaurantsCount = db.restaurants.filter(r => r.status === "Pending").length;
+  // Stats for the sidebar are now updated via useEffect at the top level
   const pendingDriversCount = db.drivers.filter(d => d.verificationStatus === "Pending").length;
 
   // Global Actions handlers
@@ -328,7 +355,6 @@ export default function Home() {
         return (
           <CustomersSection 
             db={db} 
-            onUpdateCustomer={handleUpdateCustomer}
             searchQuery={searchQuery}
           />
         );

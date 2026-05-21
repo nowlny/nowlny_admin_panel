@@ -52,26 +52,30 @@ export interface RestaurantResponse extends RestaurantCreate {
   menu?: any[]; // Keep flexible if not strictly defined
 }
 
-// Restaurant Submission interfaces
+// Restaurant Submission interfaces (matches actual API response)
+export interface SubmissionAddress {
+  city: string;
+  street: string;
+  building?: string;
+  latitude: number;
+  longitude: number;
+}
+
 export interface RestaurantSubmission {
   id: string;
   name: string;
-  description?: string;
-  logo?: string;
-  coverImage?: string;
-  email: string;
-  phone: string;
-  website?: string;
-  city: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-  deliveryFee: number;
-  estimatedDeliveryMinutes: number;
-  cuisineType: string;
-  openingHours?: {
-    entries: OpeningHourEntry[];
-  };
+  description?: string | null;
+  logo?: string | null;
+  coverImage?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  cuisineType?: string | null;
+  deliveryFee?: number | null;
+  estimatedDeliveryMinutes?: number | null;
+  openingHours?: OpeningHourEntry[] | null;
+  address?: SubmissionAddress | null;
+  categoryIds?: string[];
   status: 'pending' | 'approved' | 'rejected' | 'cancelled';
   rejectionReason?: string | null;
   restaurantId?: string | null;
@@ -122,12 +126,15 @@ export const restaurantsService = {
 
   /**
    * Delete a restaurant (admin)
+   * DELETE /api/v1/restaurants/{id}
    */
   deleteRestaurant: (id: string) => {
     return apiClient<void>(`/api/v1/restaurants/${id}`, {
       method: 'DELETE',
     });
   },
+
+
 
   /**
    * Admin reviews a pending restaurant application
@@ -143,8 +150,17 @@ export const restaurantsService = {
    * Get all restaurant applications (admin)
    * GET /api/v1/restaurants/submissions
    */
-  getSubmissions: () => {
-    return apiClient<RestaurantSubmission[]>('/api/v1/restaurants/submissions', {
+  getSubmissions: (params?: { status?: string; page?: number; limit?: number }) => {
+    let query = '';
+    if (params) {
+      const searchParams = new URLSearchParams();
+      if (params.status && params.status !== 'all') searchParams.append('status', params.status);
+      if (params.page) searchParams.append('page', params.page.toString());
+      if (params.limit) searchParams.append('limit', params.limit.toString());
+      const str = searchParams.toString();
+      if (str) query = `?${str}`;
+    }
+    return apiClient<any>(`/api/v1/restaurants/submissions${query}`, {
       method: 'GET',
     });
   },
