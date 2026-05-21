@@ -1,23 +1,27 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { 
-  Store, 
-  Search, 
-  Star, 
-  MapPin, 
-  Calendar, 
-  DollarSign, 
-  ShoppingBag, 
+import {
+  Store,
+  Search,
+  Star,
+  MapPin,
+  Calendar,
+  DollarSign,
+  ShoppingBag,
   AlertTriangle,
   ArrowLeft,
   Loader2,
   Clock,
   Mail,
   Phone,
-  FileText
+  FileText,
 } from "lucide-react";
-import { restaurantsService, RestaurantResponse, RestaurantSubmission } from "../../services/restaurants";
+import {
+  restaurantsService,
+  RestaurantResponse,
+  RestaurantSubmission,
+} from "../../services/restaurants";
 import AddRestaurantModal from "./AddRestaurantModal";
 import EditRestaurantModal from "./EditRestaurantModal";
 
@@ -28,7 +32,7 @@ interface RestaurantsSectionProps {
 }
 
 export default function RestaurantsSection({
-  searchQuery
+  searchQuery,
 }: RestaurantsSectionProps) {
   const [restaurants, setRestaurants] = useState<RestaurantResponse[]>([]);
   const [submissions, setSubmissions] = useState<RestaurantSubmission[]>([]);
@@ -36,17 +40,22 @@ export default function RestaurantsSection({
   const [error, setError] = useState<string | null>(null);
 
   const [selectedRestId, setSelectedRestId] = useState<string | null>(null);
-  const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'merchants' | 'applications'>('merchants');
-  const [merchantStatus, setMerchantStatus] = useState<'all' | 'active' | 'suspended'>('all');
-  const [appStatus, setAppStatus] = useState<string>('pending');
+  const [selectedSubmissionId, setSelectedSubmissionId] = useState<
+    string | null
+  >(null);
+  const [viewMode, setViewMode] = useState<"merchants" | "applications">(
+    "merchants",
+  );
+  const [merchantStatus, setMerchantStatus] = useState<
+    "all" | "active" | "suspended"
+  >("all");
+  const [appStatus, setAppStatus] = useState<string>("pending");
   const [appPage, setAppPage] = useState(1);
   const [appTotalPages, setAppTotalPages] = useState(1);
   const [appTotalItems, setAppTotalItems] = useState(0);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
-  
   // Review form states
   const [isReviewing, setIsReviewing] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -60,7 +69,11 @@ export default function RestaurantsSection({
       } catch (err) {
         console.error("Failed to fetch restaurants via API:", err);
       }
-      const finalRests = Array.isArray(restsData) ? restsData : (restsData && (restsData as any).data ? (restsData as any).data : []);
+      const finalRests = Array.isArray(restsData)
+        ? restsData
+        : restsData && (restsData as any).data
+          ? (restsData as any).data
+          : [];
       setRestaurants(finalRests);
       setError(null);
     } catch (err: any) {
@@ -76,14 +89,20 @@ export default function RestaurantsSection({
       setIsLoading(true);
       let subsData: any = null;
       try {
-        subsData = await restaurantsService.getSubmissions({ status: appStatus, page: appPage, limit: 20 });
+        subsData = await restaurantsService.getSubmissions({
+          status: appStatus,
+          page: appPage,
+          limit: 20,
+        });
       } catch (err) {
         console.error("Failed to fetch submissions via API:", err);
       }
 
       if (subsData && subsData.data) {
         setSubmissions(subsData.data);
-        setAppTotalPages(subsData.totalPages || Math.ceil((subsData.total || 0) / 20) || 1);
+        setAppTotalPages(
+          subsData.totalPages || Math.ceil((subsData.total || 0) / 20) || 1,
+        );
         setAppTotalItems(subsData.total || 0);
       } else if (Array.isArray(subsData)) {
         setSubmissions(subsData);
@@ -104,63 +123,78 @@ export default function RestaurantsSection({
   };
 
   useEffect(() => {
-    if (viewMode === 'merchants') {
+    if (viewMode === "merchants") {
       fetchMerchants();
     } else {
       fetchSubmissions();
     }
   }, [viewMode, appStatus, appPage]);
 
-  const selectedRest = restaurants.find(r => r.id === selectedRestId);
-  const selectedSubmission = submissions.find(s => s.id === selectedSubmissionId);
+  const selectedRest = restaurants.find((r) => r.id === selectedRestId);
+  const selectedSubmission = submissions.find(
+    (s) => s.id === selectedSubmissionId,
+  );
 
   // Filter restaurants locally (if you want local search/status for merchants)
-  const filteredRestaurants = restaurants.filter(r => {
-    const matchesSearch = r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+  const filteredRestaurants = restaurants.filter((r) => {
+    const matchesSearch =
+      r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (r.cuisineType || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
       (r.address || "").toLowerCase().includes(searchQuery.toLowerCase());
-      
-    const matchesStatus = merchantStatus === 'all' || r.status?.toLowerCase() === merchantStatus.toLowerCase();
-    
+
+    const matchesStatus =
+      merchantStatus === "all" ||
+      r.status?.toLowerCase() === merchantStatus.toLowerCase();
+
     return matchesSearch && matchesStatus;
   });
 
   // Filter submissions (search locally since backend doesn't have search query param yet, or assume it does)
-  const filteredSubmissions = submissions.filter(s => {
-    const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+  const filteredSubmissions = submissions.filter((s) => {
+    const matchesSearch =
+      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (s.cuisineType || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.address?.street || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.address?.street || "")
+        .toLowerCase()
+        .includes(searchQuery.toLowerCase()) ||
       (s.address?.city || "").toLowerCase().includes(searchQuery.toLowerCase());
-    
+
     return matchesSearch;
   });
 
-  const isPendingTab = viewMode === 'applications';
+  const isPendingTab = viewMode === "applications";
   const displayList = isPendingTab ? filteredSubmissions : filteredRestaurants;
 
   const handleStatusChange = async (restId: string, newStatus: string) => {
     try {
       await restaurantsService.updateRestaurant(restId, { status: newStatus });
-      if (viewMode === 'merchants') fetchMerchants(); else fetchSubmissions();
+      if (viewMode === "merchants") fetchMerchants();
+      else fetchSubmissions();
     } catch (err: any) {
       alert(`Failed to update status: ${err.message}`);
     }
   };
 
   const handleDeleteRestaurant = async (restId: string) => {
-    if (!confirm("Are you sure you want to delete this restaurant? This cannot be undone.")) return;
+    if (
+      !confirm(
+        "Are you sure you want to delete this restaurant? This cannot be undone.",
+      )
+    )
+      return;
     try {
       await restaurantsService.deleteRestaurant(restId);
       setSelectedRestId(null);
-      if (viewMode === 'merchants') fetchMerchants(); else fetchSubmissions();
+      if (viewMode === "merchants") fetchMerchants();
+      else fetchSubmissions();
     } catch (err: any) {
       alert(`Failed to delete restaurant: ${err.message}`);
     }
   };
 
-  const handleReview = async (decision: 'approve' | 'reject') => {
+  const handleReview = async (decision: "approve" | "reject") => {
     if (!selectedSubmission) return;
-    if (decision === 'reject' && !rejectionReason.trim()) {
+    if (decision === "reject" && !rejectionReason.trim()) {
       alert("Please provide a rejection reason.");
       return;
     }
@@ -168,12 +202,13 @@ export default function RestaurantsSection({
     try {
       await restaurantsService.reviewSubmission(selectedSubmission.id, {
         decision,
-        rejectionReason: decision === 'reject' ? rejectionReason : undefined
+        rejectionReason: decision === "reject" ? rejectionReason : undefined,
       });
       setIsReviewing(false);
       setRejectionReason("");
       setSelectedSubmissionId(null);
-      if (viewMode === 'merchants') fetchMerchants(); else fetchSubmissions();
+      if (viewMode === "merchants") fetchMerchants();
+      else fetchSubmissions();
     } catch (err: any) {
       alert(`Failed to review application: ${err.message}`);
     }
@@ -183,7 +218,9 @@ export default function RestaurantsSection({
     return (
       <div className="flex flex-col items-center justify-center p-24 text-zinc-500">
         <Loader2 className="w-8 h-8 animate-spin mb-4 text-orange-500" />
-        <p className="text-sm font-semibold">Loading merchants and submissions...</p>
+        <p className="text-sm font-semibold">
+          Loading merchants and submissions...
+        </p>
       </div>
     );
   }
@@ -193,7 +230,7 @@ export default function RestaurantsSection({
     return (
       <div className="space-y-6 animate-in slide-in-from-right duration-200">
         {/* Back Button */}
-        <button 
+        <button
           onClick={() => {
             setSelectedSubmissionId(null);
             setIsReviewing(false);
@@ -207,50 +244,93 @@ export default function RestaurantsSection({
         {/* Restaurant Header Jumbotron */}
         <div className="relative bg-zinc-900 rounded-2xl overflow-hidden border border-zinc-800 shadow-lg">
           <div className="h-40 relative">
-            <img 
-              src={selectedSubmission.coverImage || "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"} 
-              alt={selectedSubmission.name} 
+            <img
+              src={
+                selectedSubmission.coverImage ||
+                "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
+              }
+              alt={selectedSubmission.name}
               className="w-full h-full object-cover opacity-40"
             />
             <div className="absolute top-4 right-4 flex gap-2">
-              <span className="text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border border-amber-400 bg-amber-500/90 text-black uppercase tracking-wider animate-pulse">
-                Pending Review
+              <span
+                className={`text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider ${
+                  selectedSubmission.status === "approved"
+                    ? "bg-emerald-500/90 text-white border-emerald-400"
+                    : selectedSubmission.status === "pending"
+                      ? "bg-amber-500/90 text-black border-amber-400 animate-pulse"
+                      : selectedSubmission.status === "rejected"
+                        ? "bg-red-500/90 text-white border-red-400"
+                        : "bg-zinc-500/90 text-white border-zinc-400"
+                }`}
+              >
+                {selectedSubmission.status === "pending"
+                  ? "Pending Review"
+                  : selectedSubmission.status}
               </span>
             </div>
           </div>
-          
+
           <div className="p-6 relative -mt-10 flex flex-col md:flex-row justify-between items-start md:items-end gap-6 bg-gradient-to-t from-zinc-950 via-zinc-950/95 to-zinc-950/40">
             <div className="flex gap-4 items-end">
               {selectedSubmission.logo ? (
                 selectedSubmission.logo.length > 5 ? (
-                  <img src={selectedSubmission.logo} alt="logo" className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl object-cover" />
+                  <img
+                    src={selectedSubmission.logo}
+                    alt="logo"
+                    className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl object-cover"
+                  />
                 ) : (
-                  <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">{selectedSubmission.logo}</span>
+                  <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">
+                    {selectedSubmission.logo}
+                  </span>
                 )
               ) : (
-                <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">🍽️</span>
+                <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">
+                  🍽️
+                </span>
               )}
               <div>
-                <h3 className="text-xl font-bold text-white tracking-tight">{selectedSubmission.name}</h3>
-                <p className="text-xs text-orange-400 font-semibold">{selectedSubmission.cuisineType || "No cuisine set"}</p>
+                <h3 className="text-xl font-bold text-white tracking-tight">
+                  {selectedSubmission.name}
+                </h3>
+                <p className="text-xs text-orange-400 font-semibold">
+                  {selectedSubmission.cuisineType || "No cuisine set"}
+                </p>
                 <div className="flex items-center gap-4 mt-2 text-[11px] text-zinc-400">
-                  <span className="flex items-center gap-1"><MapPin className="w-3.5 h-3.5" /> {[selectedSubmission.address?.street, selectedSubmission.address?.building, selectedSubmission.address?.city].filter(Boolean).join(", ") || "No address provided"}</span>
-                  <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Submitted {selectedSubmission.createdAt ? new Date(selectedSubmission.createdAt).toLocaleDateString() : "N/A"}</span>
+                  <span className="flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5" />{" "}
+                    {[
+                      selectedSubmission.address?.street,
+                      selectedSubmission.address?.building,
+                      selectedSubmission.address?.city,
+                    ]
+                      .filter(Boolean)
+                      .join(", ") || "No address provided"}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5" /> Submitted{" "}
+                    {selectedSubmission.createdAt
+                      ? new Date(
+                          selectedSubmission.createdAt,
+                        ).toLocaleDateString()
+                      : "N/A"}
+                  </span>
                 </div>
               </div>
             </div>
 
             {/* Admin Override Action Bar */}
             <div className="flex gap-2 shrink-0">
-              {!isReviewing && (
+              {!isReviewing && selectedSubmission.status === "pending" && (
                 <>
-                  <button 
-                    onClick={() => handleReview('approve')}
+                  <button
+                    onClick={() => handleReview("approve")}
                     className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20"
                   >
                     Approve Application
                   </button>
-                  <button 
+                  <button
                     onClick={() => setIsReviewing(true)}
                     className="bg-zinc-800 hover:bg-red-500 hover:text-white text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
                   >
@@ -265,23 +345,28 @@ export default function RestaurantsSection({
         {/* Rejection Form */}
         {isReviewing && (
           <div className="bg-red-500/5 border border-red-500/20 rounded-2xl p-6 animate-in slide-in-from-top-4 duration-200">
-            <h4 className="text-sm font-bold text-red-500 mb-2">Reject Merchant Application</h4>
-            <p className="text-xs text-zinc-400 mb-4">Please provide a reason for rejecting this restaurant. This will be sent to the merchant's dashboard.</p>
-            <textarea 
+            <h4 className="text-sm font-bold text-red-500 mb-2">
+              Reject Merchant Application
+            </h4>
+            <p className="text-xs text-zinc-400 mb-4">
+              Please provide a reason for rejecting this restaurant. This will
+              be sent to the merchant's dashboard.
+            </p>
+            <textarea
               value={rejectionReason}
-              onChange={e => setRejectionReason(e.target.value)}
+              onChange={(e) => setRejectionReason(e.target.value)}
               placeholder="e.g. Logo image URL is invalid, or cuisine selection is unsupported."
               className="w-full bg-zinc-950 border border-red-500/30 text-zinc-200 text-sm rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-red-500 mb-4 h-24"
             />
             <div className="flex gap-2 justify-end">
-              <button 
+              <button
                 onClick={() => setIsReviewing(false)}
                 className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold px-4 py-2 rounded-lg"
               >
                 Cancel
               </button>
-              <button 
-                onClick={() => handleReview('reject')}
+              <button
+                onClick={() => handleReview("reject")}
                 className="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-lg"
               >
                 Confirm Rejection
@@ -297,8 +382,12 @@ export default function RestaurantsSection({
               <Clock className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Est. Delivery Time</p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">{selectedSubmission.estimatedDeliveryMinutes ?? "N/A"} Minutes</p>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                Est. Delivery Time
+              </p>
+              <p className="text-lg font-black text-zinc-900 dark:text-white">
+                {selectedSubmission.estimatedDeliveryMinutes ?? "N/A"} Minutes
+              </p>
             </div>
           </div>
 
@@ -307,8 +396,12 @@ export default function RestaurantsSection({
               <DollarSign className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Delivery Fee</p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">${(selectedSubmission.deliveryFee ?? 0).toFixed(2)}</p>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                Delivery Fee
+              </p>
+              <p className="text-lg font-black text-zinc-900 dark:text-white">
+                ${(selectedSubmission.deliveryFee ?? 0).toFixed(2)}
+              </p>
             </div>
           </div>
 
@@ -317,8 +410,12 @@ export default function RestaurantsSection({
               <Store className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Cuisine Type</p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">{selectedSubmission.cuisineType}</p>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                Cuisine Type
+              </p>
+              <p className="text-lg font-black text-zinc-900 dark:text-white">
+                {selectedSubmission.cuisineType}
+              </p>
             </div>
           </div>
         </div>
@@ -326,27 +423,39 @@ export default function RestaurantsSection({
         {/* Extended Details card */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-2xl shadow-sm space-y-4">
-            <h4 className="text-sm font-extrabold text-zinc-900 dark:text-white border-b border-zinc-100 dark:border-zinc-800 pb-3">Contact & Location Information</h4>
+            <h4 className="text-sm font-extrabold text-zinc-900 dark:text-white border-b border-zinc-100 dark:border-zinc-800 pb-3">
+              Contact & Location Information
+            </h4>
             <div className="space-y-3 text-xs">
               <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
                 <Mail className="w-4 h-4 text-zinc-400" />
                 <div>
-                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">Email Address</p>
-                  <p className="font-bold">{selectedSubmission.email || "Not provided"}</p>
+                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">
+                    Email Address
+                  </p>
+                  <p className="font-bold">
+                    {selectedSubmission.email || "Not provided"}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
                 <Phone className="w-4 h-4 text-zinc-400" />
                 <div>
-                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">Phone Number</p>
-                  <p className="font-bold">{selectedSubmission.phone || "Not provided"}</p>
+                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">
+                    Phone Number
+                  </p>
+                  <p className="font-bold">
+                    {selectedSubmission.phone || "Not provided"}
+                  </p>
                 </div>
               </div>
               {selectedSubmission.website && (
                 <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
                   <FileText className="w-4 h-4 text-zinc-400" />
                   <div>
-                    <p className="font-semibold text-zinc-400 text-[10px] uppercase">Website URL</p>
+                    <p className="font-semibold text-zinc-400 text-[10px] uppercase">
+                      Website URL
+                    </p>
                     <p className="font-bold">{selectedSubmission.website}</p>
                   </div>
                 </div>
@@ -354,32 +463,59 @@ export default function RestaurantsSection({
               <div className="flex items-start gap-3 text-zinc-600 dark:text-zinc-300 pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
                 <MapPin className="w-4 h-4 text-zinc-400 mt-1" />
                 <div>
-                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">Address & Coordinates</p>
-                  <p className="font-bold">{[selectedSubmission.address?.street, selectedSubmission.address?.building, selectedSubmission.address?.city].filter(Boolean).join(", ") || "No address"}</p>
-                  <p className="font-bold">Lat: {selectedSubmission.address?.latitude ?? "N/A"}, Lng: {selectedSubmission.address?.longitude ?? "N/A"}</p>
+                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">
+                    Address & Coordinates
+                  </p>
+                  <p className="font-bold">
+                    {[
+                      selectedSubmission.address?.street,
+                      selectedSubmission.address?.building,
+                      selectedSubmission.address?.city,
+                    ]
+                      .filter(Boolean)
+                      .join(", ") || "No address"}
+                  </p>
+                  <p className="font-bold">
+                    Lat: {selectedSubmission.address?.latitude ?? "N/A"}, Lng:{" "}
+                    {selectedSubmission.address?.longitude ?? "N/A"}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
 
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-2xl shadow-sm space-y-4">
-            <h4 className="text-sm font-extrabold text-zinc-900 dark:text-white border-b border-zinc-100 dark:border-zinc-800 pb-3">Proposed Opening Hours</h4>
+            <h4 className="text-sm font-extrabold text-zinc-900 dark:text-white border-b border-zinc-100 dark:border-zinc-800 pb-3">
+              Proposed Opening Hours
+            </h4>
             <div className="space-y-2.5 max-h-[220px] overflow-y-auto pr-2 custom-scrollbar">
-              {selectedSubmission.openingHours && selectedSubmission.openingHours.length > 0 ? (
+              {selectedSubmission.openingHours &&
+              selectedSubmission.openingHours.length > 0 ? (
                 selectedSubmission.openingHours.map((entry, idx) => (
-                  <div key={idx} className="flex justify-between items-center text-xs border-b border-zinc-50 dark:border-zinc-800/40 pb-2">
-                    <span className="font-bold text-zinc-700 dark:text-zinc-300">{entry.day}</span>
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                      entry.is24Hours 
-                        ? "bg-emerald-500/10 text-emerald-500" 
-                        : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
-                    }`}>
-                      {entry.is24Hours ? "24 Hours Open" : `${entry.openTime} - ${entry.closeTime}`}
+                  <div
+                    key={idx}
+                    className="flex justify-between items-center text-xs border-b border-zinc-50 dark:border-zinc-800/40 pb-2"
+                  >
+                    <span className="font-bold text-zinc-700 dark:text-zinc-300">
+                      {entry.day}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                        entry.is24Hours
+                          ? "bg-emerald-500/10 text-emerald-500"
+                          : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+                      }`}
+                    >
+                      {entry.is24Hours
+                        ? "24 Hours Open"
+                        : `${entry.openTime} - ${entry.closeTime}`}
                     </span>
                   </div>
                 ))
               ) : (
-                <p className="text-xs text-zinc-400">No custom opening hours submitted. Standard settings apply.</p>
+                <p className="text-xs text-zinc-400">
+                  No custom opening hours submitted. Standard settings apply.
+                </p>
               )}
             </div>
           </div>
@@ -393,7 +529,7 @@ export default function RestaurantsSection({
     return (
       <div className="space-y-6 animate-in slide-in-from-right duration-200">
         {/* Back Button */}
-        <button 
+        <button
           onClick={() => {
             setSelectedRestId(null);
             setIsReviewing(false);
@@ -407,68 +543,102 @@ export default function RestaurantsSection({
         {/* Restaurant Header Jumbotron */}
         <div className="relative bg-zinc-900 rounded-2xl overflow-hidden border border-zinc-800 shadow-lg">
           <div className="h-40 relative">
-            <img 
-              src={selectedRest.coverImage || "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"} 
-              alt={selectedRest.name} 
+            <img
+              src={
+                selectedRest.coverImage ||
+                "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
+              }
+              alt={selectedRest.name}
               className="w-full h-full object-cover opacity-40"
             />
             <div className="absolute top-4 right-4 flex gap-2">
-              <span className={`text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider ${
-                selectedRest.status === "active" ? "bg-emerald-500/90 text-white border-emerald-400" :
-                selectedRest.status === "pending" ? "bg-amber-500/90 text-black border-amber-400 animate-pulse" :
-                "bg-red-500/90 text-white border-red-400"
-              }`}>
+              <span
+                className={`text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider ${
+                  selectedRest.status === "active"
+                    ? "bg-emerald-500/90 text-white border-emerald-400"
+                    : selectedRest.status === "pending"
+                      ? "bg-amber-500/90 text-black border-amber-400 animate-pulse"
+                      : "bg-red-500/90 text-white border-red-400"
+                }`}
+              >
                 {selectedRest.status}
               </span>
             </div>
           </div>
-          
+
           <div className="p-6 relative -mt-10 flex flex-col md:flex-row justify-between items-start md:items-end gap-6 bg-gradient-to-t from-zinc-950 via-zinc-950/95 to-zinc-950/40">
             <div className="flex gap-4 items-end">
               {selectedRest.logo ? (
                 selectedRest.logo.length > 5 ? (
-                  <img src={selectedRest.logo} alt="logo" className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl object-cover" />
+                  <img
+                    src={selectedRest.logo}
+                    alt="logo"
+                    className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl object-cover"
+                  />
                 ) : (
-                  <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">{selectedRest.logo}</span>
+                  <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">
+                    {selectedRest.logo}
+                  </span>
                 )
               ) : (
-                <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">🍽️</span>
+                <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">
+                  🍽️
+                </span>
               )}
               <div>
-                <h3 className="text-xl font-bold text-white tracking-tight">{selectedRest.name}</h3>
-                <p className="text-xs text-orange-400 font-semibold">{selectedRest.cuisineType || "No cuisine set"}</p>
+                <h3 className="text-xl font-bold text-white tracking-tight">
+                  {selectedRest.name}
+                </h3>
+                <p className="text-xs text-orange-400 font-semibold">
+                  {selectedRest.cuisineType || "No cuisine set"}
+                </p>
                 <div className="flex items-center gap-4 mt-2 text-[11px] text-zinc-400">
-                  <span className="flex items-center gap-1"><MapPin className="w-3.5 h-3.5" /> {[selectedRest.address, selectedRest.city].filter(Boolean).join(", ") || "No address provided"}</span>
-                  <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Joined {selectedRest.joinedDate || selectedRest.createdAt ? new Date((selectedRest.joinedDate || selectedRest.createdAt) as string).toLocaleDateString() : "N/A"}</span>
+                  <span className="flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5" />{" "}
+                    {[selectedRest.address, selectedRest.city]
+                      .filter(Boolean)
+                      .join(", ") || "No address provided"}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5" /> Joined{" "}
+                    {selectedRest.joinedDate || selectedRest.createdAt
+                      ? new Date(
+                          (selectedRest.joinedDate ||
+                            selectedRest.createdAt) as string,
+                        ).toLocaleDateString()
+                      : "N/A"}
+                  </span>
                 </div>
               </div>
             </div>
 
             {/* Admin Override Action Bar */}
             <div className="flex gap-2 shrink-0 flex-wrap justify-end">
-              <button 
+              <button
                 onClick={() => setIsEditModalOpen(true)}
                 className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
               >
                 Edit Merchant
               </button>
-              <button 
+              <button
                 onClick={() => handleDeleteRestaurant(selectedRest.id)}
                 className="bg-zinc-800 hover:bg-red-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
               >
                 Delete
               </button>
               {selectedRest.status === "active" && (
-                <button 
-                  onClick={() => handleStatusChange(selectedRest.id, 'suspended')}
+                <button
+                  onClick={() =>
+                    handleStatusChange(selectedRest.id, "suspended")
+                  }
                   className="bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
                 >
                   Suspend Merchant
                 </button>
               )}
               {selectedRest.status === "suspended" && (
-                <button 
-                  onClick={() => handleStatusChange(selectedRest.id, 'active')}
+                <button
+                  onClick={() => handleStatusChange(selectedRest.id, "active")}
                   className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
                 >
                   Reactivate Merchant
@@ -485,8 +655,15 @@ export default function RestaurantsSection({
               <DollarSign className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Gross Income</p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">${(selectedRest.revenue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                Gross Income
+              </p>
+              <p className="text-lg font-black text-zinc-900 dark:text-white">
+                $
+                {(selectedRest.revenue || 0).toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                })}
+              </p>
             </div>
           </div>
 
@@ -495,8 +672,12 @@ export default function RestaurantsSection({
               <ShoppingBag className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Total Sales Orders</p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">{selectedRest.ordersCount || 0} Orders</p>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                Total Sales Orders
+              </p>
+              <p className="text-lg font-black text-zinc-900 dark:text-white">
+                {selectedRest.ordersCount || 0} Orders
+              </p>
             </div>
           </div>
 
@@ -505,8 +686,19 @@ export default function RestaurantsSection({
               <Star className="w-5 h-5 fill-amber-500" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Review Rating</p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">{selectedRest.rating || 0} ★ <span className="text-xs font-normal text-zinc-400">({selectedRest.reviewsCount || (selectedRest as any).totalRatings || 0} votes)</span></p>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                Review Rating
+              </p>
+              <p className="text-lg font-black text-zinc-900 dark:text-white">
+                {selectedRest.rating || 0} ★{" "}
+                <span className="text-xs font-normal text-zinc-400">
+                  (
+                  {selectedRest.reviewsCount ||
+                    (selectedRest as any).totalRatings ||
+                    0}{" "}
+                  votes)
+                </span>
+              </p>
             </div>
           </div>
         </div>
@@ -517,7 +709,6 @@ export default function RestaurantsSection({
   // Registry Listing Grid
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
-      
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold p-4 rounded-xl flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
@@ -527,26 +718,33 @@ export default function RestaurantsSection({
 
       {/* Search & Tabs Filter Row */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-2xl shadow-sm flex flex-col gap-4">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          
-          <div className="flex items-center gap-4">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             {/* View Mode Switcher */}
             <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/80">
               <button
-                onClick={() => { setViewMode('merchants'); setSelectedRestId(null); setSelectedSubmissionId(null); }}
+                onClick={() => {
+                  setViewMode("merchants");
+                  setSelectedRestId(null);
+                  setSelectedSubmissionId(null);
+                }}
                 className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 ${
-                  viewMode === 'merchants' 
-                    ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm border border-zinc-200/30 dark:border-zinc-800" 
+                  viewMode === "merchants"
+                    ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm border border-zinc-200/30 dark:border-zinc-800"
                     : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
                 }`}
               >
                 Merchants Registry
               </button>
               <button
-                onClick={() => { setViewMode('applications'); setSelectedRestId(null); setSelectedSubmissionId(null); }}
+                onClick={() => {
+                  setViewMode("applications");
+                  setSelectedRestId(null);
+                  setSelectedSubmissionId(null);
+                }}
                 className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 ${
-                  viewMode === 'applications' 
-                    ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm border border-zinc-200/30 dark:border-zinc-800" 
+                  viewMode === "applications"
+                    ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm border border-zinc-200/30 dark:border-zinc-800"
                     : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
                 }`}
               >
@@ -556,49 +754,62 @@ export default function RestaurantsSection({
 
             {/* Dynamic Filters based on view mode */}
             <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800/50 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/80">
-              {viewMode === 'merchants' ? (
-                (['all', 'active', 'suspended'] as const).map((filter) => (
-                  <button
-                    key={filter}
-                    onClick={() => setMerchantStatus(filter)}
-                    className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all duration-200 capitalize ${
-                      merchantStatus === filter 
-                        ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800" 
-                        : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
-                    }`}
-                  >
-                    {filter}
-                  </button>
-                ))
-              ) : (
-                (['all', 'pending', 'approved', 'rejected', 'cancelled'] as const).map((filter) => (
-                  <button
-                    key={filter}
-                    onClick={() => { setAppStatus(filter); setAppPage(1); }}
-                    className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all duration-200 capitalize ${
-                      appStatus === filter 
-                        ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800" 
-                        : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
-                    }`}
-                  >
-                    {filter}
-                  </button>
-                ))
-              )}
+              {viewMode === "merchants"
+                ? (["all", "active", "suspended"] as const).map((filter) => (
+                    <button
+                      key={filter}
+                      onClick={() => setMerchantStatus(filter)}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all duration-200 capitalize ${
+                        merchantStatus === filter
+                          ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800"
+                          : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
+                      }`}
+                    >
+                      {filter}
+                    </button>
+                  ))
+                : (
+                    [
+                      "all",
+                      "pending",
+                      "approved",
+                      "rejected",
+                      "cancelled",
+                    ] as const
+                  ).map((filter) => (
+                    <button
+                      key={filter}
+                      onClick={() => {
+                        setAppStatus(filter);
+                        setAppPage(1);
+                      }}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all duration-200 capitalize ${
+                        appStatus === filter
+                          ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800"
+                          : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
+                      }`}
+                    >
+                      {filter}
+                    </button>
+                  ))}
             </div>
           </div>
 
           {/* Counter summary & Actions */}
           <div className="flex items-center gap-4">
             <span className="text-xs font-semibold text-zinc-500">
-              Showing {displayList.length} of {isPendingTab ? appTotalItems : restaurants.length} {isPendingTab ? "applications" : "merchants"}
+              Showing {displayList.length} of{" "}
+              {isPendingTab ? appTotalItems : restaurants.length}{" "}
+              {isPendingTab ? "applications" : "merchants"}
             </span>
-            <button 
-              onClick={() => setIsAddModalOpen(true)}
-              className="text-xs font-bold px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all shadow-sm"
-            >
-              Add Restaurant
-            </button>
+            {!isPendingTab && (
+              <button
+                onClick={() => setIsAddModalOpen(true)}
+                className="text-xs font-bold px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all shadow-sm"
+              >
+                Add Restaurant
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -608,18 +819,22 @@ export default function RestaurantsSection({
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-12 text-center rounded-2xl flex flex-col items-center justify-center">
           <Store className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mb-3" />
           <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-            {isPendingTab ? "No pending submissions to review" : "No restaurants match criteria"}
+            {isPendingTab
+              ? "No pending submissions to review"
+              : "No restaurants match criteria"}
           </p>
-          <p className="text-xs text-zinc-400 mt-1">Try relaxing filters or updating search terms</p>
+          <p className="text-xs text-zinc-400 mt-1">
+            Try relaxing filters or updating search terms
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {displayList.map((item) => {
-            const isSub = 'status' in item && isPendingTab;
-            
+            const isSub = "status" in item && isPendingTab;
+
             return (
-              <div 
-                key={item.id} 
+              <div
+                key={item.id}
                 className="bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800/80 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 group flex flex-col cursor-pointer"
                 onClick={() => {
                   if (isPendingTab) {
@@ -631,17 +846,24 @@ export default function RestaurantsSection({
               >
                 {/* Banner Area */}
                 <div className="h-32 relative">
-                  <img 
-                    src={item.coverImage || "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"} 
-                    alt={item.name} 
+                  <img
+                    src={
+                      item.coverImage ||
+                      "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
+                    }
+                    alt={item.name}
                     className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300 opacity-80"
                   />
                   <div className="absolute top-3 right-3">
-                    <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full shadow border ${
-                      item.status === "active" ? "bg-emerald-500/90 text-white border-emerald-400" :
-                      item.status === "pending" ? "bg-amber-500/95 text-black border-amber-400 animate-pulse" :
-                      "bg-red-500/90 text-white border-red-400"
-                    }`}>
+                    <span
+                      className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full shadow border ${
+                        item.status === "active" || item.status === "approved"
+                          ? "bg-emerald-500/90 text-white border-emerald-400"
+                          : item.status === "pending"
+                            ? "bg-amber-500/95 text-black border-amber-400 animate-pulse"
+                            : "bg-red-500/90 text-white border-red-400"
+                      }`}
+                    >
                       {item.status}
                     </span>
                   </div>
@@ -651,20 +873,43 @@ export default function RestaurantsSection({
                 <div className="p-5 space-y-4 flex-1 flex flex-col justify-between">
                   <div>
                     <div className="flex gap-3 items-start">
-                      {item.logo && typeof item.logo === 'string' && item.logo.length > 5 ? (
-                        <img src={item.logo} alt="logo" className="w-10 h-10 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-sm object-cover" />
+                      {item.logo &&
+                      typeof item.logo === "string" &&
+                      item.logo.length > 5 ? (
+                        <img
+                          src={item.logo}
+                          alt="logo"
+                          className="w-10 h-10 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-sm object-cover"
+                        />
                       ) : (
-                        <span className="text-2xl p-1.5 bg-zinc-50 dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-700">{item.logo || "🍽️"}</span>
+                        <span className="text-2xl p-1.5 bg-zinc-50 dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-700">
+                          {item.logo || "🍽️"}
+                        </span>
                       )}
                       <div className="min-w-0">
-                        <h4 className="text-sm font-bold text-zinc-950 dark:text-white truncate group-hover:text-orange-500 transition-colors">{item.name}</h4>
-                        <p className="text-[10px] text-zinc-400 font-medium truncate mt-0.5">{item.cuisineType || "No cuisine set"}</p>
+                        <h4 className="text-sm font-bold text-zinc-950 dark:text-white truncate group-hover:text-orange-500 transition-colors">
+                          {item.name}
+                        </h4>
+                        <p className="text-[10px] text-zinc-400 font-medium truncate mt-0.5">
+                          {item.cuisineType || "No cuisine set"}
+                        </p>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-1.5 text-[10px] text-zinc-400 mt-3.5">
                       <MapPin className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                      <span className="truncate">{isSub ? [((item as any).address?.street), ((item as any).address?.city)].filter(Boolean).join(", ") || "No address provided" : [item.address, (item as any).city].filter(Boolean).join(", ") || "No address provided"}</span>
+                      <span className="truncate">
+                        {isSub
+                          ? [
+                              (item as any).address?.street,
+                              (item as any).address?.city,
+                            ]
+                              .filter(Boolean)
+                              .join(", ") || "No address provided"
+                          : [item.address, (item as any).city]
+                              .filter(Boolean)
+                              .join(", ") || "No address provided"}
+                      </span>
                     </div>
                   </div>
 
@@ -673,13 +918,19 @@ export default function RestaurantsSection({
                     {isSub ? (
                       <>
                         <div className="bg-amber-500/5 dark:bg-amber-500/10 p-2 rounded-xl border border-amber-500/10">
-                          <p className="text-[9px] font-bold text-amber-500 uppercase">Apply Date</p>
+                          <p className="text-[9px] font-bold text-amber-500 uppercase">
+                            Apply Date
+                          </p>
                           <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">
-                            {item.createdAt ? new Date(item.createdAt).toLocaleDateString() : "Today"}
+                            {item.createdAt
+                              ? new Date(item.createdAt).toLocaleDateString()
+                              : "Today"}
                           </p>
                         </div>
                         <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
-                          <p className="text-[9px] font-bold text-zinc-400 uppercase">Est. Delivery</p>
+                          <p className="text-[9px] font-bold text-zinc-400 uppercase">
+                            Est. Delivery
+                          </p>
                           <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">
                             {item.estimatedDeliveryMinutes ?? "N/A"} min
                           </p>
@@ -688,13 +939,20 @@ export default function RestaurantsSection({
                     ) : (
                       <>
                         <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
-                          <p className="text-[9px] font-bold text-zinc-400 uppercase">GMV Sales</p>
-                          <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">${((item as any).revenue || 0).toFixed(0)}</p>
+                          <p className="text-[9px] font-bold text-zinc-400 uppercase">
+                            GMV Sales
+                          </p>
+                          <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">
+                            ${((item as any).revenue || 0).toFixed(0)}
+                          </p>
                         </div>
                         <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
-                          <p className="text-[9px] font-bold text-zinc-400 uppercase">Rating</p>
+                          <p className="text-[9px] font-bold text-zinc-400 uppercase">
+                            Rating
+                          </p>
                           <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5 inline-flex items-center justify-center gap-0.5">
-                            {(item as any).rating || 0} <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
+                            {(item as any).rating || 0}{" "}
+                            <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
                           </p>
                         </div>
                       </>
@@ -707,34 +965,38 @@ export default function RestaurantsSection({
         </div>
       )}
 
-      {viewMode === 'applications' && appTotalPages > 1 && displayList.length > 0 && (
-        <div className="flex justify-center items-center gap-2 mt-8">
-          <button 
-            disabled={appPage === 1}
-            onClick={() => setAppPage(p => Math.max(1, p - 1))}
-            className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
-          >
-            Previous
-          </button>
-          <span className="text-xs font-semibold text-zinc-500">Page {appPage} of {appTotalPages}</span>
-          <button 
-            disabled={appPage === appTotalPages}
-            onClick={() => setAppPage(p => Math.min(appTotalPages, p + 1))}
-            className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
-          >
-            Next
-          </button>
-        </div>
-      )}
+      {viewMode === "applications" &&
+        appTotalPages > 1 &&
+        displayList.length > 0 && (
+          <div className="flex justify-center items-center gap-2 mt-8">
+            <button
+              disabled={appPage === 1}
+              onClick={() => setAppPage((p) => Math.max(1, p - 1))}
+              className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
+            >
+              Previous
+            </button>
+            <span className="text-xs font-semibold text-zinc-500">
+              Page {appPage} of {appTotalPages}
+            </span>
+            <button
+              disabled={appPage === appTotalPages}
+              onClick={() => setAppPage((p) => Math.min(appTotalPages, p + 1))}
+              className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        )}
 
       {/* Add Restaurant Modal */}
-      <AddRestaurantModal 
-        isOpen={isAddModalOpen} 
-        onClose={() => setIsAddModalOpen(false)} 
+      <AddRestaurantModal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
         onSuccess={() => {
           setIsAddModalOpen(false);
           fetchMerchants();
-        }} 
+        }}
       />
 
       {/* Edit Restaurant Modal */}

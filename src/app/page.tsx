@@ -19,18 +19,21 @@ import RestaurantOverviewSection from "./components/RestaurantOverviewSection";
 import RestaurantMenuSection from "./components/RestaurantMenuSection";
 import RestaurantSettingsSection from "./components/RestaurantSettingsSection";
 import RestaurantApplicationSection from "./components/RestaurantApplicationSection";
-import { restaurantsService, RestaurantSubmission } from "../services/restaurants";
+import {
+  restaurantsService,
+  RestaurantSubmission,
+} from "../services/restaurants";
 
-import { 
-  loadDb, 
-  saveDb, 
-  Restaurant, 
-  Customer, 
-  Driver, 
-  Order, 
-  PromoCode, 
-  SystemSettings, 
-  SystemNotification 
+import {
+  loadDb,
+  saveDb,
+  Restaurant,
+  Customer,
+  Driver,
+  Order,
+  PromoCode,
+  SystemSettings,
+  SystemNotification,
 } from "./data/mockData";
 
 export default function Home() {
@@ -51,7 +54,8 @@ export default function Home() {
   const [currentRole, setCurrentRole] = useState<Role>({ type: "admin" });
 
   // Merchant submission state (for restaurant_owner JWT type)
-  const [merchantSubmission, setMerchantSubmission] = useState<RestaurantSubmission | null>(null);
+  const [merchantSubmission, setMerchantSubmission] =
+    useState<RestaurantSubmission | null>(null);
 
   // Initialize theme from localStorage/system preferences on mount
   useEffect(() => {
@@ -61,7 +65,9 @@ export default function Home() {
       if (stored) {
         darkPreference = stored === "dark";
       } else {
-        darkPreference = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        darkPreference = window.matchMedia(
+          "(prefers-color-scheme: dark)",
+        ).matches;
       }
     } catch (e) {
       darkPreference = false;
@@ -88,22 +94,22 @@ export default function Home() {
   useEffect(() => {
     const loadedData = loadDb();
     setDb(loadedData);
-    
+
     // Check for auth token
     const token = localStorage.getItem("token");
     if (token) {
       setAuthToken(token);
     }
-    
+
     setIsHydrated(true);
   }, []);
 
   // JWT token decoder (zero-dependency, client-side only)
   const decodeToken = (token: string): Record<string, any> | null => {
     try {
-      const payload = token.split('.')[1];
+      const payload = token.split(".")[1];
       // Pad base64 string to multiple of 4
-      const padded = payload + '='.repeat((4 - payload.length % 4) % 4);
+      const padded = payload + "=".repeat((4 - (payload.length % 4)) % 4);
       return JSON.parse(window.atob(padded));
     } catch {
       return null;
@@ -116,14 +122,14 @@ export default function Home() {
       const data = await restaurantsService.getMySubmission();
       setMerchantSubmission(data);
       // If approved and has a linked restaurantId, switch to store dashboard
-      if (data.status === 'approved' && data.restaurantId) {
-        setCurrentRole({ type: 'restaurant', restaurantId: data.restaurantId });
-        handleTabChange('restaurant_overview');
+      if (data.status === "approved" && data.restaurantId) {
+        setCurrentRole({ type: "restaurant", restaurantId: data.restaurantId });
+        handleTabChange("restaurant_overview");
       }
     } catch (err: any) {
       // 404 means no submission yet – expected state for new owners
-      if (!err?.message?.includes('404')) {
-        console.error('Failed to fetch submission status:', err);
+      if (!err?.message?.includes("404")) {
+        console.error("Failed to fetch submission status:", err);
       }
       setMerchantSubmission(null);
     }
@@ -136,37 +142,49 @@ export default function Home() {
     const decoded = decodeToken(authToken);
     if (!decoded) return;
 
-    if (decoded.userType === 'restaurant_owner') {
+    if (decoded.userType === "restaurant_owner") {
       // Keep role as restaurant_owner and fetch their submission
-      setCurrentRole({ type: 'restaurant_owner' });
-      handleTabChange('restaurant_application');
+      setCurrentRole({ type: "restaurant_owner" });
+      handleTabChange("restaurant_application");
       refetchSubmissionStatus();
     } else {
       // Default: treat as admin
-      setCurrentRole({ type: 'admin' });
-      handleTabChange('overview');
+      setCurrentRole({ type: "admin" });
+      handleTabChange("overview");
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
 
   // Fetch pending count from API for the sidebar
   useEffect(() => {
     // Only verify admin if there's a token and role is admin
     if (authToken && currentRole.type === "admin") {
-      restaurantsService.getSubmissions({ status: 'pending', limit: 1 })
+      restaurantsService
+        .getSubmissions({ status: "pending", limit: 1 })
         .then((subs: any) => {
-          if (subs && typeof subs.total === 'number') {
+          if (subs && typeof subs.total === "number") {
             setPendingRestaurantsCount(subs.total);
-          } else if (subs && typeof subs === 'object' && Array.isArray(subs.data)) {
-            setPendingRestaurantsCount(subs.data.filter((s: any) => s.status === 'pending').length);
+          } else if (
+            subs &&
+            typeof subs === "object" &&
+            Array.isArray(subs.data)
+          ) {
+            setPendingRestaurantsCount(
+              subs.data.filter((s: any) => s.status === "pending").length,
+            );
           } else if (Array.isArray(subs)) {
-            setPendingRestaurantsCount(subs.filter(s => s.status === 'pending').length);
+            setPendingRestaurantsCount(
+              subs.filter((s) => s.status === "pending").length,
+            );
           } else {
-            console.warn("Expected valid response from getSubmissions but got:", subs);
+            console.warn(
+              "Expected valid response from getSubmissions but got:",
+              subs,
+            );
             setPendingRestaurantsCount(0);
           }
         })
-        .catch(err => {
+        .catch((err) => {
           console.warn("Sidebar count fetch failed (ignoring):", err.message);
           setPendingRestaurantsCount(0);
         });
@@ -181,12 +199,12 @@ export default function Home() {
         setActiveTab(hash);
       } else {
         setActiveTab(
-        currentRole.type === "admin"
-          ? "overview"
-          : currentRole.type === "restaurant_owner"
-          ? "restaurant_application"
-          : "restaurant_overview"
-      );
+          currentRole.type === "admin"
+            ? "overview"
+            : currentRole.type === "restaurant_owner"
+              ? "restaurant_application"
+              : "restaurant_overview",
+        );
       }
     };
 
@@ -214,8 +232,12 @@ export default function Home() {
           <span className="text-white font-black text-xl">N</span>
         </div>
         <div className="text-center space-y-1">
-          <h2 className="text-xs font-bold text-white uppercase tracking-widest">NOWLNY DELIVERIES</h2>
-          <p className="text-[10px] text-zinc-500 font-semibold uppercase tracking-widest">Booting administrative interface...</p>
+          <h2 className="text-xs font-bold text-white uppercase tracking-widest">
+            NOWLNY DELIVERIES
+          </h2>
+          <p className="text-[10px] text-zinc-500 font-semibold uppercase tracking-widest">
+            Booting administrative interface...
+          </p>
         </div>
       </div>
     );
@@ -226,31 +248,46 @@ export default function Home() {
   }
 
   // Count pending cues for Sidebar badges
-  const pendingOrdersCount = currentRole.type === 'restaurant'
-    ? db.orders.filter(o => o.status === "Pending" && o.restaurantId === currentRole.restaurantId).length
-    : db.orders.filter(o => o.status === "Pending").length;
+  const pendingOrdersCount =
+    currentRole.type === "restaurant"
+      ? db.orders.filter(
+          (o) =>
+            o.status === "Pending" &&
+            o.restaurantId === currentRole.restaurantId,
+        ).length
+      : db.orders.filter((o) => o.status === "Pending").length;
 
   // Stats for the sidebar are now updated via useEffect at the top level
-  const pendingDriversCount = db.drivers.filter(d => d.verificationStatus === "Pending").length;
+  const pendingDriversCount = db.drivers.filter(
+    (d) => d.verificationStatus === "Pending",
+  ).length;
 
   // Global Actions handlers
   const handleUpdateRestaurant = (updatedRest: Restaurant) => {
-    const nextRestaurants = db.restaurants.map(r => r.id === updatedRest.id ? updatedRest : r);
+    const nextRestaurants = db.restaurants.map((r) =>
+      r.id === updatedRest.id ? updatedRest : r,
+    );
     updateDb({ ...db, restaurants: nextRestaurants });
   };
 
   const handleUpdateCustomer = (updatedCust: Customer) => {
-    const nextCustomers = db.customers.map(c => c.id === updatedCust.id ? updatedCust : c);
+    const nextCustomers = db.customers.map((c) =>
+      c.id === updatedCust.id ? updatedCust : c,
+    );
     updateDb({ ...db, customers: nextCustomers });
   };
 
   const handleUpdateDriver = (updatedDriver: Driver) => {
-    const nextDrivers = db.drivers.map(d => d.id === updatedDriver.id ? updatedDriver : d);
+    const nextDrivers = db.drivers.map((d) =>
+      d.id === updatedDriver.id ? updatedDriver : d,
+    );
     updateDb({ ...db, drivers: nextDrivers });
   };
 
   const handleUpdateOrder = (updatedOrder: Order) => {
-    const nextOrders = db.orders.map(o => o.id === updatedOrder.id ? updatedOrder : o);
+    const nextOrders = db.orders.map((o) =>
+      o.id === updatedOrder.id ? updatedOrder : o,
+    );
     updateDb({ ...db, orders: nextOrders });
   };
 
@@ -264,7 +301,9 @@ export default function Home() {
 
   // Notification methods
   const handleMarkNotificationRead = (notifId: string) => {
-    const nextNotifs = db.notifications.map(n => n.id === notifId ? { ...n, read: true } : n);
+    const nextNotifs = db.notifications.map((n) =>
+      n.id === notifId ? { ...n, read: true } : n,
+    );
     updateDb({ ...db, notifications: nextNotifs });
   };
 
@@ -273,9 +312,9 @@ export default function Home() {
   };
 
   const handleSendNotification = (
-    title: string, 
-    body: string, 
-    recipient: 'all' | 'customers' | 'restaurants' | 'drivers'
+    title: string,
+    body: string,
+    recipient: "all" | "customers" | "restaurants" | "drivers",
   ) => {
     const newNotif: SystemNotification = {
       id: `notif-${Date.now()}`,
@@ -283,7 +322,7 @@ export default function Home() {
       body,
       recipientType: recipient,
       timestamp: new Date().toISOString(),
-      read: false
+      read: false,
     };
 
     const nextNotifs = [newNotif, ...db.notifications];
@@ -292,25 +331,29 @@ export default function Home() {
 
   // Fast-track Overview Approvals
   const handleApproveRestaurantFromOverview = (restId: string) => {
-    const target = db.restaurants.find(r => r.id === restId);
+    const target = db.restaurants.find((r) => r.id === restId);
     if (target) {
       handleUpdateRestaurant({ ...target, status: "Active" });
       handleSendNotification(
         "Restaurant Approved",
         `Merchant ${target.name} has been approved by the platform team and is now live.`,
-        "restaurants"
+        "restaurants",
       );
     }
   };
 
   const handleApproveDriverFromOverview = (driverId: string) => {
-    const target = db.drivers.find(d => d.id === driverId);
+    const target = db.drivers.find((d) => d.id === driverId);
     if (target) {
-      handleUpdateDriver({ ...target, verificationStatus: "Verified", status: "Offline" });
+      handleUpdateDriver({
+        ...target,
+        verificationStatus: "Verified",
+        status: "Offline",
+      });
       handleSendNotification(
         "Rider Approved",
         `Rider ${target.name} has passed vehicle verification and can now login.`,
-        "drivers"
+        "drivers",
       );
     }
   };
@@ -328,16 +371,17 @@ export default function Home() {
   // Section Routing
   const renderActiveSection = () => {
     // Check if store scope impersonation is active
-    const currentRest = currentRole.type === 'restaurant'
-      ? db.restaurants.find(r => r.id === currentRole.restaurantId)
-      : null;
+    const currentRest =
+      currentRole.type === "restaurant"
+        ? db.restaurants.find((r) => r.id === currentRole.restaurantId)
+        : null;
 
     switch (activeTab) {
       // Root Administrator Tabs
       case "overview":
         return (
-          <OverviewSection 
-            db={db} 
+          <OverviewSection
+            db={db}
             setActiveTab={handleTabChange}
             onApproveRestaurant={handleApproveRestaurantFromOverview}
             onApproveDriver={handleApproveDriverFromOverview}
@@ -345,56 +389,46 @@ export default function Home() {
         );
       case "restaurants":
         return (
-          <RestaurantsSection 
-            db={db} 
+          <RestaurantsSection
+            db={db}
             onUpdateRestaurant={handleUpdateRestaurant}
             searchQuery={searchQuery}
           />
         );
       case "customers":
-        return (
-          <CustomersSection 
-            db={db} 
-            searchQuery={searchQuery}
-          />
-        );
+        return <CustomersSection db={db} searchQuery={searchQuery} />;
       case "orders":
         return (
-          <OrdersSection 
-            db={db} 
+          <OrdersSection
+            db={db}
             onUpdateOrder={handleUpdateOrder}
             searchQuery={searchQuery}
           />
         );
       case "drivers":
         return (
-          <DriversSection 
-            db={db} 
+          <DriversSection
+            db={db}
             onUpdateDriver={handleUpdateDriver}
             searchQuery={searchQuery}
           />
         );
       case "promos":
         return (
-          <PromosSection 
-            db={db} 
+          <PromosSection
+            db={db}
             onUpdatePromos={handleUpdatePromos}
             searchQuery={searchQuery}
           />
         );
       case "reports":
-        return (
-          <ReportsSection 
-            db={db} 
-            searchQuery={searchQuery}
-          />
-        );
+        return <ReportsSection db={db} searchQuery={searchQuery} />;
       case "system_users":
         return <SystemUsersSection />;
       case "settings":
         return (
-          <SettingsSection 
-            db={db} 
+          <SettingsSection
+            db={db}
             onUpdateSettings={handleUpdateSettings}
             onSendNotification={handleSendNotification}
           />
@@ -403,24 +437,28 @@ export default function Home() {
       // Restaurant Partner Impersonated Tabs
       case "restaurant_overview":
         return currentRest ? (
-          <RestaurantOverviewSection 
+          <RestaurantOverviewSection
             restaurant={currentRest}
             db={db}
             setActiveTab={handleTabChange}
             onUpdateOrder={handleUpdateOrder}
           />
         ) : (
-          <div className="p-8 text-xs font-bold text-red-500">Impersonation Error: Restaurant not found</div>
+          <div className="p-8 text-xs font-bold text-red-500">
+            Impersonation Error: Restaurant not found
+          </div>
         );
 
       case "restaurant_menu":
         return currentRest ? (
-          <RestaurantMenuSection 
+          <RestaurantMenuSection
             restaurant={currentRest}
             onUpdateRestaurant={handleUpdateRestaurant}
           />
         ) : (
-          <div className="p-8 text-xs font-bold text-red-500">Impersonation Error: Restaurant not found</div>
+          <div className="p-8 text-xs font-bold text-red-500">
+            Impersonation Error: Restaurant not found
+          </div>
         );
 
       case "restaurant_orders":
@@ -428,43 +466,48 @@ export default function Home() {
           // Impersonate database with filtered context
           const storeDb = {
             ...db,
-            orders: db.orders.filter(o => o.restaurantId === currentRest.id)
+            orders: db.orders.filter((o) => o.restaurantId === currentRest.id),
           };
           return (
-            <OrdersSection 
-              db={storeDb} 
+            <OrdersSection
+              db={storeDb}
               onUpdateOrder={handleUpdateOrder}
               searchQuery={searchQuery}
             />
           );
         }
-        return <div className="p-8 text-xs font-bold text-red-500">Impersonation Error</div>;
+        return (
+          <div className="p-8 text-xs font-bold text-red-500">
+            Impersonation Error
+          </div>
+        );
 
       case "restaurant_reports":
         if (currentRest) {
           // Impersonate database for sales reports
           const storeDb = {
             ...db,
-            orders: db.orders.filter(o => o.restaurantId === currentRest.id),
-            restaurants: db.restaurants.filter(r => r.id === currentRest.id)
+            orders: db.orders.filter((o) => o.restaurantId === currentRest.id),
+            restaurants: db.restaurants.filter((r) => r.id === currentRest.id),
           };
-          return (
-            <ReportsSection 
-              db={storeDb} 
-              searchQuery={searchQuery}
-            />
-          );
+          return <ReportsSection db={storeDb} searchQuery={searchQuery} />;
         }
-        return <div className="p-8 text-xs font-bold text-red-500">Impersonation Error</div>;
+        return (
+          <div className="p-8 text-xs font-bold text-red-500">
+            Impersonation Error
+          </div>
+        );
 
       case "restaurant_settings":
         return currentRest ? (
-          <RestaurantSettingsSection 
+          <RestaurantSettingsSection
             restaurant={currentRest}
             onUpdateRestaurant={handleUpdateRestaurant}
           />
         ) : (
-          <div className="p-8 text-xs font-bold text-red-500">Impersonation Error: Restaurant not found</div>
+          <div className="p-8 text-xs font-bold text-red-500">
+            Impersonation Error: Restaurant not found
+          </div>
         );
 
       // Restaurant Owner (applicant) portal
@@ -484,8 +527,8 @@ export default function Home() {
   return (
     <div className="flex h-screen bg-zinc-50 dark:bg-black font-sans overflow-hidden text-zinc-900 dark:text-zinc-100 transition-colors duration-200">
       {/* Sidebar Panel */}
-      <Sidebar 
-        activeTab={activeTab} 
+      <Sidebar
+        activeTab={activeTab}
         setActiveTab={(tab) => {
           handleTabChange(tab);
           setSearchQuery(""); // Reset search query when changing screens
@@ -503,7 +546,7 @@ export default function Home() {
       {/* Main Workspace Frame */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Universal Operations Header */}
-        <Header 
+        <Header
           title={activeTab}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
@@ -517,9 +560,7 @@ export default function Home() {
 
         {/* Scrollable Section Space */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-8 bg-zinc-50/50 dark:bg-zinc-950/20">
-          <div className="max-w-7xl mx-auto">
-            {renderActiveSection()}
-          </div>
+          <div className="max-w-7xl mx-auto">{renderActiveSection()}</div>
         </main>
       </div>
     </div>

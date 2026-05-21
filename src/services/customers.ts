@@ -11,6 +11,15 @@ export interface CustomerResponse {
   [key: string]: any;
 }
 
+export interface CustomerCreateData {
+  phoneNumber: string;
+  fullName: string;
+  nickname?: string;
+  status?: string;
+}
+
+export type CustomerUpdateData = Partial<CustomerCreateData>;
+
 export const customersService = {
   getCustomers: () => {
     return apiClient<CustomerResponse[]>('/api/v1/customers');
@@ -20,7 +29,14 @@ export const customersService = {
     return apiClient<CustomerResponse>(`/api/v1/customers/${id}`);
   },
   
-  updateCustomer: (id: string, data: { status: string }) => {
+  createCustomer: (data: CustomerCreateData) => {
+    return apiClient<CustomerResponse>('/api/v1/customers', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  
+  updateCustomer: (id: string, data: CustomerUpdateData) => {
     return apiClient<CustomerResponse>(`/api/v1/customers/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
