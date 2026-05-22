@@ -46,7 +46,11 @@ export default function SystemUsersSection() {
     try {
       setIsLoading(true);
       const data = await usersService.getSystemUsers();
-      const finalUsers = Array.isArray(data) ? data : (data && (data as any).data ? (data as any).data : []);
+      const finalUsers = Array.isArray(data)
+        ? data
+        : data && (data as any).data
+          ? (data as any).data
+          : [];
       setUsers(finalUsers);
       setError(null);
     } catch (err: any) {
@@ -199,7 +203,9 @@ export default function SystemUsersSection() {
                 <div className="flex justify-between items-start gap-2">
                   <div className="flex items-center gap-3 min-w-0 flex-1">
                     <div className="shrink-0 w-10 h-10 bg-gradient-to-tr from-zinc-200 to-zinc-300 dark:from-zinc-800 dark:to-zinc-700 rounded-xl flex items-center justify-center text-zinc-600 dark:text-zinc-300 font-bold shadow-sm border border-zinc-200 dark:border-zinc-700">
-                      {(user.fullName || user.phoneNumber || "?").charAt(0).toUpperCase()}
+                      {(user.fullName || user.phoneNumber || "?")
+                        .charAt(0)
+                        .toUpperCase()}
                     </div>
                     <div className="min-w-0 flex-1">
                       <h4 className="text-sm font-bold text-zinc-950 dark:text-white truncate group-hover:text-orange-500 transition-colors">

@@ -438,7 +438,7 @@ export default function RestaurantApplicationSection({
                     name="city"
                     value={formData.city}
                     onChange={handleFormChange}
-                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 focus:border-orange-500 focus:outline-none text-zinc-950 dark:text-zinc-50 text-sm rounded-xl p-3"
+                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 focus:border-orange-500 focus:outline-none text-zinc-950 dark:text-zinc-50 text-sm rounded-xl p-3 pr-8"
                   >
                     <option value="Riyadh">Riyadh</option>
                     <option value="Jeddah">Jeddah</option>

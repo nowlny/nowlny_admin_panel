@@ -1,45 +1,55 @@
 "use client";
 
 import React, { useState } from "react";
-import { 
-  Settings, 
-  Save, 
-  Bell, 
-  Send, 
-  CheckCircle2, 
+import {
+  Settings,
+  Save,
+  Bell,
+  Send,
+  CheckCircle2,
   AlertTriangle,
   HelpCircle,
   Shield,
   Zap,
-  Globe
+  Globe,
 } from "lucide-react";
 import { SystemSettings, loadDb } from "../data/mockData";
 
 interface SettingsSectionProps {
   db: ReturnType<typeof loadDb>;
   onUpdateSettings: (updatedSettings: SystemSettings) => void;
-  onSendNotification: (title: string, body: string, recipient: 'all' | 'customers' | 'restaurants' | 'drivers') => void;
+  onSendNotification: (
+    title: string,
+    body: string,
+    recipient: "all" | "customers" | "restaurants" | "drivers",
+  ) => void;
 }
 
 export default function SettingsSection({
   db,
   onUpdateSettings,
-  onSendNotification
+  onSendNotification,
 }: SettingsSectionProps) {
   const { settings } = db;
-  
+
   // Settings Form States
   const [commRate, setCommRate] = useState(settings.commissionRate.toString());
-  const [deliveryFee, setDeliveryFee] = useState(settings.baseDeliveryFee.toString());
+  const [deliveryFee, setDeliveryFee] = useState(
+    settings.baseDeliveryFee.toString(),
+  );
   const [serviceFee, setServiceFee] = useState(settings.serviceFee.toString());
-  const [driverShare, setDriverShare] = useState(settings.driverShare.toString());
+  const [driverShare, setDriverShare] = useState(
+    settings.driverShare.toString(),
+  );
   const [radius, setRadius] = useState(settings.operationalRadius.toString());
   const [maintenance, setMaintenance] = useState(settings.maintenanceMode);
 
   // Broadcaster Form States
   const [notifTitle, setNotifTitle] = useState("");
   const [notifBody, setNotifBody] = useState("");
-  const [notifRecipient, setNotifRecipient] = useState<'all' | 'customers' | 'restaurants' | 'drivers'>('all');
+  const [notifRecipient, setNotifRecipient] = useState<
+    "all" | "customers" | "restaurants" | "drivers"
+  >("all");
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,7 +64,7 @@ export default function SettingsSection({
       serviceFee: parseFloat(serviceFee),
       driverShare: parseFloat(driverShare),
       operationalRadius: parseFloat(radius),
-      maintenanceMode: maintenance
+      maintenanceMode: maintenance,
     };
 
     onUpdateSettings(updated);
@@ -69,32 +79,40 @@ export default function SettingsSection({
     }
 
     onSendNotification(notifTitle, notifBody, notifRecipient);
-    
+
     // Reset Broadcaster Form
     setNotifTitle("");
     setNotifBody("");
     setNotifRecipient("all");
-    
-    alert(`Success! Push notification broadcasted to recipient group: ${notifRecipient}. Check the notification log bell in the header!`);
+
+    alert(
+      `Success! Push notification broadcasted to recipient group: ${notifRecipient}. Check the notification log bell in the header!`,
+    );
   };
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-in fade-in duration-200">
-      
       {/* Platform Parameters Configuration */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm space-y-6">
         <div className="flex items-center gap-2 mb-2 pb-2 border-b border-zinc-100 dark:border-zinc-800">
           <Settings className="w-5 h-5 text-orange-500" />
           <div>
-            <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">System Operations Parameters</h4>
-            <p className="text-[10px] text-zinc-400">Configure global transaction fees, radii limits, and operational overrides</p>
+            <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">
+              System Operations Parameters
+            </h4>
+            <p className="text-[10px] text-zinc-400">
+              Configure global transaction fees, radii limits, and operational
+              overrides
+            </p>
           </div>
         </div>
 
         <form onSubmit={handleSaveSettings} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-zinc-400 uppercase">Platform Commission Rate (%)</label>
+              <label className="text-[10px] font-bold text-zinc-400 uppercase">
+                Platform Commission Rate (%)
+              </label>
               <input
                 type="number"
                 step="0.1"
@@ -105,7 +123,9 @@ export default function SettingsSection({
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-zinc-400 uppercase">Base Delivery Fee ($)</label>
+              <label className="text-[10px] font-bold text-zinc-400 uppercase">
+                Base Delivery Fee ($)
+              </label>
               <input
                 type="number"
                 step="0.01"
@@ -116,7 +136,9 @@ export default function SettingsSection({
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-zinc-400 uppercase">Platform Service Fee ($)</label>
+              <label className="text-[10px] font-bold text-zinc-400 uppercase">
+                Platform Service Fee ($)
+              </label>
               <input
                 type="number"
                 step="0.01"
@@ -127,7 +149,9 @@ export default function SettingsSection({
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-zinc-400 uppercase">Courier Fee Split (%)</label>
+              <label className="text-[10px] font-bold text-zinc-400 uppercase">
+                Courier Fee Split (%)
+              </label>
               <input
                 type="number"
                 step="0.5"
@@ -138,7 +162,9 @@ export default function SettingsSection({
             </div>
 
             <div className="space-y-1 sm:col-span-2">
-              <label className="text-[10px] font-bold text-zinc-400 uppercase">Operational Dispatch Radius (km)</label>
+              <label className="text-[10px] font-bold text-zinc-400 uppercase">
+                Operational Dispatch Radius (km)
+              </label>
               <input
                 type="number"
                 value={radius}
@@ -153,12 +179,16 @@ export default function SettingsSection({
             <div className="flex gap-2 items-center text-xs">
               <Shield className="w-5 h-5 text-orange-500" />
               <div>
-                <p className="font-bold text-zinc-800 dark:text-zinc-200">Emergency Maintenance Lock</p>
-                <p className="text-[10px] text-zinc-400 mt-0.5">Locks out both Customer and Merchant Apps instantly</p>
+                <p className="font-bold text-zinc-800 dark:text-zinc-200">
+                  Emergency Maintenance Lock
+                </p>
+                <p className="text-[10px] text-zinc-400 mt-0.5">
+                  Locks out both Customer and Merchant Apps instantly
+                </p>
               </div>
             </div>
-            
-            <input 
+
+            <input
               type="checkbox"
               checked={maintenance}
               onChange={() => setMaintenance(!maintenance)}
@@ -183,14 +213,20 @@ export default function SettingsSection({
         <div className="flex items-center gap-2 mb-2 pb-2 border-b border-zinc-100 dark:border-zinc-800">
           <Bell className="w-5 h-5 text-orange-500" />
           <div>
-            <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">Global Communications Desk</h4>
-            <p className="text-[10px] text-zinc-400">Broadcast immediate banners and push warnings across target apps</p>
+            <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">
+              Global Communications Desk
+            </h4>
+            <p className="text-[10px] text-zinc-400">
+              Broadcast immediate banners and push warnings across target apps
+            </p>
           </div>
         </div>
 
         <form onSubmit={handleBroadcast} className="space-y-4">
           <div className="space-y-1">
-            <label className="text-[10px] font-bold text-zinc-400 uppercase">Target Audience Group</label>
+            <label className="text-[10px] font-bold text-zinc-400 uppercase">
+              Target Audience Group
+            </label>
             <select
               value={notifRecipient}
               onChange={(e) => setNotifRecipient(e.target.value as any)}
@@ -198,13 +234,17 @@ export default function SettingsSection({
             >
               <option value="all">Everyone (All platforms)</option>
               <option value="customers">Customers App (Nowlny_Customer)</option>
-              <option value="restaurants">Restaurants App (Nowlny_Restaurant)</option>
+              <option value="restaurants">
+                Restaurants App (Nowlny_Restaurant)
+              </option>
               <option value="drivers">Drivers App (Nowlny_Fleet)</option>
             </select>
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] font-bold text-zinc-400 uppercase">Broadcast Title</label>
+            <label className="text-[10px] font-bold text-zinc-400 uppercase">
+              Broadcast Title
+            </label>
             <input
               type="text"
               placeholder="e.g. Server Upgrades Incoming"
@@ -215,7 +255,9 @@ export default function SettingsSection({
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] font-bold text-zinc-400 uppercase">Warning Message</label>
+            <label className="text-[10px] font-bold text-zinc-400 uppercase">
+              Warning Message
+            </label>
             <textarea
               rows={3}
               placeholder="Write a clear and warning message. This will prompt users on load."
@@ -236,7 +278,6 @@ export default function SettingsSection({
           </div>
         </form>
       </div>
-
     </div>
   );
 }
