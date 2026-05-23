@@ -247,15 +247,8 @@ export default function Home() {
     return <LoginScreen onLoginSuccess={setAuthToken} />;
   }
 
-  // Count pending cues for Sidebar badges
-  const pendingOrdersCount =
-    currentRole.type === "restaurant"
-      ? db.orders.filter(
-          (o) =>
-            o.status === "Pending" &&
-            o.restaurantId === currentRole.restaurantId,
-        ).length
-      : db.orders.filter((o) => o.status === "Pending").length;
+  // Orders badge: live count is managed inside OrdersSection via the API
+  const pendingOrdersCount = 0;
 
   // Stats for the sidebar are now updated via useEffect at the top level
   const pendingDriversCount = db.drivers.filter(
@@ -398,13 +391,7 @@ export default function Home() {
       case "customers":
         return <CustomersSection db={db} searchQuery={searchQuery} />;
       case "orders":
-        return (
-          <OrdersSection
-            db={db}
-            onUpdateOrder={handleUpdateOrder}
-            searchQuery={searchQuery}
-          />
-        );
+        return <OrdersSection searchQuery={searchQuery} />;
       case "drivers":
         return (
           <DriversSection
@@ -462,25 +449,7 @@ export default function Home() {
         );
 
       case "restaurant_orders":
-        if (currentRest) {
-          // Impersonate database with filtered context
-          const storeDb = {
-            ...db,
-            orders: db.orders.filter((o) => o.restaurantId === currentRest.id),
-          };
-          return (
-            <OrdersSection
-              db={storeDb}
-              onUpdateOrder={handleUpdateOrder}
-              searchQuery={searchQuery}
-            />
-          );
-        }
-        return (
-          <div className="p-8 text-xs font-bold text-red-500">
-            Impersonation Error
-          </div>
-        );
+        return <OrdersSection searchQuery={searchQuery} />;
 
       case "restaurant_reports":
         if (currentRest) {
