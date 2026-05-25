@@ -2,6 +2,7 @@ import { apiClient } from './apiClient';
 
 export interface MenuSection {
   id: string;
+  restaurantId?: string;
   name: string;
   description?: string;
   sortOrder: number;
