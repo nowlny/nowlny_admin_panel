@@ -8,6 +8,7 @@ interface MenuSectionEditorModalProps {
   isOpen: boolean;
   onClose: () => void;
   section: MenuSection | null;
+  restaurantId: string;
   onSuccess: () => void;
 }
 
@@ -15,6 +16,7 @@ export default function MenuSectionEditorModal({
   isOpen,
   onClose,
   section,
+  restaurantId,
   onSuccess,
 }: MenuSectionEditorModalProps) {
   const [name, setName] = useState("");
@@ -57,6 +59,7 @@ export default function MenuSectionEditorModal({
         });
       } else {
         await menuService.createSection({
+          restaurantId,
           name,
           description,
           sortOrder: 0,
