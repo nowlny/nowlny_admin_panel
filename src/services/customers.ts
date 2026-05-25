@@ -47,5 +47,30 @@ export const customersService = {
     return apiClient<void>(`/api/v1/customers/${id}`, {
       method: 'DELETE',
     });
+  },
+
+  /**
+   * Get my favorite restaurants
+   */
+  getMyFavorites: () => {
+    return apiClient<any[]>('/api/v1/customers/me/favorites');
+  },
+
+  /**
+   * Add a restaurant to favorites
+   */
+  addFavorite: (restaurantId: string) => {
+    return apiClient<void>(`/api/v1/customers/me/favorites/${restaurantId}`, {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * Remove a restaurant from favorites
+   */
+  removeFavorite: (restaurantId: string) => {
+    return apiClient<void>(`/api/v1/customers/me/favorites/${restaurantId}`, {
+      method: 'DELETE',
+    });
   }
 };

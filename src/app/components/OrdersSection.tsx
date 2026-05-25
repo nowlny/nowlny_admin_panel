@@ -116,6 +116,7 @@ function fmtDate(iso?: string) {
 
 interface OrdersSectionProps {
   searchQuery: string;
+  restaurantId?: string;
 }
 
 const KANBAN_LANES: {
@@ -154,7 +155,7 @@ const PAGE_SIZE = 20;
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function OrdersSection({ searchQuery }: OrdersSectionProps) {
+export default function OrdersSection({ searchQuery, restaurantId }: OrdersSectionProps) {
   // View mode
   const [activeSubTab, setActiveSubTab] = useState<"live" | "archive">("live");
   const [selectedMobileLane, setSelectedMobileLane] = useState(0);
@@ -191,6 +192,7 @@ export default function OrdersSection({ searchQuery }: OrdersSectionProps) {
         const res = await ordersService.getOrders({
           status: statusFilter || undefined,
           paymentStatus: paymentFilter || undefined,
+          restaurantId: restaurantId || undefined,
           page,
           limit: PAGE_SIZE,
         });
@@ -206,7 +208,7 @@ export default function OrdersSection({ searchQuery }: OrdersSectionProps) {
         if (!silent) setLoading(false);
       }
     },
-    [statusFilter, paymentFilter, page],
+    [statusFilter, paymentFilter, page, restaurantId],
   );
 
   // Initial + filter/page changes
@@ -635,33 +637,23 @@ export default function OrdersSection({ searchQuery }: OrdersSectionProps) {
                           </div>
                           {/* Order number */}
                           <p className="text-xs text-zinc-500 truncate">
-                            #{order.orderNumber}
+                            #{String((order as any).orderNumber || order.id.slice(0, 8))}
                           </p>
                           {/* Restaurant & Customer info */}
                           <div className="space-y-1">
-                            {(order.restaurant?.name ||
-                              order.restaurantName) && (
+                            {order.restaurantName && (
                               <p className="text-[10px] font-bold text-zinc-900 dark:text-zinc-200 flex items-center gap-1.5">
                                 <Store className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
                                 <span className="truncate">
-                                  {String(
-                                    order.restaurant?.name ||
-                                      order.restaurantName,
-                                  )}
+                                  {order.restaurantName}
                                 </span>
                               </p>
                             )}
-                            {(order.customer?.name ||
-                              order.customerName ||
-                              order.customer?.id) && (
+                            {(order.customerName || order.customerId) && (
                               <p className="text-[10px] text-zinc-400 flex items-center gap-1.5">
                                 <User className="w-3.5 h-3.5 shrink-0" />
                                 <span className="truncate">
-                                  {String(
-                                    order.customer?.name ||
-                                      order.customerName ||
-                                      order.customer?.id?.slice(0, 8),
-                                  )}
+                                  {order.customerName || order.customerId?.slice(0, 8)}
                                 </span>
                               </p>
                             )}
@@ -1012,6 +1004,55 @@ export default function OrdersSection({ searchQuery }: OrdersSectionProps) {
                   </div>
                 </div>
               </div>
+
+              {/* Delivery Address */}
+              {selectedOrder.deliveryAddress && (
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">
+                    Delivery Details
+                  </h4>
+                  <div className="flex flex-col gap-3 p-4 rounded-xl border border-zinc-100 dark:border-zinc-800/80">
+                    <div className="flex gap-3">
+                      <MapPin className="w-5 h-5 text-orange-500 shrink-0 mt-0.5" />
+                      <div className="text-xs text-zinc-800 dark:text-zinc-200">
+                        {selectedOrder.deliveryAddress.nickname && (
+                          <p className="font-bold text-zinc-900 dark:text-white capitalize mb-1">
+                            {selectedOrder.deliveryAddress.nickname}
+                          </p>
+                        )}
+                        <p className="leading-relaxed">
+                          {[
+                            selectedOrder.deliveryAddress.street && `Street: ${selectedOrder.deliveryAddress.street}`,
+                            selectedOrder.deliveryAddress.building && `Bldg: ${selectedOrder.deliveryAddress.building}`,
+                            selectedOrder.deliveryAddress.floor && `Floor: ${selectedOrder.deliveryAddress.floor}`
+                          ].filter(Boolean).join(", ")}
+                        </p>
+                        {selectedOrder.deliveryAddress.city && (
+                          <p>{selectedOrder.deliveryAddress.city}</p>
+                        )}
+                        {selectedOrder.deliveryAddress.deliveryInstructions && (
+                          <p className="mt-2 p-2 bg-orange-500/10 text-orange-600 dark:text-orange-400 rounded border border-orange-500/20 italic">
+                            Note: "{selectedOrder.deliveryAddress.deliveryInstructions}"
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {selectedOrder.deliveryAddress.latitude && selectedOrder.deliveryAddress.longitude && (
+                      <div className="mt-2 w-full h-48 rounded-lg overflow-hidden border border-zinc-200 dark:border-zinc-700 relative shadow-inner">
+                        <iframe
+                          width="100%"
+                          height="100%"
+                          style={{ border: 0 }}
+                          loading="lazy"
+                          allowFullScreen
+                          referrerPolicy="no-referrer-when-downgrade"
+                          src={`https://maps.google.com/maps?q=${selectedOrder.deliveryAddress.latitude},${selectedOrder.deliveryAddress.longitude}&t=&z=15&ie=UTF8&iwloc=&output=embed`}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Customer notes */}
               {selectedOrder.customerNotes && (

@@ -12,7 +12,9 @@ import PromosSection from "./components/PromosSection";
 import ReportsSection from "./components/ReportsSection";
 import SettingsSection from "./components/SettingsSection";
 import SystemUsersSection from "./components/SystemUsersSection";
+import RestaurantCategoriesSection from "./components/RestaurantCategoriesSection";
 import LoginScreen from "./components/LoginScreen";
+import { useNotifications } from "../hooks/useNotifications";
 
 // Restaurant-specific views
 import RestaurantOverviewSection from "./components/RestaurantOverviewSection";
@@ -56,6 +58,9 @@ export default function Home() {
   // Merchant submission state (for restaurant_owner JWT type)
   const [merchantSubmission, setMerchantSubmission] =
     useState<RestaurantSubmission | null>(null);
+
+  // Initialize FCM notifications if authenticated
+  useNotifications(!!authToken);
 
   // Initialize theme from localStorage/system preferences on mount
   useEffect(() => {
@@ -124,7 +129,7 @@ export default function Home() {
       // If approved and has a linked restaurantId, switch to store dashboard
       if (data.status === "approved" && data.restaurantId) {
         setCurrentRole({ type: "restaurant", restaurantId: data.restaurantId });
-        handleTabChange("restaurant_overview");
+        handleTabChange("restaurants");
       }
     } catch (err: any) {
       // 404 means no submission yet – expected state for new owners
@@ -386,8 +391,11 @@ export default function Home() {
             db={db}
             onUpdateRestaurant={handleUpdateRestaurant}
             searchQuery={searchQuery}
+            currentRole={currentRole}
           />
         );
+      case "restaurant_categories":
+        return <RestaurantCategoriesSection />;
       case "customers":
         return <CustomersSection db={db} searchQuery={searchQuery} />;
       case "orders":
@@ -421,63 +429,6 @@ export default function Home() {
           />
         );
 
-      // Restaurant Partner Impersonated Tabs
-      case "restaurant_overview":
-        return currentRest ? (
-          <RestaurantOverviewSection
-            restaurant={currentRest}
-            db={db}
-            setActiveTab={handleTabChange}
-            onUpdateOrder={handleUpdateOrder}
-          />
-        ) : (
-          <div className="p-8 text-xs font-bold text-red-500">
-            Impersonation Error: Restaurant not found
-          </div>
-        );
-
-      case "restaurant_menu":
-        return currentRest ? (
-          <RestaurantMenuSection
-            restaurant={currentRest}
-            onUpdateRestaurant={handleUpdateRestaurant}
-          />
-        ) : (
-          <div className="p-8 text-xs font-bold text-red-500">
-            Impersonation Error: Restaurant not found
-          </div>
-        );
-
-      case "restaurant_orders":
-        return <OrdersSection searchQuery={searchQuery} />;
-
-      case "restaurant_reports":
-        if (currentRest) {
-          // Impersonate database for sales reports
-          const storeDb = {
-            ...db,
-            orders: db.orders.filter((o) => o.restaurantId === currentRest.id),
-            restaurants: db.restaurants.filter((r) => r.id === currentRest.id),
-          };
-          return <ReportsSection db={storeDb} searchQuery={searchQuery} />;
-        }
-        return (
-          <div className="p-8 text-xs font-bold text-red-500">
-            Impersonation Error
-          </div>
-        );
-
-      case "restaurant_settings":
-        return currentRest ? (
-          <RestaurantSettingsSection
-            restaurant={currentRest}
-            onUpdateRestaurant={handleUpdateRestaurant}
-          />
-        ) : (
-          <div className="p-8 text-xs font-bold text-red-500">
-            Impersonation Error: Restaurant not found
-          </div>
-        );
 
       // Restaurant Owner (applicant) portal
       case "restaurant_application":

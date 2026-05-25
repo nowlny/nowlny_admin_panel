@@ -44,6 +44,48 @@ export const usersService = {
   },
 
   /**
+   * Update FCM Device Token
+   * POST /api/v1/users/device-token
+   */
+  updateFCMToken: (token: string) => {
+    return apiClient<void>('/api/v1/users/me/device-token', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    });
+  },
+
+  /**
+   * Get own user info
+   * GET /api/v1/users/me
+   */
+  getMe: () => {
+    return apiClient<SystemUser>('/api/v1/users/me', {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Register FCM device token
+   * POST /api/v1/users/me/device-token
+   */
+  registerDeviceToken: (data: { token: string }) => {
+    return apiClient<void>('/api/v1/users/me/device-token', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * Remove FCM device token
+   * DELETE /api/v1/users/me/device-token
+   */
+  removeDeviceToken: () => {
+    return apiClient<void>('/api/v1/users/me/device-token', {
+      method: 'DELETE',
+    });
+  },
+
+  /**
    * Create a system user (super_admin only)
    * POST /api/v1/users
    */

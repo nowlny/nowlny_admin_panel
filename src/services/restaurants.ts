@@ -205,5 +205,109 @@ export const restaurantsService = {
     return apiClient<RestaurantSubmission>('/api/v1/restaurants/me/submission', {
       method: 'GET',
     });
+  },
+
+  /**
+   * Edit own pending restaurant submission (partial update)
+   */
+  updateMySubmission: (data: Partial<RestaurantSubmission>) => {
+    return apiClient<RestaurantSubmission>('/api/v1/restaurants/me/submission', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * Get own restaurant profile
+   */
+  getMyRestaurant: () => {
+    return apiClient<RestaurantResponse>('/api/v1/restaurants/me', {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Update own restaurant info
+   */
+  updateMyRestaurant: (data: RestaurantUpdate) => {
+    return apiClient<RestaurantResponse>('/api/v1/restaurants/me', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * Get current restaurant address (owner)
+   */
+  getMyAddress: () => {
+    return apiClient<SubmissionAddress>('/api/v1/restaurants/me/address', {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Create or replace restaurant address (owner)
+   */
+  createMyAddress: (data: SubmissionAddress) => {
+    return apiClient<SubmissionAddress>('/api/v1/restaurants/me/address', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * Update a restaurant address (owner)
+   */
+  updateMyAddress: (data: Partial<SubmissionAddress>) => {
+    return apiClient<SubmissionAddress>('/api/v1/restaurants/me/address', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * Delete a restaurant address (owner)
+   */
+  deleteMyAddress: () => {
+    return apiClient<void>('/api/v1/restaurants/me/address', {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * Get restaurant info and full menu in one call (public)
+   */
+  getRestaurantFull: (id: string) => {
+    return apiClient<RestaurantResponse>(`/api/v1/restaurants/${id}/full`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Get full menu for a restaurant (public)
+   */
+  getRestaurantMenu: (id: string) => {
+    return apiClient<any[]>(`/api/v1/restaurants/${id}/menu`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Rate a restaurant (customer)
+   */
+  rateRestaurant: (id: string, data: { rating: number; review?: string }) => {
+    return apiClient<void>(`/api/v1/restaurants/${id}/rating`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * Get own rating for a restaurant (customer)
+   */
+  getMyRating: (id: string) => {
+    return apiClient<{ rating: number; review?: string }>(`/api/v1/restaurants/${id}/rating/me`, {
+      method: 'GET',
+    });
   }
 };

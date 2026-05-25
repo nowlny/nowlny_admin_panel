@@ -16,6 +16,7 @@ import {
   Mail,
   Phone,
   FileText,
+  User,
 } from "lucide-react";
 import {
   restaurantsService,
@@ -24,28 +25,36 @@ import {
 } from "../../services/restaurants";
 import AddRestaurantModal from "./AddRestaurantModal";
 import EditRestaurantModal from "./EditRestaurantModal";
+import RestaurantMenuSection from "./RestaurantMenuSection";
+import OrdersSection from "./OrdersSection";
 
 interface RestaurantsSectionProps {
   db?: any;
   onUpdateRestaurant?: any;
   searchQuery: string;
+  currentRole?: any;
 }
 
 export default function RestaurantsSection({
   searchQuery,
+  currentRole,
 }: RestaurantsSectionProps) {
   const [restaurants, setRestaurants] = useState<RestaurantResponse[]>([]);
   const [submissions, setSubmissions] = useState<RestaurantSubmission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [selectedRestId, setSelectedRestId] = useState<string | null>(null);
+  const [selectedRestId, setSelectedRestId] = useState<string | null>(
+    currentRole?.type === "restaurant" ? currentRole.restaurantId : null
+  );
+  const [fullSelectedRest, setFullSelectedRest] = useState<RestaurantResponse | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<
     string | null
   >(null);
   const [viewMode, setViewMode] = useState<"merchants" | "applications">(
     "merchants",
   );
+  const [innerTab, setInnerTab] = useState<"overview" | "profile" | "menu" | "orders">("overview");
   const [merchantStatus, setMerchantStatus] = useState<
     "all" | "active" | "suspended"
   >("all");
@@ -130,7 +139,17 @@ export default function RestaurantsSection({
     }
   }, [viewMode, appStatus, appPage]);
 
-  const selectedRest = restaurants.find((r) => r.id === selectedRestId);
+  useEffect(() => {
+    if (selectedRestId && viewMode === "merchants") {
+      restaurantsService.getRestaurantById(selectedRestId)
+        .then((data) => setFullSelectedRest(data))
+        .catch((err) => console.error("Failed to fetch full restaurant details:", err));
+    } else {
+      setFullSelectedRest(null);
+    }
+  }, [selectedRestId, viewMode]);
+
+  const selectedRest = fullSelectedRest || restaurants.find((r) => r.id === selectedRestId);
   const selectedSubmission = submissions.find(
     (s) => s.id === selectedSubmissionId,
   );
@@ -529,16 +548,18 @@ export default function RestaurantsSection({
     return (
       <div className="space-y-6 animate-in slide-in-from-right duration-200">
         {/* Back Button */}
-        <button
-          onClick={() => {
-            setSelectedRestId(null);
-            setIsReviewing(false);
-          }}
-          className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-950 dark:hover:text-white transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Back to Restaurant Registry</span>
-        </button>
+        {currentRole?.type !== "restaurant" && (
+          <button
+            onClick={() => {
+              setSelectedRestId(null);
+              setIsReviewing(false);
+            }}
+            className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-950 dark:hover:text-white transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Back to Restaurant Registry</span>
+          </button>
+        )}
 
         {/* Restaurant Header Jumbotron */}
         <div className="relative bg-zinc-900 rounded-2xl overflow-hidden border border-zinc-800 shadow-lg">
@@ -648,7 +669,53 @@ export default function RestaurantsSection({
           </div>
         </div>
 
-        {/* Info Grid (Summary Payouts + Documents Verification) */}
+        {/* Internal Tabs */}
+        <div className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-4">
+          <button
+            onClick={() => setInnerTab("overview")}
+            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
+              innerTab === "overview"
+                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
+            }`}
+          >
+            Overview
+          </button>
+          <button
+            onClick={() => setInnerTab("profile")}
+            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
+              innerTab === "profile"
+                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
+            }`}
+          >
+            Profile
+          </button>
+          <button
+            onClick={() => setInnerTab("menu")}
+            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
+              innerTab === "menu"
+                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
+            }`}
+          >
+            Menu Editor
+          </button>
+          <button
+            onClick={() => setInnerTab("orders")}
+            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
+              innerTab === "orders"
+                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
+            }`}
+          >
+            Live Orders
+          </button>
+        </div>
+
+        {innerTab === "overview" && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Info Grid (Summary Payouts + Documents Verification) */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
             <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl">
@@ -702,6 +769,139 @@ export default function RestaurantsSection({
             </div>
           </div>
         </div>
+        </div>
+        )}
+
+        {innerTab === "profile" && (
+          <div className="space-y-6 animate-in fade-in duration-200 border-t border-zinc-200 dark:border-zinc-800 pt-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Contact Info */}
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm space-y-4">
+                <h4 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+                  <User className="w-4 h-4 text-orange-500" />
+                  Contact Information
+                </h4>
+                <div className="space-y-3 text-sm">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Email</span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">{selectedRest.email}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Phone</span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">{selectedRest.phone}</span>
+                  </div>
+                  {selectedRest.website && (
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Website</span>
+                      <a href={selectedRest.website} target="_blank" rel="noreferrer" className="font-semibold text-blue-500 hover:underline">
+                        {selectedRest.website}
+                      </a>
+                    </div>
+                  )}
+                  {selectedRest.description && (
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Description</span>
+                      <span className="text-zinc-600 dark:text-zinc-400 text-xs leading-relaxed">{selectedRest.description}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Operations Info */}
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm space-y-4">
+                <h4 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+                  <Store className="w-4 h-4 text-orange-500" />
+                  Operations
+                </h4>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Cuisine Type</span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200 capitalize">{selectedRest.cuisineType}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Delivery Fee</span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">${selectedRest.deliveryFee?.toFixed(2)}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Est. Delivery</span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">{selectedRest.estimatedDeliveryMinutes} mins</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Joined Date</span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+                      {selectedRest.joinedDate ? new Date(selectedRest.joinedDate).toLocaleDateString() : "—"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Opening Hours */}
+                {selectedRest.openingHours?.entries && (
+                  <div className="mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-800">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide block mb-2">Opening Hours</span>
+                    <div className="space-y-1.5 text-xs">
+                      {selectedRest.openingHours.entries.map((entry, idx) => (
+                        <div key={idx} className="flex justify-between items-center">
+                          <span className="capitalize font-medium text-zinc-600 dark:text-zinc-400 w-24">{entry.day}</span>
+                          <span className="font-bold text-zinc-800 dark:text-zinc-200">
+                            {entry.is24Hours ? "24 Hours" : entry.openTime && entry.closeTime ? `${entry.openTime} - ${entry.closeTime}` : "Closed"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Location */}
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm space-y-4 md:col-span-2">
+                <h4 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-orange-500" />
+                  Location
+                </h4>
+                <div className="flex flex-col md:flex-row gap-6">
+                  <div className="flex-1 space-y-3 text-sm">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">City</span>
+                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">{selectedRest.city}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Address</span>
+                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">{selectedRest.address}</span>
+                    </div>
+                  </div>
+                  {selectedRest.latitude && selectedRest.longitude && (
+                    <div className="w-full md:w-2/3 h-64 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-700 shadow-inner relative">
+                      <iframe
+                        width="100%"
+                        height="100%"
+                        style={{ border: 0 }}
+                        loading="lazy"
+                        allowFullScreen
+                        referrerPolicy="no-referrer-when-downgrade"
+                        src={`https://maps.google.com/maps?q=${selectedRest.latitude},${selectedRest.longitude}&t=&z=15&ie=UTF8&iwloc=&output=embed`}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {innerTab === "menu" && (
+          <div className="animate-in fade-in duration-200 border-t border-zinc-200 dark:border-zinc-800 pt-4">
+            <RestaurantMenuSection
+              restaurant={selectedRest as any}
+              onUpdateRestaurant={() => fetchMerchants()}
+            />
+          </div>
+        )}
+
+        {innerTab === "orders" && (
+          <div className="animate-in fade-in duration-200 border-t border-zinc-200 dark:border-zinc-800 pt-4">
+            <OrdersSection searchQuery="" restaurantId={selectedRest.id} />
+          </div>
+        )}
       </div>
     );
   }
@@ -841,6 +1041,7 @@ export default function RestaurantsSection({
                     setSelectedSubmissionId(item.id);
                   } else {
                     setSelectedRestId(item.id);
+                    setInnerTab("overview");
                   }
                 }}
               >

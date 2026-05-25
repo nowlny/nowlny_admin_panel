@@ -66,6 +66,11 @@ export default function Sidebar({
             pendingRestaurantsCount > 0 ? pendingRestaurantsCount : undefined,
           badgeColor: "bg-amber-500 text-black",
         },
+        {
+          id: "restaurant_categories",
+          label: "Store Categories",
+          icon: Store,
+        },
         { id: "customers", label: "Customers", icon: Users },
         {
           id: "drivers",
@@ -84,28 +89,12 @@ export default function Sidebar({
         { id: "restaurant_application", label: "Apply & Status", icon: Store },
       ];
     } else {
-      // Find current restaurant
-      const currentRest = restaurants.find(
-        (r) => r.id === currentRole.restaurantId,
-      );
-
-      // Calculate pending orders count for THIS restaurant
       return [
         {
-          id: "restaurant_overview",
-          label: "Store Dashboard",
+          id: "restaurants",
+          label: "My Dashboard",
           icon: LayoutDashboard,
         },
-        {
-          id: "restaurant_orders",
-          label: "Incoming Orders",
-          icon: ShoppingBag,
-          badge: pendingOrdersCount > 0 ? pendingOrdersCount : undefined, // Quick notification badge
-          badgeColor: "bg-red-500 text-white animate-pulse",
-        },
-        { id: "restaurant_menu", label: "Manage Menu & AI", icon: Sparkles },
-        { id: "restaurant_reports", label: "Sales & Reports", icon: BarChart3 },
-        { id: "restaurant_settings", label: "Store Settings", icon: Settings },
       ];
     }
   };
@@ -169,40 +158,7 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* ROLE IMPERSONATOR DRIP-DOWN */}
-        {currentRole.type !== "restaurant_owner" && (
-          <div className="mx-4 mt-5 p-3 bg-zinc-900/60 border border-zinc-800/80 rounded-xl space-y-2">
-            <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block flex items-center gap-1">
-              <Users2 className="w-3.5 h-3.5" /> Access Authority
-            </label>
-            <select
-              value={
-                currentRole.type === "admin"
-                  ? "admin"
-                  : currentRole.restaurantId
-              }
-              onChange={(e) => {
-                const val = e.target.value;
-                if (val === "admin") {
-                  onChangeRole({ type: "admin" });
-                } else {
-                  onChangeRole({ type: "restaurant", restaurantId: val });
-                }
-              }}
-              className="w-full bg-zinc-950 border border-zinc-800 text-[11px] font-bold text-white rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer"
-            >
-              <option value="admin">Platform Root Admin</option>
-              <optgroup label="Merchant Stores">
-                {restaurants.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.logo} {r.name}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
-          </div>
-        )}
-
+        {/* ROLE IMPERSONATOR DROP-DOWN REMOVED AS REQUESTED */}
         {/* Navigation */}
         <nav className="flex-1 px-4 py-5 space-y-1.5 overflow-y-auto">
           <p className="px-3 text-[10px] font-bold text-zinc-600 tracking-wider uppercase mb-2">
