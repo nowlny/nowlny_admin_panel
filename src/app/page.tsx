@@ -60,7 +60,7 @@ export default function Home() {
     useState<RestaurantSubmission | null>(null);
 
   // Initialize FCM notifications if authenticated
-  useNotifications(!!authToken);
+  const { fcmToken, notificationToast, setNotificationToast } = useNotifications(!!authToken);
 
   // Initialize theme from localStorage/system preferences on mount
   useEffect(() => {
@@ -483,6 +483,37 @@ export default function Home() {
           <div className="max-w-7xl mx-auto">{renderActiveSection()}</div>
         </main>
       </div>
+
+      {/* FCM Notification Toast */}
+      {notificationToast && (
+        <div className="fixed top-6 right-6 z-[9999] bg-white dark:bg-zinc-900 border border-orange-500/30 dark:border-orange-500/30 shadow-2xl shadow-orange-500/10 rounded-2xl p-4 w-80 animate-in slide-in-from-top-4 fade-in duration-300 flex flex-col gap-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3">
+              {notificationToast.icon ? (
+                <img src={notificationToast.icon} alt="icon" className="w-8 h-8 rounded-full object-cover" />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-500 shrink-0">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+                </div>
+              )}
+              <div className="flex flex-col">
+                <span className="text-sm font-bold text-zinc-900 dark:text-white leading-tight">
+                  {notificationToast.title}
+                </span>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5 line-clamp-2">
+                  {notificationToast.body}
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={() => setNotificationToast(null)}
+              className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg shrink-0 transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

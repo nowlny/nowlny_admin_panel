@@ -4,8 +4,16 @@ import { useEffect, useState } from "react";
 import { fetchToken, onMessageListener } from "../lib/firebase";
 import { usersService } from "../services/users";
 
+export interface FCMToast {
+  id: string;
+  title: string;
+  body: string;
+  icon?: string;
+}
+
 export function useNotifications(isAuthenticated: boolean) {
   const [fcmToken, setFcmToken] = useState<string | null>(null);
+  const [notificationToast, setNotificationToast] = useState<FCMToast | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -20,7 +28,11 @@ export function useNotifications(isAuthenticated: boolean) {
             setFcmToken(token);
             // Send token to backend
             await usersService.updateFCMToken(token);
-            console.log("FCM Token registered with backend.");
+            console.log("=========================================");
+            console.log("FCM Token successfully generated!");
+            console.log(token);
+            console.log("Copy this token and use Firebase Console to send a test message.");
+            console.log("=========================================");
           } else {
             console.warn("Failed to generate FCM token.");
           }
@@ -53,6 +65,18 @@ export function useNotifications(isAuthenticated: boolean) {
               body: payload.notification.body,
               icon: payload.notification.image || "/icon.png",
             });
+            
+            setNotificationToast({
+              id: Date.now().toString(),
+              title: payload.notification.title || "New Notification",
+              body: payload.notification.body || "",
+              icon: payload.notification.image,
+            });
+
+            // Auto-hide toast after 5 seconds
+            setTimeout(() => {
+              setNotificationToast(null);
+            }, 5000);
           }
         }
       } catch (e) {
@@ -67,5 +91,5 @@ export function useNotifications(isAuthenticated: boolean) {
     };
   }, [fcmToken]);
 
-  return { fcmToken };
+  return { fcmToken, notificationToast, setNotificationToast };
 }
