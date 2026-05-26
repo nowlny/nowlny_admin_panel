@@ -13,6 +13,7 @@ import ReportsSection from "./components/ReportsSection";
 import SettingsSection from "./components/SettingsSection";
 import SystemUsersSection from "./components/SystemUsersSection";
 import RestaurantCategoriesSection from "./components/RestaurantCategoriesSection";
+import CurrenciesSection from "./components/CurrenciesSection";
 import LoginScreen from "./components/LoginScreen";
 import { useNotifications } from "../hooks/useNotifications";
 
@@ -420,6 +421,8 @@ export default function Home() {
         return <ReportsSection db={db} searchQuery={searchQuery} />;
       case "system_users":
         return <SystemUsersSection />;
+      case "currencies":
+        return <CurrenciesSection searchQuery={searchQuery} />;
       case "settings":
         return (
           <SettingsSection

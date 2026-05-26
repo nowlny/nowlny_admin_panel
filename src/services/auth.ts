@@ -12,6 +12,7 @@ export interface VerifyOtpPayload {
 
 export interface AuthResponse {
   accessToken: string;
+  refreshToken?: string;
   user: SystemUser;
 }
 
@@ -97,12 +98,20 @@ export const authService = {
   },
 
   /**
-   * Logout the user locally
+   * Logout the user from the server and locally
    */
-  logout: () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('token');
-      window.location.reload();
+  logout: async () => {
+    try {
+      // Attempt server logout, ignore failures if already unauthorized
+      await apiClient<void>('/api/v1/auth/logout', { method: 'POST' });
+    } catch (e) {
+      console.warn("Server logout failed or already unauthorized.");
+    } finally {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('token');
+        localStorage.removeItem('refreshToken');
+        window.location.reload();
+      }
     }
   }
 };

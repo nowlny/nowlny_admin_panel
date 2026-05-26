@@ -49,6 +49,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       
       // Save token to localStorage for apiClient to use
       localStorage.setItem("token", res.accessToken);
+      if (res.refreshToken) {
+        localStorage.setItem("refreshToken", res.refreshToken);
+      }
       
       // Trigger parent callback to show main app
       onLoginSuccess(res.accessToken);

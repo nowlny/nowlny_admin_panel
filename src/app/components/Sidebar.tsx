@@ -13,6 +13,7 @@ import {
   LogOut,
   Sparkles,
   Users2,
+  Coins,
 } from "lucide-react";
 import { Restaurant } from "../data/mockData";
 
@@ -81,6 +82,7 @@ export default function Sidebar({
         },
         { id: "promos", label: "Promo & Offers", icon: Ticket },
         { id: "reports", label: "Financials & Reports", icon: BarChart3 },
+        { id: "currencies", label: "Currencies & Rates", icon: Coins },
         { id: "system_users", label: "System Users", icon: Users2 },
         { id: "settings", label: "System Settings", icon: Settings },
       ];
