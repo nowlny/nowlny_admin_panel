@@ -11,8 +11,10 @@ export interface VerifyOtpPayload {
 }
 
 export interface AuthResponse {
-  accessToken: string;
+  accessToken?: string;
+  access_token?: string;
   refreshToken?: string;
+  refresh_token?: string;
   user: SystemUser;
 }
 

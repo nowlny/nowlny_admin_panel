@@ -47,14 +47,21 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       setError(null);
       const res = await authService.verifyOtp({ phoneNumber, code: otp });
       
+      const token = res.access_token || res.accessToken;
+      const rToken = res.refresh_token || res.refreshToken;
+
+      if (!token) {
+        throw new Error("Invalid response from server. No access token provided.");
+      }
+      
       // Save token to localStorage for apiClient to use
-      localStorage.setItem("token", res.accessToken);
-      if (res.refreshToken) {
-        localStorage.setItem("refreshToken", res.refreshToken);
+      localStorage.setItem("token", token);
+      if (rToken) {
+        localStorage.setItem("refreshToken", rToken);
       }
       
       // Trigger parent callback to show main app
-      onLoginSuccess(res.accessToken);
+      onLoginSuccess(token);
     } catch (err: any) {
       setError(err.message || "Invalid OTP. Please try again.");
     } finally {
