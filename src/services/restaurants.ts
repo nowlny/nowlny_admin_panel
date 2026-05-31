@@ -12,6 +12,7 @@ export interface RestaurantCreate {
   description?: string;
   logo?: string;
   coverImage?: string;
+  backgroundImageUrl?: string;
   email: string;
   phone: string;
   website?: string;
@@ -67,6 +68,7 @@ export interface RestaurantSubmission {
   description?: string | null;
   logo?: string | null;
   coverImage?: string | null;
+  backgroundImageUrl?: string | null;
   email?: string | null;
   phone?: string | null;
   website?: string | null;

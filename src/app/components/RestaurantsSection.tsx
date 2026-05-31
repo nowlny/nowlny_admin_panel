@@ -265,7 +265,7 @@ export default function RestaurantsSection({
           <div className="h-40 relative">
             <img
               src={
-                selectedSubmission.coverImage ||
+                selectedSubmission.backgroundImageUrl || selectedSubmission.coverImage ||
                 "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
               }
               alt={selectedSubmission.name}
@@ -566,7 +566,7 @@ export default function RestaurantsSection({
           <div className="h-40 relative">
             <img
               src={
-                selectedRest.coverImage ||
+                selectedRest.backgroundImageUrl || selectedRest.coverImage ||
                 "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
               }
               alt={selectedRest.name}
@@ -1049,7 +1049,7 @@ export default function RestaurantsSection({
                 <div className="h-32 relative">
                   <img
                     src={
-                      item.coverImage ||
+                      (item as any).backgroundImageUrl || item.coverImage ||
                       "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
                     }
                     alt={item.name}

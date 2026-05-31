@@ -429,7 +429,11 @@ export default function RestaurantMenuSection({
       {/* Banner / Store Header Info Card */}
       <div className="relative h-48 sm:h-56 rounded-3xl overflow-hidden shadow-md">
         <img
-          src={restaurant.banner}
+          src={
+            (restaurant as any).backgroundImageUrl ||
+            (restaurant as any).coverImage ||
+            "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
+          }
           alt={restaurant.name}
           className="absolute inset-0 w-full h-full object-cover"
         />
@@ -437,8 +441,12 @@ export default function RestaurantMenuSection({
 
         <div className="absolute bottom-6 left-6 right-6 flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-white dark:bg-zinc-900 shadow-lg flex items-center justify-center text-4xl shrink-0 border-2 border-orange-500/20">
-              {restaurant.logo}
+            <div className="w-16 h-16 rounded-2xl bg-white dark:bg-zinc-900 shadow-lg flex items-center justify-center text-4xl shrink-0 border-2 border-orange-500/20 overflow-hidden">
+              {restaurant.logo && typeof restaurant.logo === 'string' && restaurant.logo.length > 5 ? (
+                <img src={restaurant.logo} alt="logo" className="w-full h-full object-cover" />
+              ) : (
+                restaurant.logo || "🍽️"
+              )}
             </div>
             <div>
               <div className="flex items-center gap-2">
