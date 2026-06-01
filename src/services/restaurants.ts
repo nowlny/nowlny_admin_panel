@@ -36,6 +36,18 @@ export interface RestaurantReview {
   rejectionReason?: string;
 }
 
+export interface Story {
+  id: string;
+  restaurantId: string;
+  imageUrl: string;
+  caption?: string;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  seenCount?: number;
+  seenByMe?: boolean;
+}
+
 // Full interface mapping to backend
 export interface RestaurantResponse extends RestaurantCreate {
   id: string;
@@ -51,6 +63,7 @@ export interface RestaurantResponse extends RestaurantCreate {
   rejectionReason?: string | null;
   documentUrl?: string;
   menu?: any[]; // Keep flexible if not strictly defined
+  stories?: Story[];
 }
 
 // Restaurant Submission interfaces (matches actual API response)

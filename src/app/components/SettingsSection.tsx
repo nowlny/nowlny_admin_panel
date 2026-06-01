@@ -15,20 +15,16 @@ import {
 } from "lucide-react";
 import { SystemSettings, loadDb } from "../data/mockData";
 
+import { notificationsService } from "../../services/notifications";
+
 interface SettingsSectionProps {
   db: ReturnType<typeof loadDb>;
   onUpdateSettings: (updatedSettings: SystemSettings) => void;
-  onSendNotification: (
-    title: string,
-    body: string,
-    recipient: "all" | "customers" | "restaurants" | "drivers",
-  ) => void;
 }
 
 export default function SettingsSection({
   db,
   onUpdateSettings,
-  onSendNotification,
 }: SettingsSectionProps) {
   const { settings } = db;
 
@@ -47,9 +43,8 @@ export default function SettingsSection({
   // Broadcaster Form States
   const [notifTitle, setNotifTitle] = useState("");
   const [notifBody, setNotifBody] = useState("");
-  const [notifRecipient, setNotifRecipient] = useState<
-    "all" | "customers" | "restaurants" | "drivers"
-  >("all");
+  const [notifToken, setNotifToken] = useState("");
+  const [isSending, setIsSending] = useState(false);
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,23 +66,28 @@ export default function SettingsSection({
     alert("System settings saved successfully!");
   };
 
-  const handleBroadcast = (e: React.FormEvent) => {
+  const handleBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!notifTitle.trim() || !notifBody.trim()) {
-      alert("Title and message body are required to broadcast!");
+    if (!notifTitle.trim() || !notifBody.trim() || !notifToken.trim()) {
+      alert("Title, message body, and FCM token are required to send a test push!");
       return;
     }
 
-    onSendNotification(notifTitle, notifBody, notifRecipient);
+    setIsSending(true);
+    try {
+      await notificationsService.sendTestNotification(notifToken, notifTitle, notifBody);
+      // Reset Broadcaster Form
+      setNotifTitle("");
+      setNotifBody("");
+      setNotifToken("");
 
-    // Reset Broadcaster Form
-    setNotifTitle("");
-    setNotifBody("");
-    setNotifRecipient("all");
-
-    alert(
-      `Success! Push notification broadcasted to recipient group: ${notifRecipient}. Check the notification log bell in the header!`,
-    );
+      alert("Success! Test push notification sent.");
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to send test push notification: " + err.message);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   return (
@@ -225,20 +225,15 @@ export default function SettingsSection({
         <form onSubmit={handleBroadcast} className="space-y-4">
           <div className="space-y-1">
             <label className="text-[10px] font-bold text-zinc-400 uppercase">
-              Target Audience Group
+              Target FCM Token
             </label>
-            <select
-              value={notifRecipient}
-              onChange={(e) => setNotifRecipient(e.target.value as any)}
-              className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-orange-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200 cursor-pointer"
-            >
-              <option value="all">Everyone (All platforms)</option>
-              <option value="customers">Customers App (Nowlny_Customer)</option>
-              <option value="restaurants">
-                Restaurants App (Nowlny_Restaurant)
-              </option>
-              <option value="drivers">Drivers App (Nowlny_Fleet)</option>
-            </select>
+            <input
+              type="text"
+              placeholder="e.g. fcm-device-token-here"
+              value={notifToken}
+              onChange={(e) => setNotifToken(e.target.value)}
+              className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-orange-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200"
+            />
           </div>
 
           <div className="space-y-1">
@@ -270,10 +265,11 @@ export default function SettingsSection({
           <div className="flex justify-end pt-2">
             <button
               type="submit"
-              className="flex items-center justify-center gap-1.5 text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-xl shadow-lg shadow-orange-500/10 active:scale-95 transition-all"
+              disabled={isSending}
+              className="flex items-center justify-center gap-1.5 text-xs font-bold bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl shadow-lg shadow-orange-500/10 active:scale-95 transition-all"
             >
               <Send className="w-4 h-4" />
-              <span>Broadcast Warning</span>
+              <span>{isSending ? "Sending..." : "Send Test Push"}</span>
             </button>
           </div>
         </form>

@@ -148,15 +148,17 @@ export default function Home() {
     const decoded = decodeToken(authToken);
     if (!decoded) return;
 
+    const currentHash = window.location.hash.replace("#", "");
+
     if (decoded.userType === "restaurant_owner") {
       // Keep role as restaurant_owner and fetch their submission
       setCurrentRole({ type: "restaurant_owner" });
-      handleTabChange("restaurant_application");
+      handleTabChange(currentHash || "restaurant_application");
       refetchSubmissionStatus();
     } else {
       // Default: treat as admin
       setCurrentRole({ type: "admin" });
-      handleTabChange("overview");
+      handleTabChange(currentHash || "overview");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
@@ -298,18 +300,6 @@ export default function Home() {
     updateDb({ ...db, settings: nextSettings });
   };
 
-  // Notification methods
-  const handleMarkNotificationRead = (notifId: string) => {
-    const nextNotifs = db.notifications.map((n) =>
-      n.id === notifId ? { ...n, read: true } : n,
-    );
-    updateDb({ ...db, notifications: nextNotifs });
-  };
-
-  const handleClearAllNotifications = () => {
-    updateDb({ ...db, notifications: [] });
-  };
-
   const handleSendNotification = (
     title: string,
     body: string,
@@ -333,11 +323,7 @@ export default function Home() {
     const target = db.restaurants.find((r) => r.id === restId);
     if (target) {
       handleUpdateRestaurant({ ...target, status: "Active" });
-      handleSendNotification(
-        "Restaurant Approved",
-        `Merchant ${target.name} has been approved by the platform team and is now live.`,
-        "restaurants",
-      );
+      // We don't send mock local notifications anymore. If needed, the backend does this on approval.
     }
   };
 
@@ -349,11 +335,7 @@ export default function Home() {
         verificationStatus: "Verified",
         status: "Offline",
       });
-      handleSendNotification(
-        "Rider Approved",
-        `Rider ${target.name} has passed vehicle verification and can now login.`,
-        "drivers",
-      );
+      // Backend handles notifications on approval
     }
   };
 
@@ -428,7 +410,6 @@ export default function Home() {
           <SettingsSection
             db={db}
             onUpdateSettings={handleUpdateSettings}
-            onSendNotification={handleSendNotification}
           />
         );
 
@@ -473,12 +454,10 @@ export default function Home() {
           title={activeTab}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
-          notifications={db.notifications}
-          onMarkNotificationRead={handleMarkNotificationRead}
-          onClearAllNotifications={handleClearAllNotifications}
           onOpenSidebar={() => setSidebarOpen(true)}
           isDarkMode={isDarkMode}
           onToggleTheme={() => setIsDarkMode(!isDarkMode)}
+          notificationToast={notificationToast}
         />
 
         {/* Scrollable Section Space */}

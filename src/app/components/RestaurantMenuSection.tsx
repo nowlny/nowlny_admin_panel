@@ -108,7 +108,7 @@ export default function RestaurantMenuSection({
     try {
       // First, get the full menu response
       // For fallback we also just manually load sections and items
-      const loadedSections = await menuService.getSectionsByRestaurant(restaurant.id).catch(() => []);
+      const loadedSections = await menuService.getSectionsByRestaurant(restaurant.id).catch(() => [] as MenuSection[]);
       setSections(loadedSections || []);
 
       const itemsMap: Record<string, ApiMenuItem[]> = {};
@@ -117,7 +117,7 @@ export default function RestaurantMenuSection({
       if (loadedSections && loadedSections.length > 0) {
         await Promise.all(
           loadedSections.map(async (sec) => {
-            const items = await menuService.getItemsBySection(sec.id).catch(() => []);
+            const items = await menuService.getItemsBySection(sec.id).catch(() => [] as ApiMenuItem[]);
             itemsMap[sec.id] = items || [];
           })
         );
@@ -333,34 +333,62 @@ export default function RestaurantMenuSection({
     showToast("Integrating parsed menu into live API. Please wait...", "info");
 
     try {
+      // Reload sections to ensure we have the most up-to-date list
+      let currentSections: MenuSection[] = await menuService.getSectionsByRestaurant(restaurant.id).catch(() => [] as MenuSection[]);
+      setSections(currentSections || []);
+
       for (const parsedCat of parsedData.categories) {
         // Find existing section
-        let existingSec = sections.find((s) => s.name.toLowerCase() === parsedCat.name.toLowerCase());
+        let existingSec = currentSections.find((s) => s.name.toLowerCase() === parsedCat.name.toLowerCase());
         let sectionId = existingSec?.id;
 
         if (!existingSec) {
-          // Create new section
-          const newSec = await menuService.createSection({
-            restaurantId: restaurant.id,
-            name: parsedCat.name,
-            sortOrder: sections.length,
-          });
-          sectionId = newSec.id;
+          try {
+            // Create new section
+            const newSec = await menuService.createSection({
+              restaurantId: restaurant.id,
+              name: parsedCat.name,
+              sortOrder: currentSections.length,
+            });
+            sectionId = newSec.id;
+            currentSections.push(newSec);
+          } catch (err: any) {
+            if (err.message?.includes('409') || err.message?.includes('already exists')) {
+              console.warn(`Section "${parsedCat.name}" already exists, bypassing...`);
+              // Try to find the section again after refreshing the list
+              const refreshedSections: MenuSection[] = await menuService.getSectionsByRestaurant(restaurant.id).catch(() => [] as MenuSection[]);
+              const foundSec = refreshedSections?.find((s) => s.name.toLowerCase() === parsedCat.name.toLowerCase());
+              if (foundSec) {
+                sectionId = foundSec.id;
+                currentSections = refreshedSections || [];
+              }
+            } else {
+              throw err; // Re-throw if it's not a conflict
+            }
+          }
         }
 
         if (!sectionId) continue;
 
         // Create items for section
         for (const [idx, item] of parsedCat.items.entries()) {
-          await menuService.createItem({
-            sectionId,
-            name: item.name,
-            description: item.description,
-            price: item.price,
-            image: item.image,
-            isAvailable: item.isAvailable,
-            sortOrder: idx,
-          });
+          try {
+            await menuService.createItem({
+              sectionId,
+              name: item.name,
+              description: item.description,
+              price: item.price,
+              image: item.image,
+              isAvailable: item.isAvailable,
+              sortOrder: idx,
+            });
+          } catch (err: any) {
+             if (err.message?.includes('409') || err.message?.includes('already exists')) {
+                console.warn(`Item "${item.name}" already exists in section, bypassing...`);
+             } else {
+                throw err; // Re-throw if it's not a conflict
+             }
+          }
         }
       }
 

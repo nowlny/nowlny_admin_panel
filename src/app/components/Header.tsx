@@ -12,38 +12,38 @@ import {
   Sparkles,
   Inbox,
   Sun,
-  Moon
+  Moon,
+  Loader2
 } from "lucide-react";
-import { SystemNotification } from "../data/mockData";
+import { notificationsService, AppNotification } from "../../services/notifications";
+import { FCMToast } from "../../hooks/useNotifications";
 
 interface HeaderProps {
   title: string;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
-  notifications: SystemNotification[];
-  onMarkNotificationRead: (id: string) => void;
-  onClearAllNotifications: () => void;
   onOpenSidebar?: () => void;
   isDarkMode: boolean;
   onToggleTheme: () => void;
+  notificationToast?: FCMToast | null;
 }
 
 export default function Header({
   title,
   searchQuery,
   setSearchQuery,
-  notifications,
-  onMarkNotificationRead,
-  onClearAllNotifications,
   onOpenSidebar,
   isDarkMode,
-  onToggleTheme
+  onToggleTheme,
+  notificationToast
 }: HeaderProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   
-  const unreadCount = notifications.filter(n => !n.read).length;
-
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [isLoadingNotifs, setIsLoadingNotifs] = useState(false);
+  
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -54,9 +54,68 @@ export default function Header({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  const loadNotifications = async () => {
+    setIsLoadingNotifs(true);
+    try {
+      const data = await notificationsService.getNotifications(1, 20);
+      setNotifications(data.data || []);
+      setUnreadCount(data.unreadCount || 0);
+    } catch (err) {
+      console.error("Failed to fetch notifications", err);
+    } finally {
+      setIsLoadingNotifs(false);
+    }
+  };
+
+  useEffect(() => {
+    // Only load notifications if we have an auth token in local storage (meaning we are logged in)
+    if (typeof window !== "undefined" && localStorage.getItem("token")) {
+      loadNotifications();
+    }
+  }, []);
+
+  // Reload when a new push notification toast appears
+  useEffect(() => {
+    if (notificationToast) {
+      loadNotifications();
+    }
+  }, [notificationToast]);
+
+  const handleMarkAsRead = async (id: string) => {
+    // Optimistic update
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    setUnreadCount(prev => Math.max(0, prev - 1));
+    
+    try {
+      await notificationsService.markAsRead(id);
+    } catch (err) {
+      console.error("Failed to mark as read", err);
+      // Rollback on fail
+      loadNotifications();
+    }
+  };
+
+  const handleClearAll = async () => {
+    // Optimistic update
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    setUnreadCount(0);
+    
+    try {
+      await notificationsService.markAllAsRead();
+    } catch (err) {
+      console.error("Failed to mark all as read", err);
+      loadNotifications();
+    }
+    setIsOpen(false);
+  };
+
   const formatTimestamp = (dateStr: string) => {
-    const d = new Date(dateStr);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return dateStr;
+    }
   };
 
   return (
@@ -141,10 +200,7 @@ export default function Header({
                 </div>
                 {unreadCount > 0 && (
                   <button
-                    onClick={() => {
-                      onClearAllNotifications();
-                      setIsOpen(false);
-                    }}
+                    onClick={handleClearAll}
                     className="text-[10px] text-zinc-400 hover:text-orange-500 font-bold transition-colors"
                   >
                     Clear All
@@ -153,7 +209,12 @@ export default function Header({
               </div>
 
               <div className="max-h-72 overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800">
-                {notifications.length === 0 ? (
+                {isLoadingNotifs && notifications.length === 0 ? (
+                  <div className="p-8 text-center flex flex-col items-center justify-center">
+                    <Loader2 className="w-6 h-6 animate-spin text-orange-500 mb-2" />
+                    <p className="text-xs text-zinc-400 font-medium">Loading alerts...</p>
+                  </div>
+                ) : notifications.length === 0 ? (
                   <div className="p-8 text-center flex flex-col items-center justify-center">
                     <Inbox className="w-8 h-8 text-zinc-300 dark:text-zinc-600 mb-2" />
                     <p className="text-xs text-zinc-400 font-medium">No alerts registered</p>
@@ -169,7 +230,7 @@ export default function Header({
                       <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
                         !notif.read ? "bg-orange-500 animate-ping" : "bg-zinc-300 dark:bg-zinc-700"
                       }`} />
-                      <div className="flex-1 min-w-0" onClick={() => onMarkNotificationRead(notif.id)}>
+                      <div className="flex-1 min-w-0" onClick={() => !notif.read && handleMarkAsRead(notif.id)}>
                         <div className="flex justify-between items-start gap-1">
                           <p className={`text-xs font-bold truncate ${
                             !notif.read ? "text-zinc-900 dark:text-white" : "text-zinc-500 dark:text-zinc-400"
@@ -182,11 +243,19 @@ export default function Header({
                           {notif.body}
                         </p>
                         <div className="flex items-center gap-1.5 mt-1.5">
-                          <span className="text-[9px] font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 px-1.5 py-0.5 rounded capitalize">
-                            to: {notif.recipientType}
-                          </span>
+                          {notif.type && (
+                            <span className="text-[9px] font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 px-1.5 py-0.5 rounded capitalize">
+                              type: {notif.type}
+                            </span>
+                          )}
                           {!notif.read && (
-                            <button className="text-[9px] font-bold text-orange-500 hover:underline">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleMarkAsRead(notif.id);
+                              }}
+                              className="text-[9px] font-bold text-orange-500 hover:underline"
+                            >
                               Mark Read
                             </button>
                           )}

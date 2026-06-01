@@ -27,6 +27,7 @@ import AddRestaurantModal from "./AddRestaurantModal";
 import EditRestaurantModal from "./EditRestaurantModal";
 import RestaurantMenuSection from "./RestaurantMenuSection";
 import OrdersSection from "./OrdersSection";
+import StoriesViewerModal from "./StoriesViewerModal";
 
 interface RestaurantsSectionProps {
   db?: any;
@@ -68,6 +69,9 @@ export default function RestaurantsSection({
   // Review form states
   const [isReviewing, setIsReviewing] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
+  
+  // Stories viewer state
+  const [viewingStoriesFor, setViewingStoriesFor] = useState<RestaurantResponse | null>(null);
 
   const fetchMerchants = async () => {
     try {
@@ -591,11 +595,25 @@ export default function RestaurantsSection({
             <div className="flex gap-4 items-end">
               {selectedRest.logo ? (
                 selectedRest.logo.length > 5 ? (
-                  <img
-                    src={selectedRest.logo}
-                    alt="logo"
-                    className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl object-cover"
-                  />
+                  <button 
+                    onClick={(e) => {
+                      if (selectedRest.stories && selectedRest.stories.length > 0) {
+                        e.stopPropagation();
+                        setViewingStoriesFor(selectedRest);
+                      }
+                    }}
+                    className={`relative w-16 h-16 rounded-2xl shadow-xl overflow-hidden bg-zinc-900 border-2 transition-transform ${
+                      selectedRest.stories && selectedRest.stories.length > 0 
+                        ? 'border-orange-500 hover:scale-105 cursor-pointer p-[2px]' 
+                        : 'border-zinc-800'
+                    }`}
+                  >
+                    <img
+                      src={selectedRest.logo}
+                      alt="logo"
+                      className="w-full h-full object-cover rounded-xl"
+                    />
+                  </button>
                 ) : (
                   <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">
                     {selectedRest.logo}
@@ -1073,17 +1091,31 @@ export default function RestaurantsSection({
                 {/* Body */}
                 <div className="p-5 space-y-4 flex-1 flex flex-col justify-between">
                   <div>
-                    <div className="flex gap-3 items-start">
+                    <div className="flex gap-3 items-start relative z-10">
                       {item.logo &&
                       typeof item.logo === "string" &&
                       item.logo.length > 5 ? (
-                        <img
-                          src={item.logo}
-                          alt="logo"
-                          className="w-10 h-10 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-sm object-cover"
-                        />
+                        <button 
+                          onClick={(e) => {
+                            if (!isSub && (item as any).stories && (item as any).stories.length > 0) {
+                              e.stopPropagation();
+                              setViewingStoriesFor(item as any);
+                            }
+                          }}
+                          className={`w-11 h-11 rounded-xl shadow-sm overflow-hidden bg-zinc-50 dark:bg-zinc-800 border-2 shrink-0 transition-transform ${
+                            !isSub && (item as any).stories && (item as any).stories.length > 0
+                              ? 'border-orange-500 hover:scale-110 cursor-pointer p-[1.5px]'
+                              : 'border-zinc-200 dark:border-zinc-700'
+                          }`}
+                        >
+                          <img
+                            src={item.logo}
+                            alt="logo"
+                            className="w-full h-full object-cover rounded-lg"
+                          />
+                        </button>
                       ) : (
-                        <span className="text-2xl p-1.5 bg-zinc-50 dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-700">
+                        <span className="text-2xl p-1.5 bg-zinc-50 dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-700 shrink-0">
                           {item.logo || "🍽️"}
                         </span>
                       )}
@@ -1209,6 +1241,12 @@ export default function RestaurantsSection({
           setIsEditModalOpen(false);
           fetchMerchants();
         }}
+      />
+      {/* Stories Viewer Modal */}
+      <StoriesViewerModal 
+        isOpen={!!viewingStoriesFor}
+        onClose={() => setViewingStoriesFor(null)}
+        restaurant={viewingStoriesFor}
       />
     </div>
   );

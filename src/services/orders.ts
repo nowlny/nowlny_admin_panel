@@ -58,6 +58,7 @@ export interface OrderResponse {
   id: string;
   customerId: string;
   customerName?: string;
+  customer?: any;
   deliveryAddress?: {
     city?: string;
     street?: string;
@@ -70,6 +71,7 @@ export interface OrderResponse {
   };
   restaurantId: string;
   restaurantName?: string;
+  restaurant?: any;
   addressId?: string;
   driverId?: string;
   driverName?: string;

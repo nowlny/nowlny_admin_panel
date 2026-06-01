@@ -155,7 +155,10 @@ const PAGE_SIZE = 20;
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function OrdersSection({ searchQuery, restaurantId }: OrdersSectionProps) {
+export default function OrdersSection({
+  searchQuery,
+  restaurantId,
+}: OrdersSectionProps) {
   // View mode
   const [activeSubTab, setActiveSubTab] = useState<"live" | "archive">("live");
   const [selectedMobileLane, setSelectedMobileLane] = useState(0);
@@ -238,8 +241,8 @@ export default function OrdersSection({ searchQuery, restaurantId }: OrdersSecti
     const q = searchQuery.toLowerCase();
     return (
       o.id?.toLowerCase().includes(q) ||
-      o.customerName?.toLowerCase().includes(q) ||
-      o.restaurantName?.toLowerCase().includes(q)
+      (o.customer?.name || o.customerName)?.toLowerCase().includes(q) ||
+      (o.restaurant?.name || o.restaurantName)?.toLowerCase().includes(q)
     );
   });
 
@@ -637,37 +640,54 @@ export default function OrdersSection({ searchQuery, restaurantId }: OrdersSecti
                           </div>
                           {/* Order number */}
                           <p className="text-xs text-zinc-500 truncate">
-                            #{String((order as any).orderNumber || order.id.slice(0, 8))}
+                            #
+                            {String(
+                              (order as any).orderNumber ||
+                                order.id.slice(0, 8),
+                            )}
                           </p>
-                          {/* Restaurant & Customer info */}
-                          <div className="space-y-1">
-                            {order.restaurantName && (
-                              <p className="text-[10px] font-bold text-zinc-900 dark:text-zinc-200 flex items-center gap-1.5">
-                                <Store className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                                <span className="truncate">
-                                  {order.restaurantName}
-                                </span>
-                              </p>
+                          <div className="flex items-center gap-2.5 bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl border border-zinc-100 dark:border-zinc-800">
+                            {order.restaurant?.logo ? (
+                              <img src={order.restaurant.logo} alt="logo" className="w-8 h-8 rounded-lg object-contain shadow-sm border border-zinc-200 dark:border-zinc-700 shrink-0 bg-white p-0.5" />
+                            ) : (
+                              <div className="w-8 h-8 rounded-lg bg-zinc-200 dark:bg-zinc-700 flex items-center justify-center shrink-0">
+                                <Store className="w-4 h-4 text-zinc-500" />
+                              </div>
                             )}
-                            {(order.customerName || order.customerId) && (
-                              <p className="text-[10px] text-zinc-400 flex items-center gap-1.5">
-                                <User className="w-3.5 h-3.5 shrink-0" />
-                                <span className="truncate">
-                                  {order.customerName || order.customerId?.slice(0, 8)}
-                                </span>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 truncate">
+                                {order.restaurant?.name || order.restaurantName || "Unknown Restaurant"}
                               </p>
-                            )}
+                              {(order.customer?.name || order.customer?.firstName || order.customerName || order.customerId) && (
+                                <p className="text-[9px] text-zinc-500 truncate flex items-center gap-1 mt-0.5 font-medium">
+                                  <User className="w-3 h-3" /> {order.customer?.name || order.customer?.firstName || order.customerName || order.customerId?.slice(0, 8)}
+                                </p>
+                              )}
+                            </div>
                           </div>
                           {order.items && order.items.length > 0 && (
-                            <p className="text-[9px] text-zinc-500">
-                              {order.items.length} item
-                              {order.items.length > 1 ? "s" : ""}:{" "}
-                              {order.items
-                                .slice(0, 2)
-                                .map((i) => i.name)
-                                .join(", ")}
-                              {order.items.length > 2 ? ", …" : ""}
-                            </p>
+                            <div className="space-y-1.5 mt-2 bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-lg border border-zinc-100 dark:border-zinc-800">
+                              {order.items.slice(0, 3).map((item: any, idx: number) => (
+                                <div key={idx} className="text-[10px] leading-tight">
+                                  <div className="flex justify-between items-start gap-2">
+                                    <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                                      <span className="text-orange-500 font-bold mr-1">{item.quantity}x</span>
+                                      {item.name ?? item.menuItemId}
+                                    </span>
+                                  </div>
+                                  {item.notes && (
+                                    <div className="text-[8px] text-zinc-400 mt-0.5 whitespace-pre-wrap pl-2.5 border-l-2 border-zinc-200 dark:border-zinc-700 line-clamp-3">
+                                      {item.notes}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                              {order.items.length > 3 && (
+                                <div className="text-[9px] font-bold text-zinc-400 text-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                                  + {order.items.length - 3} more items
+                                </div>
+                              )}
+                            </div>
                           )}
                           <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800 flex justify-between items-center text-[9px] text-zinc-400">
                             <span className="inline-flex items-center gap-1">
@@ -718,10 +738,10 @@ export default function OrdersSection({ searchQuery, restaurantId }: OrdersSecti
                       {order.id}
                     </td>
                     <td className="p-4 font-bold text-zinc-700 dark:text-zinc-300">
-                      {order.restaurantName ?? "—"}
+                      {order.restaurant?.name || order.restaurantName || "—"}
                     </td>
                     <td className="p-4 text-zinc-500 dark:text-zinc-400">
-                      {order.customerName ?? "—"}
+                      {order.customer?.name || order.customer?.firstName || order.customerName || "—"}
                     </td>
                     <td className="p-4 font-black text-zinc-950 dark:text-white">
                       {fmtCurrency(order.total)}
@@ -810,27 +830,43 @@ export default function OrdersSection({ searchQuery, restaurantId }: OrdersSecti
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[88vh] animate-in zoom-in-95 duration-150">
             {/* Drawer header */}
-            <div className="p-5 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-900/40 shrink-0">
-              <div className="flex items-center gap-3">
-                <span className="p-2.5 bg-orange-500/10 text-orange-500 rounded-xl">
-                  <ShoppingBag className="w-5 h-5" />
-                </span>
+            <div className="relative p-5 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center shrink-0 min-h-[100px] overflow-hidden bg-white dark:bg-zinc-950">
+              {selectedOrder.restaurant?.backgroundImageUrl && (
+                <div 
+                  className="absolute inset-0 z-0 bg-cover bg-center opacity-15 dark:opacity-20" 
+                  style={{ backgroundImage: `url(${selectedOrder.restaurant.backgroundImageUrl})` }} 
+                />
+              )}
+              
+              <div className="relative z-10 flex items-center gap-4">
+                {selectedOrder.restaurant?.logo ? (
+                  <img 
+                    src={selectedOrder.restaurant.logo} 
+                    alt="logo" 
+                    className="w-12 h-12 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm object-contain bg-white p-1" 
+                  />
+                ) : (
+                  <span className="p-3 bg-orange-500/10 text-orange-500 rounded-xl border border-orange-500/20">
+                    <ShoppingBag className="w-6 h-6" />
+                  </span>
+                )}
                 <div>
-                  <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-                    Order Detail
-                    <span className="text-[10px] bg-orange-500 text-white px-2 py-0.5 rounded font-black">
-                      {selectedOrder.id}
+                  <h3 className="text-base font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+                    {selectedOrder.restaurant?.name || selectedOrder.restaurantName || "Order Detail"}
+                    <span className="text-[10px] bg-orange-500 text-white px-2 py-0.5 rounded font-black shadow-sm">
+                      {selectedOrder.id.slice(0, 8)}
                     </span>
                   </h3>
-                  <p className="text-[10px] text-zinc-400">
-                    Placed {fmtDate(selectedOrder.createdAt)} at{" "}
-                    {fmtTime(selectedOrder.createdAt)}
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 font-medium flex items-center gap-1.5">
+                    <Clock className="w-3 h-3" />
+                    Placed {fmtDate(selectedOrder.createdAt)} at {fmtTime(selectedOrder.createdAt)}
                   </p>
                 </div>
               </div>
+
               <button
                 onClick={() => setSelectedOrder(null)}
-                className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"
+                className="relative z-10 text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -868,26 +904,37 @@ export default function OrdersSection({ searchQuery, restaurantId }: OrdersSecti
                     Basket Breakdown
                   </h4>
                   <div className="border border-zinc-100 dark:border-zinc-800 rounded-xl divide-y divide-zinc-100 dark:divide-zinc-800 overflow-hidden">
-                    {selectedOrder.items.map((item, idx) => (
+                    {selectedOrder.items.map((item: any, idx: number) => (
                       <div
                         key={idx}
-                        className="p-3.5 flex justify-between items-center text-xs bg-white dark:bg-zinc-900"
+                        className="p-3.5 flex justify-between items-start text-xs bg-white dark:bg-zinc-900 gap-4"
                       >
-                        <div>
-                          <p className="font-bold text-zinc-800 dark:text-zinc-200">
+                        <div className="flex-1">
+                          <p className="font-bold text-zinc-800 dark:text-zinc-200 text-sm">
+                            <span className="text-orange-500 font-black mr-2">
+                              {item.quantity}x
+                            </span>
                             {item.name ?? item.menuItemId}
                           </p>
-                          <p className="text-[10px] text-zinc-400 mt-0.5">
-                            Qty: {item.quantity}
-                            {item.price != null &&
-                              ` · Unit: ${fmtCurrency(item.price)}`}
-                            {item.notes && ` · Note: ${item.notes}`}
+                          <p className="text-[10px] text-zinc-400 mt-1">
+                            {(item.unitPrice != null || item.price != null) &&
+                              `Unit: ${fmtCurrency(Number(item.unitPrice ?? item.price))}`}
                           </p>
+                          {item.notes && (
+                            <div className="mt-2 p-2 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg text-[10px] text-zinc-500 dark:text-zinc-400 whitespace-pre-wrap leading-relaxed">
+                              {item.notes}
+                            </div>
+                          )}
                         </div>
-                        <span className="font-extrabold text-zinc-900 dark:text-white">
-                          {item.price != null
-                            ? fmtCurrency(item.price * item.quantity)
-                            : "—"}
+                        <span className="font-extrabold text-zinc-900 dark:text-white shrink-0 mt-0.5">
+                          {item.subtotal != null
+                            ? fmtCurrency(Number(item.subtotal))
+                            : item.unitPrice != null || item.price != null
+                              ? fmtCurrency(
+                                  Number(item.unitPrice ?? item.price) *
+                                    (item.quantity || 1),
+                                )
+                              : "—"}
                         </span>
                       </div>
                     ))}
@@ -963,23 +1010,23 @@ export default function OrdersSection({ searchQuery, restaurantId }: OrdersSecti
                     Participants
                   </h4>
                   <div className="space-y-2.5">
-                    {selectedOrder.customerName && (
+                    {(selectedOrder.customer?.name || selectedOrder.customer?.firstName || selectedOrder.customerName) && (
                       <div className="flex gap-2.5 p-3 rounded-xl border border-zinc-100 dark:border-zinc-800/80">
                         <User className="w-5 h-5 text-orange-500 shrink-0" />
                         <div>
                           <p className="font-bold text-xs text-zinc-800 dark:text-zinc-200">
-                            {selectedOrder.customerName}
+                            {selectedOrder.customer?.name || selectedOrder.customer?.firstName || selectedOrder.customerName}
                           </p>
                           <p className="text-[10px] text-zinc-400">Customer</p>
                         </div>
                       </div>
                     )}
-                    {selectedOrder.restaurantName && (
+                    {(selectedOrder.restaurant?.name || selectedOrder.restaurantName) && (
                       <div className="flex gap-2.5 p-3 rounded-xl border border-zinc-100 dark:border-zinc-800/80">
                         <Store className="w-5 h-5 text-orange-500 shrink-0" />
                         <div>
                           <p className="font-bold text-xs text-zinc-800 dark:text-zinc-200">
-                            {selectedOrder.restaurantName}
+                            {selectedOrder.restaurant?.name || selectedOrder.restaurantName}
                           </p>
                           <p className="text-[10px] text-zinc-400">
                             Restaurant partner
@@ -1022,34 +1069,42 @@ export default function OrdersSection({ searchQuery, restaurantId }: OrdersSecti
                         )}
                         <p className="leading-relaxed">
                           {[
-                            selectedOrder.deliveryAddress.street && `Street: ${selectedOrder.deliveryAddress.street}`,
-                            selectedOrder.deliveryAddress.building && `Bldg: ${selectedOrder.deliveryAddress.building}`,
-                            selectedOrder.deliveryAddress.floor && `Floor: ${selectedOrder.deliveryAddress.floor}`
-                          ].filter(Boolean).join(", ")}
+                            selectedOrder.deliveryAddress.street &&
+                              `Street: ${selectedOrder.deliveryAddress.street}`,
+                            selectedOrder.deliveryAddress.building &&
+                              `Bldg: ${selectedOrder.deliveryAddress.building}`,
+                            selectedOrder.deliveryAddress.floor &&
+                              `Floor: ${selectedOrder.deliveryAddress.floor}`,
+                          ]
+                            .filter(Boolean)
+                            .join(", ")}
                         </p>
                         {selectedOrder.deliveryAddress.city && (
                           <p>{selectedOrder.deliveryAddress.city}</p>
                         )}
                         {selectedOrder.deliveryAddress.deliveryInstructions && (
                           <p className="mt-2 p-2 bg-orange-500/10 text-orange-600 dark:text-orange-400 rounded border border-orange-500/20 italic">
-                            Note: "{selectedOrder.deliveryAddress.deliveryInstructions}"
+                            Note: "
+                            {selectedOrder.deliveryAddress.deliveryInstructions}
+                            "
                           </p>
                         )}
                       </div>
                     </div>
-                    {selectedOrder.deliveryAddress.latitude && selectedOrder.deliveryAddress.longitude && (
-                      <div className="mt-2 w-full h-48 rounded-lg overflow-hidden border border-zinc-200 dark:border-zinc-700 relative shadow-inner">
-                        <iframe
-                          width="100%"
-                          height="100%"
-                          style={{ border: 0 }}
-                          loading="lazy"
-                          allowFullScreen
-                          referrerPolicy="no-referrer-when-downgrade"
-                          src={`https://maps.google.com/maps?q=${selectedOrder.deliveryAddress.latitude},${selectedOrder.deliveryAddress.longitude}&t=&z=15&ie=UTF8&iwloc=&output=embed`}
-                        />
-                      </div>
-                    )}
+                    {selectedOrder.deliveryAddress.latitude &&
+                      selectedOrder.deliveryAddress.longitude && (
+                        <div className="mt-2 w-full h-48 rounded-lg overflow-hidden border border-zinc-200 dark:border-zinc-700 relative shadow-inner">
+                          <iframe
+                            width="100%"
+                            height="100%"
+                            style={{ border: 0 }}
+                            loading="lazy"
+                            allowFullScreen
+                            referrerPolicy="no-referrer-when-downgrade"
+                            src={`https://maps.google.com/maps?q=${selectedOrder.deliveryAddress.latitude},${selectedOrder.deliveryAddress.longitude}&t=&z=15&ie=UTF8&iwloc=&output=embed`}
+                          />
+                        </div>
+                      )}
                   </div>
                 </div>
               )}
