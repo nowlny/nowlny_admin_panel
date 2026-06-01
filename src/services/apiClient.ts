@@ -2,6 +2,34 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_
 
 let isRefreshing = false;
 
+const formatApiError = (status: number, errorText: string): string => {
+  try {
+    const data = JSON.parse(errorText);
+    
+    // Extract human-readable messages from common JSON error structures
+    if (typeof data.message === 'string') return data.message;
+    if (typeof data.detail === 'string') return data.detail;
+    if (typeof data.error === 'string') return data.error;
+    if (data.error && typeof data.error.message === 'string') return data.error.message;
+    if (Array.isArray(data.errors) && data.errors.length > 0) {
+      return data.errors.map((e: any) => e.message || e.msg || e).join(', ');
+    }
+    
+    // If it's JSON but doesn't have a known key
+    return "An unexpected error occurred.";
+  } catch {
+    // If not JSON
+    if (errorText && errorText.trim().length > 0) {
+      // Don't show raw HTML to the user
+      if (errorText.trim().startsWith('<')) {
+        return `Server Error (${status})`;
+      }
+      return errorText.length > 100 ? errorText.substring(0, 100) + '...' : errorText;
+    }
+    return `Server Error (${status})`;
+  }
+};
+
 export const apiClient = async <T>(endpoint: string, options?: RequestInit): Promise<T> => {
   const url = `${API_BASE_URL}${endpoint}`;
   
@@ -47,9 +75,9 @@ export const apiClient = async <T>(endpoint: string, options?: RequestInit): Pro
           const retryResponse = await fetch(url, { ...options, headers: retryHeaders });
           
           if (!retryResponse.ok) {
-            let errorBody;
-            try { errorBody = await retryResponse.text(); } catch { errorBody = 'Unknown error'; }
-            throw new Error(`API Error ${retryResponse.status}: ${errorBody}`);
+            let errorText = '';
+            try { errorText = await retryResponse.text(); } catch {}
+            throw new Error(formatApiError(retryResponse.status, errorText));
           }
           if (retryResponse.status === 204) return {} as T;
           return retryResponse.json();
@@ -76,13 +104,11 @@ export const apiClient = async <T>(endpoint: string, options?: RequestInit): Pro
   }
 
   if (!response.ok) {
-    let errorBody;
+    let errorText = '';
     try {
-      errorBody = await response.text();
-    } catch {
-      errorBody = 'Unknown error';
-    }
-    throw new Error(`API Error ${response.status}: ${errorBody}`);
+      errorText = await response.text();
+    } catch {}
+    throw new Error(formatApiError(response.status, errorText));
   }
 
   // Handle 204 No Content

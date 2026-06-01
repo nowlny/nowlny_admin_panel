@@ -15,6 +15,7 @@ import {
   ShieldAlert,
   Loader2,
 } from "lucide-react";
+import toast from "react-hot-toast";
 import {
   usersService,
   SystemUser,
@@ -25,7 +26,6 @@ import {
 export default function SystemUsersSection() {
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -52,10 +52,9 @@ export default function SystemUsersSection() {
           ? (data as any).data
           : [];
       setUsers(finalUsers);
-      setError(null);
     } catch (err: any) {
       console.error("Failed to fetch users:", err);
-      setError("Could not connect to API to fetch system users.");
+      toast.error("Could not connect to API to fetch system users.");
       setUsers([]);
     } finally {
       setIsLoading(false);
@@ -77,9 +76,10 @@ export default function SystemUsersSection() {
       });
       setIsCreateModalOpen(false);
       resetForm();
+      toast.success("User created successfully!");
       fetchUsers();
     } catch (err: any) {
-      alert(`Failed to create user: ${err.message}`);
+      toast.error(`Failed to create user: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -99,9 +99,10 @@ export default function SystemUsersSection() {
       });
       setEditingUser(null);
       resetForm();
+      toast.success("User updated successfully!");
       fetchUsers();
     } catch (err: any) {
-      alert(`Failed to update user: ${err.message}`);
+      toast.error(`Failed to update user: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -116,9 +117,10 @@ export default function SystemUsersSection() {
       return;
     try {
       await usersService.deleteSystemUser(id);
+      toast.success("User deleted successfully!");
       fetchUsers();
     } catch (err: any) {
-      alert(`Failed to delete user: ${err.message}`);
+      toast.error(`Failed to delete user: ${err.message}`);
     }
   };
 
@@ -176,13 +178,6 @@ export default function SystemUsersSection() {
           <Plus className="w-4 h-4" /> Add User
         </button>
       </div>
-
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold p-4 rounded-xl flex items-center gap-2">
-          <AlertCircle className="w-4 h-4" />
-          {error}
-        </div>
-      )}
 
       {/* Users List */}
       {users.length === 0 ? (

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { X, Loader2, Store, Plus, Trash2, Edit2, Check, AlertCircle } from "lucide-react";
+import toast from "react-hot-toast";
 import { menuService, MenuItem as ApiMenuItem, MenuSection, MenuOptionGroup, MenuOption } from "../../services/menu";
 
 interface MenuItemEditorModalProps {
@@ -34,7 +35,6 @@ export default function MenuItemEditorModal({
 
   // Submitting State
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState("");
 
   // Option Groups State (Only available if editing an existing item)
   const [optionGroups, setOptionGroups] = useState<MenuOptionGroup[]>([]);
@@ -79,7 +79,6 @@ export default function MenuItemEditorModal({
       setOptionGroups([]);
       setOptionsByGroup({});
     }
-    setError("");
     resetGroupEditor();
     resetOptionEditor();
   }, [item, isOpen, sections]);
@@ -129,12 +128,11 @@ export default function MenuItemEditorModal({
   const handleSaveBasic = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !price || !sectionId) {
-      setError("Name, price, and section are required");
+      toast.error("Name, price, and section are required");
       return;
     }
 
     setIsSubmitting(true);
-    setError("");
 
     try {
       if (item) {
@@ -160,12 +158,12 @@ export default function MenuItemEditorModal({
           isAvailable,
           isActive,
           isPopular,
-          sortOrder: 0,
         });
       }
+      toast.success("Menu item saved successfully!");
       onSuccess();
     } catch (err: any) {
-      setError(err.message || "Failed to save menu item");
+      toast.error(err.message || "Failed to save menu item");
     } finally {
       setIsSubmitting(false);
     }
@@ -195,9 +193,10 @@ export default function MenuItemEditorModal({
         });
       }
       await loadOptionGroups(item.id);
+      toast.success("Option group saved successfully!");
       resetGroupEditor();
     } catch (err: any) {
-      setError(err.message || "Failed to save option group");
+      toast.error(err.message || "Failed to save option group");
     } finally {
       setIsSubmitting(false);
     }
@@ -222,20 +221,22 @@ export default function MenuItemEditorModal({
         sortOrder: 0,
       });
       await loadOptionGroups(item!.id);
+      toast.success("Option choice added!");
       resetOptionEditor();
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Failed to create option choice");
+      toast.error(err.message || "Failed to create option choice");
     }
   };
 
   const handleDeleteOption = async (optionId: string) => {
     try {
       await menuService.deleteOption(optionId);
+      toast.success("Option choice deleted!");
       await loadOptionGroups(item!.id);
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Failed to delete option choice");
+      toast.error(err.message || "Failed to delete option choice");
     }
   };
 
@@ -285,12 +286,6 @@ export default function MenuItemEditorModal({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
-          {error && (
-            <div className="p-3 mb-4 bg-red-500/10 text-red-500 border border-red-500/20 rounded-xl text-xs font-bold flex items-center gap-2">
-              <AlertCircle className="w-4 h-4" />
-              {error}
-            </div>
-          )}
 
           {activeTab === "basic" && (
             <form id="basic-form" onSubmit={handleSaveBasic} className="space-y-4 text-xs font-semibold text-zinc-700 dark:text-zinc-300">

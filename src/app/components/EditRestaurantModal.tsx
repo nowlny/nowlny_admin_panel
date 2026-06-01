@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Loader2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { restaurantsService, RestaurantUpdate, RestaurantResponse } from '../../services/restaurants';
 
 interface EditRestaurantModalProps {
@@ -11,7 +12,6 @@ interface EditRestaurantModalProps {
 
 export default function EditRestaurantModal({ isOpen, onClose, onSuccess, restaurant }: EditRestaurantModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -58,7 +58,6 @@ export default function EditRestaurantModal({ isOpen, onClose, onSuccess, restau
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    setError(null);
 
     const payload: RestaurantUpdate = {
       name: formData.name,
@@ -78,11 +77,12 @@ export default function EditRestaurantModal({ isOpen, onClose, onSuccess, restau
 
     try {
       await restaurantsService.updateRestaurant(restaurant.id, payload);
+      toast.success("Restaurant updated successfully!");
       onSuccess();
       onClose();
     } catch (err: any) {
       console.error("Failed to update restaurant", err);
-      setError(err.message || "An error occurred while updating the restaurant.");
+      toast.error(err.message || "An error occurred while updating the restaurant.");
     } finally {
       setIsSubmitting(false);
     }
@@ -103,11 +103,6 @@ export default function EditRestaurantModal({ isOpen, onClose, onSuccess, restau
         </div>
 
         <div className="p-6 overflow-y-auto flex-1">
-          {error && (
-            <div className="mb-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
 
           <form id="edit-restaurant-form" onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

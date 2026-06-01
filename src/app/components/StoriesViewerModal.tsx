@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { X, ChevronLeft, ChevronRight } from "lucide-react";
+import { X, ChevronLeft, ChevronRight, Volume2, VolumeX } from "lucide-react";
 import { RestaurantResponse, Story } from "../../services/restaurants";
 
 interface StoriesViewerModalProps {
@@ -18,6 +18,7 @@ export default function StoriesViewerModal({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const progressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastUpdateRef = useRef<number>(Date.now());
@@ -141,6 +142,16 @@ export default function StoriesViewerModal({
         <X className="w-8 h-8" />
       </button>
 
+      {/* Mute/Unmute Button (for videos) */}
+      {isVideo && (
+        <button 
+          onClick={() => setIsMuted(!isMuted)}
+          className="absolute top-6 left-6 text-white/70 hover:text-white p-2 z-50 transition-colors bg-black/40 rounded-full backdrop-blur-md"
+        >
+          {isMuted ? <VolumeX className="w-6 h-6" /> : <Volume2 className="w-6 h-6" />}
+        </button>
+      )}
+
       {/* Main Container - Mobile sized on desktop */}
       <div className="relative w-full h-full md:w-[450px] md:h-[800px] md:max-h-[95vh] md:rounded-3xl bg-zinc-900 overflow-hidden flex flex-col shadow-2xl">
         
@@ -194,6 +205,7 @@ export default function StoriesViewerModal({
               className="w-full h-full object-contain"
               playsInline
               autoPlay
+              muted={isMuted}
               onTimeUpdate={handleVideoTimeUpdate}
               onEnded={handleVideoEnded}
             />

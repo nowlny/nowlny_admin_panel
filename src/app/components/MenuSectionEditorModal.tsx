@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { X, Loader2, FolderPlus, Edit } from "lucide-react";
+import toast from "react-hot-toast";
 import { menuService, MenuSection } from "../../services/menu";
 
 interface MenuSectionEditorModalProps {
@@ -23,7 +24,6 @@ export default function MenuSectionEditorModal({
   const [description, setDescription] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState("");
 
   useEffect(() => {
     if (section) {
@@ -35,7 +35,6 @@ export default function MenuSectionEditorModal({
       setDescription("");
       setIsActive(true);
     }
-    setError("");
   }, [section, isOpen]);
 
   if (!isOpen) return null;
@@ -43,12 +42,11 @@ export default function MenuSectionEditorModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
-      setError("Category name is required");
+      toast.error("Category name is required");
       return;
     }
 
     setIsSubmitting(true);
-    setError("");
 
     try {
       if (section) {
@@ -66,9 +64,10 @@ export default function MenuSectionEditorModal({
           isActive,
         });
       }
+      toast.success("Category saved successfully!");
       onSuccess();
     } catch (err: any) {
-      setError(err.message || "Failed to save category");
+      toast.error(err.message || "Failed to save category");
     } finally {
       setIsSubmitting(false);
     }
@@ -95,11 +94,6 @@ export default function MenuSectionEditorModal({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-          {error && (
-            <div className="p-3 bg-red-500/10 text-red-500 border border-red-500/20 rounded-xl text-xs font-bold">
-              {error}
-            </div>
-          )}
 
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">

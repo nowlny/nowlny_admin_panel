@@ -25,6 +25,7 @@ import {
   Globe,
   FileImage
 } from "lucide-react";
+import toast from "react-hot-toast";
 import { restaurantsService, RestaurantSubmission, RestaurantCreate, OpeningHourEntry } from "../../services/restaurants";
 
 interface RestaurantApplicationSectionProps {
@@ -39,7 +40,6 @@ export default function RestaurantApplicationSection({
   const [submission, setSubmission] = useState<RestaurantSubmission | null>(initialSubmission);
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // Form states
   const [isApplying, setIsApplying] = useState(false);
@@ -81,7 +81,6 @@ export default function RestaurantApplicationSection({
   const loadStatus = async () => {
     try {
       setIsLoading(true);
-      setError(null);
       const data = await restaurantsService.getMySubmission();
       setSubmission(data);
     } catch (err: any) {
@@ -90,7 +89,7 @@ export default function RestaurantApplicationSection({
       if (err.message && err.message.includes("404")) {
         setSubmission(null);
       } else {
-        setError("Could not retrieve application status. Please try again.");
+        toast.error("Could not retrieve application status. Please try again.");
       }
     } finally {
       setIsLoading(false);
@@ -130,9 +129,10 @@ export default function RestaurantApplicationSection({
       setIsLoading(true);
       await restaurantsService.cancelMySubmission();
       await loadStatus();
+      toast.success("Application cancelled successfully.");
       onRefreshSubmissionStatus();
     } catch (err: any) {
-      alert(`Failed to cancel application: ${err.message}`);
+      toast.error(`Failed to cancel application: ${err.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -164,19 +164,19 @@ export default function RestaurantApplicationSection({
     // Basic validation per step
     if (currentStep === 1) {
       if (!formData.name.trim() || !formData.cuisineType.trim() || !formData.email.trim() || !formData.phone.trim()) {
-        alert("Please fill out all required fields marked with *");
+        toast.error("Please fill out all required fields marked with *");
         return;
       }
     }
     if (currentStep === 2) {
       if (!formData.logo?.trim() || !formData.coverImage?.trim()) {
-        alert("Please provide valid URLs for both the Logo and Cover Banner");
+        toast.error("Please provide valid URLs for both the Logo and Cover Banner");
         return;
       }
     }
     if (currentStep === 3) {
       if (!formData.address.trim()) {
-        alert("Please provide the physical address");
+        toast.error("Please provide the physical address");
         return;
       }
     }
@@ -191,15 +191,15 @@ export default function RestaurantApplicationSection({
     e.preventDefault();
     try {
       setIsSubmitting(true);
-      setError(null);
       
       await restaurantsService.applyRestaurant(formData);
       setIsApplying(false);
       await loadStatus();
+      toast.success("Application submitted successfully!");
       onRefreshSubmissionStatus();
     } catch (err: any) {
       console.error("Submission failed:", err);
-      setError(`Application submission failed: ${err.message || 'Unknown error'}`);
+      toast.error(`Application submission failed: ${err.message || 'Unknown error'}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -257,12 +257,6 @@ export default function RestaurantApplicationSection({
         </div>
 
         <form onSubmit={handleFormSubmit} className="p-8 space-y-6">
-          {error && (
-            <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold p-4 rounded-xl flex items-center gap-2">
-              <AlertCircle className="w-4 h-4" />
-              {error}
-            </div>
-          )}
 
           {/* STEP 1: GENERAL INFO */}
           {currentStep === 1 && (

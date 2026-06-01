@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Loader2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { customersService, CustomerUpdateData } from '../../services/customers';
 
 interface EditCustomerModalProps {
@@ -12,7 +13,6 @@ interface EditCustomerModalProps {
 
 export default function EditCustomerModal({ isOpen, onClose, onSuccess, customerId, customerData }: EditCustomerModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     fullName: '',
@@ -29,7 +29,6 @@ export default function EditCustomerModal({ isOpen, onClose, onSuccess, customer
         phoneNumber: customerData.phone === "No phone" ? "" : customerData.phone || '',
         status: customerData.status?.toLowerCase() === 'suspended' ? 'suspended' : 'active'
       });
-      setError(null);
     }
   }, [isOpen, customerData]);
 
@@ -42,7 +41,6 @@ export default function EditCustomerModal({ isOpen, onClose, onSuccess, customer
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    setError(null);
 
     const payload: CustomerUpdateData = {
       fullName: formData.fullName,
@@ -53,11 +51,12 @@ export default function EditCustomerModal({ isOpen, onClose, onSuccess, customer
 
     try {
       await customersService.updateCustomer(customerId, payload);
+      toast.success("Customer updated successfully!");
       onSuccess();
       onClose();
     } catch (err: any) {
       console.error("Failed to update customer", err);
-      setError(err.message || "An error occurred while updating the customer.");
+      toast.error(err.message || "An error occurred while updating the customer.");
     } finally {
       setIsSubmitting(false);
     }
@@ -78,11 +77,6 @@ export default function EditCustomerModal({ isOpen, onClose, onSuccess, customer
         </div>
 
         <div className="p-6 overflow-y-auto flex-1">
-          {error && (
-            <div className="mb-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
 
           <form id="edit-customer-form" onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">

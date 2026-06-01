@@ -20,6 +20,7 @@ import {
   Loader2,
   Plus,
 } from "lucide-react";
+import toast from "react-hot-toast";
 import {
   ordersService,
   OrderResponse,
@@ -168,7 +169,6 @@ export default function OrdersSection({
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   // Filters
@@ -190,7 +190,6 @@ export default function OrdersSection({
   const fetchOrders = useCallback(
     async (silent = false) => {
       if (!silent) setLoading(true);
-      setError(null);
       try {
         const res = await ordersService.getOrders({
           status: statusFilter || undefined,
@@ -205,7 +204,7 @@ export default function OrdersSection({
         if (!silent) {
           const msg =
             err instanceof Error ? err.message : "Failed to fetch orders.";
-          setError(msg);
+          toast.error(msg);
         }
       } finally {
         if (!silent) setLoading(false);
@@ -285,10 +284,11 @@ export default function OrdersSection({
       });
       setOrders((prev) => prev.map((o) => (o.id === order.id ? updated : o)));
       if (selectedOrder?.id === order.id) setSelectedOrder(updated);
+      toast.success("Order status updated!");
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Update failed. Please retry.";
-      alert(msg);
+      toast.error(msg);
     } finally {
       setUpdatingId(null);
     }
@@ -507,25 +507,6 @@ export default function OrdersSection({
         )}
       </div>
 
-      {/* ── Error state ── */}
-      {error && !loading && (
-        <div className="bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800 p-4 rounded-2xl flex items-start gap-3">
-          <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-          <div>
-            <p className="text-xs font-bold text-red-600 dark:text-red-400">
-              API Error
-            </p>
-            <p className="text-[10px] text-red-500/80 mt-0.5">{error}</p>
-          </div>
-          <button
-            onClick={() => fetchOrders()}
-            className="ml-auto text-[10px] font-bold text-red-500 hover:text-red-700 underline"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
       {/* ── Loading skeleton ── */}
       {loading && orders.length === 0 && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -539,7 +520,7 @@ export default function OrdersSection({
       )}
 
       {/* ── Empty state ── */}
-      {!loading && displayOrders.length === 0 && !error && (
+      {!loading && displayOrders.length === 0 && (
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-12 text-center rounded-2xl flex flex-col items-center justify-center">
           <ShoppingBag className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mb-3" />
           <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">

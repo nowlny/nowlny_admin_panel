@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { authService } from "../../services/auth";
-import { Loader2, Phone, KeyRound, AlertCircle, ArrowRight } from "lucide-react";
+import { Loader2, Phone, KeyRound, ArrowRight } from "lucide-react";
+import toast from "react-hot-toast";
 
 interface LoginScreenProps {
   onLoginSuccess: (token: string) => void;
@@ -12,24 +13,65 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [step, setStep] = useState<"phone" | "otp">("phone");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [otp, setOtp] = useState("");
+  const [otpArr, setOtpArr] = useState(["", "", "", ""]);
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  const handleOtpChange = (index: number, value: string) => {
+    if (!/^\d*$/.test(value)) return;
+    const newOtp = [...otpArr];
+    newOtp[index] = value.substring(value.length - 1);
+    setOtpArr(newOtp);
+    setOtp(newOtp.join(""));
+
+    if (value && index < 3) {
+      inputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && !otpArr[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    const pastedData = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 4);
+    if (pastedData) {
+      const newOtp = [...otpArr];
+      for (let i = 0; i < pastedData.length; i++) {
+        newOtp[i] = pastedData[i];
+      }
+      setOtpArr(newOtp);
+      setOtp(newOtp.join(""));
+      const nextIndex = Math.min(pastedData.length, 3);
+      inputRefs.current[nextIndex === 4 ? 3 : nextIndex]?.focus();
+    }
+  };
+
+  const getFullPhone = () => {
+    const cleanPhone = phoneNumber.replace(/\s+/g, "");
+    if (cleanPhone.startsWith("+961")) return cleanPhone;
+    if (cleanPhone.startsWith("961")) return "+" + cleanPhone;
+    if (cleanPhone.startsWith("00961")) return "+" + cleanPhone.substring(2);
+    return "+961" + cleanPhone;
+  };
 
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phoneNumber) {
-      setError("Please enter your phone number");
+      toast.error("Please enter your phone number");
       return;
     }
 
     try {
       setIsLoading(true);
-      setError(null);
-      await authService.sendOtp({ phoneNumber });
+      await authService.sendOtp({ phoneNumber: getFullPhone() });
       setStep("otp");
     } catch (err: any) {
-      setError(err.message || "Failed to send OTP. Please try again.");
+      toast.error(err.message || "Failed to send OTP. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -38,14 +80,13 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!otp) {
-      setError("Please enter the OTP");
+      toast.error("Please enter the OTP");
       return;
     }
 
     try {
       setIsLoading(true);
-      setError(null);
-      const res = await authService.verifyOtp({ phoneNumber, code: otp });
+      const res = await authService.verifyOtp({ phoneNumber: getFullPhone(), code: otp });
       
       const token = res.access_token || res.accessToken;
       const rToken = res.refresh_token || res.refreshToken;
@@ -63,7 +104,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       // Trigger parent callback to show main app
       onLoginSuccess(token);
     } catch (err: any) {
-      setError(err.message || "Invalid OTP. Please try again.");
+      toast.error(err.message || "Invalid OTP. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -87,29 +128,24 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         </div>
 
         <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 rounded-3xl p-8 shadow-2xl">
-          {error && (
-            <div className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
-              <p className="text-xs font-semibold text-red-400">{error}</p>
-            </div>
-          )}
-
           {step === "phone" ? (
             <form onSubmit={handleRequestOtp} className="space-y-6">
               <div>
                 <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">
                   Phone Number
                 </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                <div className="relative flex items-center">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none gap-2">
                     <Phone className="h-5 w-5 text-zinc-500" />
+                    <span className="text-zinc-400 font-medium">+961</span>
+                    <div className="h-5 w-px bg-zinc-800 ml-1"></div>
                   </div>
                   <input
                     type="tel"
                     value={phoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value)}
-                    placeholder="+961 71 000 000"
-                    className="w-full bg-black border border-zinc-800 text-white rounded-xl pl-12 pr-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all"
+                    placeholder="71 000 000"
+                    className="w-full bg-black border border-zinc-800 text-white rounded-xl pl-[105px] pr-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all"
                     required
                   />
                 </div>
@@ -132,24 +168,27 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           ) : (
             <form onSubmit={handleVerifyOtp} className="space-y-6">
               <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-4 text-center">
                   Verification Code
                 </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <KeyRound className="h-5 w-5 text-zinc-500" />
-                  </div>
-                  <input
-                    type="text"
-                    value={otp}
-                    onChange={(e) => setOtp(e.target.value)}
-                    placeholder="Enter 6-digit OTP"
-                    className="w-full bg-black border border-zinc-800 text-white tracking-widest text-lg rounded-xl pl-12 pr-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all"
-                    required
-                  />
+                <div className="flex justify-center gap-3">
+                  {otpArr.map((digit, index) => (
+                    <input
+                      key={index}
+                      ref={(el) => { inputRefs.current[index] = el; }}
+                      type="text"
+                      inputMode="numeric"
+                      value={digit}
+                      onChange={(e) => handleOtpChange(index, e.target.value)}
+                      onKeyDown={(e) => handleOtpKeyDown(index, e)}
+                      onPaste={handlePaste}
+                      className="w-14 h-14 bg-black border border-zinc-800 text-white text-center text-2xl font-bold rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all"
+                      required
+                    />
+                  ))}
                 </div>
                 <p className="text-[10px] text-zinc-500 mt-2 text-center">
-                  Code sent to {phoneNumber}. <button type="button" onClick={() => setStep("phone")} className="text-orange-500 hover:underline">Change number</button>
+                  Code sent to {getFullPhone()}. <button type="button" onClick={() => setStep("phone")} className="text-orange-500 hover:underline">Change number</button>
                 </p>
               </div>
 

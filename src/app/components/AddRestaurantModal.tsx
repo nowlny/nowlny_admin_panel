@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { restaurantsService, RestaurantCreate } from '../../services/restaurants';
 
 interface AddRestaurantModalProps {
@@ -10,7 +11,6 @@ interface AddRestaurantModalProps {
 
 export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRestaurantModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -37,7 +37,6 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    setError(null);
 
     const payload: RestaurantCreate = {
       name: formData.name,
@@ -69,11 +68,12 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
 
     try {
       await restaurantsService.createRestaurant(payload);
+      toast.success("Restaurant created successfully!");
       onSuccess();
       onClose();
     } catch (err: any) {
       console.error("Failed to create restaurant", err);
-      setError(err.message || "An error occurred while creating the restaurant.");
+      toast.error(err.message || "An error occurred while creating the restaurant.");
     } finally {
       setIsSubmitting(false);
     }
@@ -94,11 +94,6 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
         </div>
 
         <div className="p-6 overflow-y-auto flex-1">
-          {error && (
-            <div className="mb-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
 
           <form id="add-restaurant-form" onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -18,6 +18,7 @@ import {
   FileText,
   User,
 } from "lucide-react";
+import toast from "react-hot-toast";
 import {
   restaurantsService,
   RestaurantResponse,
@@ -43,6 +44,7 @@ export default function RestaurantsSection({
   const [restaurants, setRestaurants] = useState<RestaurantResponse[]>([]);
   const [submissions, setSubmissions] = useState<RestaurantSubmission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [selectedRestId, setSelectedRestId] = useState<string | null>(
@@ -190,11 +192,15 @@ export default function RestaurantsSection({
 
   const handleStatusChange = async (restId: string, newStatus: string) => {
     try {
+      setIsSubmitting(true);
       await restaurantsService.updateRestaurant(restId, { status: newStatus });
+      toast.success(`Status updated successfully!`);
       if (viewMode === "merchants") fetchMerchants();
       else fetchSubmissions();
     } catch (err: any) {
-      alert(`Failed to update status: ${err.message}`);
+      toast.error(`Failed to update status: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -206,34 +212,42 @@ export default function RestaurantsSection({
     )
       return;
     try {
+      setIsSubmitting(true);
       await restaurantsService.deleteRestaurant(restId);
+      toast.success(`Restaurant deleted successfully!`);
       setSelectedRestId(null);
       if (viewMode === "merchants") fetchMerchants();
       else fetchSubmissions();
     } catch (err: any) {
-      alert(`Failed to delete restaurant: ${err.message}`);
+      toast.error(`Failed to delete restaurant: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleReview = async (decision: "approve" | "reject") => {
     if (!selectedSubmission) return;
     if (decision === "reject" && !rejectionReason.trim()) {
-      alert("Please provide a rejection reason.");
+      toast.error("Please provide a rejection reason.");
       return;
     }
 
     try {
+      setIsSubmitting(true);
       await restaurantsService.reviewSubmission(selectedSubmission.id, {
         decision,
         rejectionReason: decision === "reject" ? rejectionReason : undefined,
       });
+      toast.success(`Application ${decision}d successfully!`);
       setIsReviewing(false);
       setRejectionReason("");
       setSelectedSubmissionId(null);
       if (viewMode === "merchants") fetchMerchants();
       else fetchSubmissions();
     } catch (err: any) {
-      alert(`Failed to review application: ${err.message}`);
+      toast.error(`Failed to review application: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -345,20 +359,26 @@ export default function RestaurantsSection({
 
             {/* Admin Override Action Bar */}
             <div className="flex gap-2 shrink-0">
-              {!isReviewing && selectedSubmission.status === "pending" && (
+              {!isReviewing && (
                 <>
-                  <button
-                    onClick={() => handleReview("approve")}
-                    className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20"
-                  >
-                    Approve Application
-                  </button>
-                  <button
-                    onClick={() => setIsReviewing(true)}
-                    className="bg-zinc-800 hover:bg-red-500 hover:text-white text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
-                  >
-                    Reject Application
-                  </button>
+                  {selectedSubmission.status === "pending" && (
+                    <button
+                      onClick={() => handleReview("approve")}
+                      disabled={isSubmitting}
+                      className="flex items-center bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                      Approve Application
+                    </button>
+                  )}
+                  {(selectedSubmission.status === "pending" || selectedSubmission.status === "approved") && (
+                    <button
+                      onClick={() => setIsReviewing(true)}
+                      className="bg-zinc-800 hover:bg-red-500 hover:text-white text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+                    >
+                      {selectedSubmission.status === "approved" ? "Revoke / Reject" : "Reject Application"}
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -390,8 +410,10 @@ export default function RestaurantsSection({
               </button>
               <button
                 onClick={() => handleReview("reject")}
-                className="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-lg"
+                disabled={isSubmitting}
+                className="flex items-center bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
+                {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
                 Confirm Rejection
               </button>
             </div>
