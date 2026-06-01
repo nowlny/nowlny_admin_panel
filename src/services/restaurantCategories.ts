@@ -8,6 +8,13 @@ export interface RestaurantCategory {
   isActive: boolean;
 }
 
+export interface PaginatedCategories {
+  data: RestaurantCategory[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
 export const restaurantCategoriesService = {
   createCategory: (data: Partial<RestaurantCategory>) => {
     return apiClient<RestaurantCategory>('/api/v1/restaurant-categories', {
@@ -20,8 +27,13 @@ export const restaurantCategoriesService = {
     return apiClient<RestaurantCategory[]>('/api/v1/restaurant-categories');
   },
 
-  getAllCategories: () => {
-    return apiClient<RestaurantCategory[]>('/api/v1/restaurant-categories/admin/all');
+  getAllCategories: (page = 1, limit = 10, search = "") => {
+    const queryParams = new URLSearchParams({
+      page: page.toString(),
+      limit: limit.toString(),
+      ...(search && { search })
+    });
+    return apiClient<PaginatedCategories>(`/api/v1/restaurant-categories/admin/all?${queryParams.toString()}`);
   },
 
   getCategoryById: (id: string) => {

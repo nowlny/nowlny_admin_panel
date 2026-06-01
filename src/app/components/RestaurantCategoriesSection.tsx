@@ -13,10 +13,18 @@ export default function RestaurantCategoriesSection() {
   };
 
   const [categories, setCategories] = useState<RestaurantCategory[]>([]);
+  const [totalItems, setTotalItems] = useState(0);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+  
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<RestaurantCategory | null>(null);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
 
   // Form states
   const [name, setName] = useState("");
@@ -28,26 +36,33 @@ export default function RestaurantCategoriesSection() {
   const fetchCategories = async () => {
     setLoading(true);
     try {
-      const data = await restaurantCategoriesService.getAllCategories();
-      if (Array.isArray(data)) {
-        setCategories(data);
-      } else if (data && typeof data === 'object' && Array.isArray((data as any).data)) {
+      const data = await restaurantCategoriesService.getAllCategories(currentPage, itemsPerPage, searchQuery);
+      if (data && typeof data === 'object' && Array.isArray((data as any).data)) {
         setCategories((data as any).data);
+        setTotalItems((data as any).total || 0);
+      } else if (Array.isArray(data)) {
+        setCategories(data);
+        setTotalItems(data.length);
       } else {
         setCategories([]);
+        setTotalItems(0);
         console.warn("API returned non-array data for categories:", data);
       }
     } catch (error) {
       console.error("Failed to fetch categories:", error);
       setCategories([]);
+      setTotalItems(0);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchCategories();
-  }, []);
+    const timer = setTimeout(() => {
+      fetchCategories();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [currentPage, searchQuery]);
 
   const openModal = (category?: RestaurantCategory) => {
     if (category) {
@@ -102,9 +117,7 @@ export default function RestaurantCategoriesSection() {
   };
 
   const safeCategories = Array.isArray(categories) ? categories : [];
-  const filteredCategories = safeCategories.filter((c) =>
-    c.name?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -143,7 +156,7 @@ export default function RestaurantCategoriesSection() {
           <div className="flex justify-center items-center py-20">
             <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
           </div>
-        ) : filteredCategories.length === 0 ? (
+        ) : safeCategories.length === 0 ? (
           <div className="text-center py-10 text-zinc-500 text-sm">
             No categories found.
           </div>
@@ -160,7 +173,7 @@ export default function RestaurantCategoriesSection() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                {filteredCategories.map((category) => (
+                {safeCategories.map((category) => (
                   <tr key={category.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/50 transition-colors">
                     <td className="py-3 px-4 text-sm font-semibold text-zinc-900 dark:text-white">
                       {category.icon ? (
@@ -204,6 +217,46 @@ export default function RestaurantCategoriesSection() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {!loading && totalPages > 1 && (
+          <div className="flex items-center justify-between mt-6 pt-6 border-t border-zinc-100 dark:border-zinc-800">
+            <p className="text-xs text-zinc-500 font-medium">
+              Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                Previous
+              </button>
+              <div className="flex items-center gap-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                  <button
+                    key={page}
+                    onClick={() => setCurrentPage(page)}
+                    className={`w-7 h-7 flex items-center justify-center text-xs font-bold rounded-lg transition-all ${
+                      currentPage === page
+                        ? "bg-orange-500 text-white shadow-sm shadow-orange-500/20"
+                        : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    }`}
+                  >
+                    {page}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </div>

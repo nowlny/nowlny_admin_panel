@@ -677,14 +677,17 @@ export default function RestaurantsSection({
             <div className="flex gap-2 shrink-0 flex-wrap justify-end">
               <button
                 onClick={() => setIsEditModalOpen(true)}
-                className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+                disabled={isSubmitting}
+                className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Edit Merchant
               </button>
               <button
                 onClick={() => handleDeleteRestaurant(selectedRest.id)}
-                className="bg-zinc-800 hover:bg-red-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+                disabled={isSubmitting}
+                className="flex items-center bg-zinc-800 hover:bg-red-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
+                {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
                 Delete
               </button>
               {selectedRest.status === "active" && (
@@ -692,16 +695,20 @@ export default function RestaurantsSection({
                   onClick={() =>
                     handleStatusChange(selectedRest.id, "suspended")
                   }
-                  className="bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+                  disabled={isSubmitting}
+                  className="flex items-center bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
+                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
                   Suspend Merchant
                 </button>
               )}
               {selectedRest.status === "suspended" && (
                 <button
                   onClick={() => handleStatusChange(selectedRest.id, "active")}
-                  className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+                  disabled={isSubmitting}
+                  className="flex items-center bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
+                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
                   Reactivate Merchant
                 </button>
               )}
