@@ -66,6 +66,18 @@ export interface RestaurantResponse extends RestaurantCreate {
   stories?: Story[];
 }
 
+export interface DeliveryZone {
+  id: string;
+  name: string;
+  polygon: { lat: number; lng: number }[];
+}
+
+export interface RestaurantFullResponse {
+  restaurant: RestaurantResponse;
+  menu: any[];
+  deliveryZones: DeliveryZone[];
+}
+
 // Restaurant Submission interfaces (matches actual API response)
 export interface SubmissionAddress {
   city: string;
@@ -293,7 +305,7 @@ export const restaurantsService = {
    * Get restaurant info and full menu in one call (public)
    */
   getRestaurantFull: (id: string) => {
-    return apiClient<RestaurantResponse>(`/api/v1/restaurants/${id}/full`, {
+    return apiClient<RestaurantFullResponse>(`/api/v1/restaurants/${id}/full`, {
       method: 'GET',
     });
   },

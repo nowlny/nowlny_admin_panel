@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import dynamic from 'next/dynamic';
 import {
   Store,
   Search,
@@ -23,12 +24,15 @@ import {
   restaurantsService,
   RestaurantResponse,
   RestaurantSubmission,
+  RestaurantFullResponse
 } from "../../services/restaurants";
 import AddRestaurantModal from "./AddRestaurantModal";
 import EditRestaurantModal from "./EditRestaurantModal";
 import RestaurantMenuSection from "./RestaurantMenuSection";
 import OrdersSection from "./OrdersSection";
 import StoriesViewerModal from "./StoriesViewerModal";
+
+const DeliveryZoneMap = dynamic(() => import('./DeliveryZoneMapClient'), { ssr: false });
 
 interface RestaurantsSectionProps {
   db?: any;
@@ -50,14 +54,14 @@ export default function RestaurantsSection({
   const [selectedRestId, setSelectedRestId] = useState<string | null>(
     currentRole?.type === "restaurant" ? currentRole.restaurantId : null
   );
-  const [fullSelectedRest, setFullSelectedRest] = useState<RestaurantResponse | null>(null);
+  const [fullSelectedRest, setFullSelectedRest] = useState<RestaurantFullResponse | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<
     string | null
   >(null);
   const [viewMode, setViewMode] = useState<"merchants" | "applications">(
     "merchants",
   );
-  const [innerTab, setInnerTab] = useState<"overview" | "profile" | "menu" | "orders">("overview");
+  const [innerTab, setInnerTab] = useState<"overview" | "profile" | "menu" | "orders" | "delivery">("overview");
   const [merchantStatus, setMerchantStatus] = useState<
     "all" | "active" | "suspended"
   >("all");
@@ -147,7 +151,7 @@ export default function RestaurantsSection({
 
   useEffect(() => {
     if (selectedRestId && viewMode === "merchants") {
-      restaurantsService.getRestaurantById(selectedRestId)
+      restaurantsService.getRestaurantFull(selectedRestId)
         .then((data) => setFullSelectedRest(data))
         .catch((err) => console.error("Failed to fetch full restaurant details:", err));
     } else {
@@ -155,7 +159,7 @@ export default function RestaurantsSection({
     }
   }, [selectedRestId, viewMode]);
 
-  const selectedRest = fullSelectedRest || restaurants.find((r) => r.id === selectedRestId);
+  const selectedRest = fullSelectedRest?.restaurant || restaurants.find((r) => r.id === selectedRestId);
   const selectedSubmission = submissions.find(
     (s) => s.id === selectedSubmissionId,
   );
@@ -758,7 +762,38 @@ export default function RestaurantsSection({
           >
             Live Orders
           </button>
+          <button
+            onClick={() => setInnerTab("delivery")}
+            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
+              innerTab === "delivery"
+                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
+            }`}
+          >
+            Delivery Zone
+          </button>
         </div>
+
+        {innerTab === "delivery" && fullSelectedRest?.deliveryZones && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {fullSelectedRest.deliveryZones.length > 0 ? (
+              fullSelectedRest.deliveryZones.map((zone) => (
+                <div key={zone.id} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm">
+                  <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">{zone.name}</h3>
+                  <div className="w-full h-[400px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-950 relative z-0">
+                    <DeliveryZoneMap polygon={zone.polygon} />
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-12 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl">
+                <MapPin className="w-12 h-12 text-zinc-300 mx-auto mb-3" />
+                <h3 className="text-lg font-bold text-zinc-900 dark:text-white">No Delivery Zones Setup</h3>
+                <p className="text-zinc-500 text-sm">This restaurant hasn't configured any delivery zones yet.</p>
+              </div>
+            )}
+          </div>
+        )}
 
         {innerTab === "overview" && (
           <div className="space-y-6 animate-in fade-in duration-200">
