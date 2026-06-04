@@ -27,6 +27,7 @@ export interface RestaurantCreate {
     entries: OpeningHourEntry[];
   };
   status?: string;
+  isFeatured?: boolean;
 }
 
 export type RestaurantUpdate = Partial<RestaurantCreate>;
@@ -64,6 +65,7 @@ export interface RestaurantResponse extends RestaurantCreate {
   documentUrl?: string;
   menu?: any[]; // Keep flexible if not strictly defined
   stories?: Story[];
+  isFeatured?: boolean;
 }
 
 export interface DeliveryZone {
@@ -161,7 +163,25 @@ export const restaurantsService = {
     });
   },
 
+  /**
+   * Mark a restaurant as featured (admin)
+   * PUT /api/v1/restaurants/{id}/featured
+   */
+  markAsFeatured: (id: string) => {
+    return apiClient<void>(`/api/v1/restaurants/${id}/featured`, {
+      method: 'PUT',
+    });
+  },
 
+  /**
+   * Remove featured status from a restaurant (admin)
+   * DELETE /api/v1/restaurants/{id}/featured
+   */
+  removeFeatured: (id: string) => {
+    return apiClient<void>(`/api/v1/restaurants/${id}/featured`, {
+      method: 'DELETE',
+    });
+  },
 
   /**
    * Admin reviews a pending restaurant application

@@ -229,6 +229,33 @@ export default function RestaurantsSection({
     }
   };
 
+  const handleToggleFeatured = async (restId: string, isCurrentlyFeatured: boolean) => {
+    try {
+      setIsSubmitting(true);
+      if (isCurrentlyFeatured) {
+        await restaurantsService.removeFeatured(restId);
+        toast.success(`Restaurant unfeatured successfully!`);
+      } else {
+        await restaurantsService.markAsFeatured(restId);
+        toast.success(`Restaurant featured successfully!`);
+      }
+      
+      // Update selected restaurant state directly for immediate feedback
+      if (fullSelectedRest) {
+        setFullSelectedRest({
+          ...fullSelectedRest,
+          restaurant: { ...fullSelectedRest.restaurant, isFeatured: !isCurrentlyFeatured }
+        });
+      }
+      
+      if (viewMode === "merchants") fetchMerchants();
+    } catch (err: any) {
+      toast.error(`Failed to toggle featured status: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleReview = async (decision: "approve" | "reject") => {
     if (!selectedSubmission) return;
     if (decision === "reject" && !rejectionReason.trim()) {
@@ -614,6 +641,11 @@ export default function RestaurantsSection({
               >
                 {selectedRest.status}
               </span>
+              {selectedRest.isFeatured && (
+                <span className="text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider bg-purple-500/90 text-white border-purple-400 flex items-center gap-1">
+                  <Star className="w-3 h-3 fill-white" /> Featured
+                </span>
+              )}
             </div>
           </div>
 
@@ -714,6 +746,21 @@ export default function RestaurantsSection({
                 >
                   {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
                   Reactivate Merchant
+                </button>
+              )}
+              {selectedRest.status === "active" && (
+                <button
+                  onClick={() => handleToggleFeatured(selectedRest.id, !!selectedRest.isFeatured)}
+                  disabled={isSubmitting}
+                  className={`flex items-center active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                    selectedRest.isFeatured 
+                      ? "bg-zinc-700 hover:bg-zinc-800" 
+                      : "bg-purple-600 hover:bg-purple-700 shadow-lg shadow-purple-500/20"
+                  }`}
+                >
+                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                  <Star className={`w-4 h-4 mr-1.5 ${selectedRest.isFeatured ? "opacity-50" : "fill-white"}`} />
+                  {selectedRest.isFeatured ? "Unfeature" : "Feature Merchant"}
                 </button>
               )}
             </div>
@@ -1137,7 +1184,7 @@ export default function RestaurantsSection({
                     alt={item.name}
                     className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300 opacity-80"
                   />
-                  <div className="absolute top-3 right-3">
+                  <div className="absolute top-3 right-3 flex flex-col gap-2 items-end">
                     <span
                       className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full shadow border ${
                         item.status === "active" || item.status === "approved"
@@ -1149,6 +1196,11 @@ export default function RestaurantsSection({
                     >
                       {item.status}
                     </span>
+                    {(item as any).isFeatured && (
+                      <span className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full shadow border bg-purple-500/90 text-white border-purple-400 flex items-center gap-1">
+                        <Star className="w-2.5 h-2.5 fill-white" /> Featured
+                      </span>
+                    )}
                   </div>
                 </div>
 
