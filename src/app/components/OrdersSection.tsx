@@ -118,6 +118,7 @@ function fmtDate(iso?: string) {
 interface OrdersSectionProps {
   searchQuery: string;
   restaurantId?: string;
+  isOwnerView?: boolean;
 }
 
 const KANBAN_LANES: {
@@ -159,6 +160,7 @@ const PAGE_SIZE = 20;
 export default function OrdersSection({
   searchQuery,
   restaurantId,
+  isOwnerView = false,
 }: OrdersSectionProps) {
   // View mode
   const [activeSubTab, setActiveSubTab] = useState<"live" | "archive">("live");
@@ -191,13 +193,23 @@ export default function OrdersSection({
     async (silent = false) => {
       if (!silent) setLoading(true);
       try {
-        const res = await ordersService.getOrders({
-          status: statusFilter || undefined,
-          paymentStatus: paymentFilter || undefined,
-          restaurantId: restaurantId || undefined,
-          page,
-          limit: PAGE_SIZE,
-        });
+        let res;
+        if (isOwnerView) {
+          res = await ordersService.getMyRestaurantOrders({
+            status: statusFilter || undefined,
+            paymentStatus: paymentFilter || undefined,
+            page,
+            limit: PAGE_SIZE,
+          });
+        } else {
+          res = await ordersService.getOrders({
+            status: statusFilter || undefined,
+            paymentStatus: paymentFilter || undefined,
+            restaurantId: restaurantId || undefined,
+            page,
+            limit: PAGE_SIZE,
+          });
+        }
         setOrders(res.data ?? []);
         setTotal(res.total ?? 0);
       } catch (err: unknown) {
@@ -210,7 +222,7 @@ export default function OrdersSection({
         if (!silent) setLoading(false);
       }
     },
-    [statusFilter, paymentFilter, page, restaurantId],
+    [statusFilter, paymentFilter, page, restaurantId, isOwnerView],
   );
 
   // Initial + filter/page changes
@@ -260,7 +272,9 @@ export default function OrdersSection({
     setSelectedOrder(order);
     setDetailLoading(true);
     try {
-      const full = await ordersService.getOrderById(order.id);
+      const full = isOwnerView 
+        ? await ordersService.getMyRestaurantOrderById(order.id)
+        : await ordersService.getOrderById(order.id);
       setSelectedOrder(full);
     } catch {
       // use list-level data as fallback
@@ -278,10 +292,24 @@ export default function OrdersSection({
   ) => {
     setUpdatingId(order.id);
     try {
-      const updated = await ordersService.updateOrder(order.id, {
-        status: nextStatus,
-        ...(nextPayment ? { paymentStatus: nextPayment } : {}),
-      });
+      let updated;
+      if (isOwnerView) {
+        if (nextStatus === "confirmed") {
+          await ordersService.acceptMyOrder(order.id);
+          updated = { ...order, status: "confirmed" as OrderStatus };
+        } else if (nextStatus === "rejected") {
+          await ordersService.rejectMyOrder(order.id);
+          updated = { ...order, status: "rejected" as OrderStatus };
+        } else {
+          await ordersService.updateMyOrderStatus(order.id, { status: nextStatus });
+          updated = { ...order, status: nextStatus };
+        }
+      } else {
+        updated = await ordersService.updateOrder(order.id, {
+          status: nextStatus,
+          ...(nextPayment ? { paymentStatus: nextPayment } : {}),
+        });
+      }
       setOrders((prev) => prev.map((o) => (o.id === order.id ? updated : o)));
       if (selectedOrder?.id === order.id) setSelectedOrder(updated);
       toast.success("Order status updated!");

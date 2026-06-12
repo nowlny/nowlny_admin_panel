@@ -217,7 +217,7 @@ export const ordersService = {
    * Accept a pending order (restaurant owner)
    */
   acceptMyOrder: (id: string): Promise<void> => {
-    return apiClient<void>(`/api/v1/orders/me/${id}/accept`, {
+    return apiClient<void>(`/api/v1/orders/restaurant/me/${id}/accept`, {
       method: 'PATCH',
     });
   },
@@ -226,13 +226,24 @@ export const ordersService = {
    * Reject a pending order (restaurant owner)
    */
   rejectMyOrder: (id: string): Promise<void> => {
-    return apiClient<void>(`/api/v1/orders/me/${id}/reject`, {
+    return apiClient<void>(`/api/v1/orders/restaurant/me/${id}/reject`, {
       method: 'PATCH',
     });
   },
 
   /**
+   * Update own order status (restaurant owner)
+   */
+  updateMyOrderStatus: (id: string, data: { status: OrderStatus }): Promise<void> => {
+    return apiClient<void>(`/api/v1/orders/restaurant/me/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /**
    * Rate a delivered order (customer)
+
    */
   rateOrder: (id: string, data: { rating: number; review?: string }): Promise<void> => {
     return apiClient<void>(`/api/v1/orders/me/${id}/rating`, {

@@ -2,13 +2,13 @@ importScripts('https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js'
 importScripts('https://www.gstatic.com/firebasejs/10.8.1/firebase-messaging-compat.js');
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCKwoxiv3F9zZRLVPwpCUvH8AKmtgOVeUY",
-  authDomain: "nowlny.firebaseapp.com",
-  projectId: "nowlny",
-  storageBucket: "nowlny.firebasestorage.app",
-  messagingSenderId: "925474303083",
-  appId: "1:925474303083:web:97a0a2bd70de764ce0d52e",
-  measurementId: "G-F8VPLNNX09"
+  apiKey: "AIzaSyB7JZ-yRFNjmC2-urW53da0P8LPIfH69EI",
+  authDomain: "nowlnylb-a4630.firebaseapp.com",
+  projectId: "nowlnylb-a4630",
+  storageBucket: "nowlnylb-a4630.firebasestorage.app",
+  messagingSenderId: "995994818411",
+  appId: "1:995994818411:web:b59d94338f8b99c6e2de2e",
+  measurementId: "G-MF85CBVMHX"
 };
 
 firebase.initializeApp(firebaseConfig);

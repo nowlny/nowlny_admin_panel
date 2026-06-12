@@ -1,31 +1,29 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import Sidebar, { Role } from "./components/Sidebar";
-import Header from "./components/Header";
-import OverviewSection from "./components/OverviewSection";
-import RestaurantsSection from "./components/RestaurantsSection";
-import CustomersSection from "./components/CustomersSection";
-import OrdersSection from "./components/OrdersSection";
-import DriversSection from "./components/DriversSection";
-import PromosSection from "./components/PromosSection";
-import ReportsSection from "./components/ReportsSection";
-import SettingsSection from "./components/SettingsSection";
-import SystemUsersSection from "./components/SystemUsersSection";
-import RestaurantCategoriesSection from "./components/RestaurantCategoriesSection";
-import CurrenciesSection from "./components/CurrenciesSection";
-import LoginScreen from "./components/LoginScreen";
-import { useNotifications } from "../hooks/useNotifications";
+import { useRouter, usePathname } from "next/navigation";
+import Sidebar, { Role } from "../components/Sidebar";
+import Header from "../components/Header";
+import OverviewSection from "../components/OverviewSection";
+import RestaurantsSection from "../components/RestaurantsSection";
+import CustomersSection from "../components/CustomersSection";
+import OrdersSection from "../components/OrdersSection";
+import SystemUsersSection from "../components/SystemUsersSection";
+import RestaurantCategoriesSection from "../components/RestaurantCategoriesSection";
+import CurrenciesSection from "../components/CurrenciesSection";
+import NotificationsSection from "../components/NotificationsSection";
+import LoginScreen from "../components/LoginScreen";
+import { useNotifications } from "../../hooks/useNotifications";
 
 // Restaurant-specific views
-import RestaurantOverviewSection from "./components/RestaurantOverviewSection";
-import RestaurantMenuSection from "./components/RestaurantMenuSection";
-import RestaurantSettingsSection from "./components/RestaurantSettingsSection";
-import RestaurantApplicationSection from "./components/RestaurantApplicationSection";
+import RestaurantOverviewSection from "../components/RestaurantOverviewSection";
+import RestaurantMenuSection from "../components/RestaurantMenuSection";
+import RestaurantSettingsSection from "../components/RestaurantSettingsSection";
+import RestaurantApplicationSection from "../components/RestaurantApplicationSection";
 import {
   restaurantsService,
   RestaurantSubmission,
-} from "../services/restaurants";
+} from "../../services/restaurants";
 
 import {
   loadDb,
@@ -37,9 +35,12 @@ import {
   PromoCode,
   SystemSettings,
   SystemNotification,
-} from "./data/mockData";
+} from "../data/mockData";
 
 export default function Home() {
+  const router = useRouter();
+  const pathname = usePathname();
+
   const [isHydrated, setIsHydrated] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const [searchQuery, setSearchQuery] = useState("");
@@ -148,17 +149,22 @@ export default function Home() {
     const decoded = decodeToken(authToken);
     if (!decoded) return;
 
-    const currentHash = window.location.hash.replace("#", "");
+    const currentHash = pathname === "/" ? "" : pathname.replace("/", "");
 
     if (decoded.userType === "restaurant_owner") {
       // Keep role as restaurant_owner and fetch their submission
       setCurrentRole({ type: "restaurant_owner" });
       handleTabChange(currentHash || "restaurant_application");
       refetchSubmissionStatus();
-    } else {
+    } else if (decoded.userType === "admin" || decoded.userType === "super_admin") {
       // Default: treat as admin
       setCurrentRole({ type: "admin" });
       handleTabChange(currentHash || "overview");
+    } else {
+      // Reject unauthorized users (e.g. customers, drivers)
+      localStorage.removeItem("token");
+      setAuthToken(null);
+      import("react-hot-toast").then((toast) => toast.default.error("Unauthorized. Admin or Restaurant Owner access required."));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
@@ -199,32 +205,25 @@ export default function Home() {
     }
   }, [currentRole.type, activeTab, authToken]);
 
-  // Sync tab state with URL hash to support browser back button
+  // Sync tab state with URL path to support browser back button
   useEffect(() => {
-    const onHashChange = () => {
-      const hash = window.location.hash.replace("#", "");
-      if (hash) {
-        setActiveTab(hash);
-      } else {
-        setActiveTab(
-          currentRole.type === "admin"
-            ? "overview"
-            : currentRole.type === "restaurant_owner"
-              ? "restaurant_application"
-              : "restaurant_overview",
-        );
-      }
-    };
-
-    onHashChange(); // Trigger on mount
-
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, [currentRole.type]);
+    const tab = pathname === "/" ? "" : pathname.replace("/", "");
+    if (tab) {
+      setActiveTab(tab);
+    } else {
+      setActiveTab(
+        currentRole.type === "admin"
+          ? "overview"
+          : currentRole.type === "restaurant_owner"
+            ? "restaurant_application"
+            : "restaurant_overview",
+      );
+    }
+  }, [pathname, currentRole.type]);
 
   const handleTabChange = (tab: string) => {
     setActiveTab(tab);
-    window.location.hash = tab;
+    router.push(`/${tab}`);
   };
 
   // Sync to localStorage on React state changes
@@ -259,10 +258,6 @@ export default function Home() {
   const pendingOrdersCount = 0;
 
   // Stats for the sidebar are now updated via useEffect at the top level
-  const pendingDriversCount = db.drivers.filter(
-    (d) => d.verificationStatus === "Pending",
-  ).length;
-
   // Global Actions handlers
   const handleUpdateRestaurant = (updatedRest: Restaurant) => {
     const nextRestaurants = db.restaurants.map((r) =>
@@ -278,26 +273,11 @@ export default function Home() {
     updateDb({ ...db, customers: nextCustomers });
   };
 
-  const handleUpdateDriver = (updatedDriver: Driver) => {
-    const nextDrivers = db.drivers.map((d) =>
-      d.id === updatedDriver.id ? updatedDriver : d,
-    );
-    updateDb({ ...db, drivers: nextDrivers });
-  };
-
   const handleUpdateOrder = (updatedOrder: Order) => {
     const nextOrders = db.orders.map((o) =>
       o.id === updatedOrder.id ? updatedOrder : o,
     );
     updateDb({ ...db, orders: nextOrders });
-  };
-
-  const handleUpdatePromos = (nextPromos: PromoCode[]) => {
-    updateDb({ ...db, promos: nextPromos });
-  };
-
-  const handleUpdateSettings = (nextSettings: SystemSettings) => {
-    updateDb({ ...db, settings: nextSettings });
   };
 
   const handleSendNotification = (
@@ -327,18 +307,6 @@ export default function Home() {
     }
   };
 
-  const handleApproveDriverFromOverview = (driverId: string) => {
-    const target = db.drivers.find((d) => d.id === driverId);
-    if (target) {
-      handleUpdateDriver({
-        ...target,
-        verificationStatus: "Verified",
-        status: "Offline",
-      });
-      // Backend handles notifications on approval
-    }
-  };
-
   // Role Switching trigger
   const handleRoleChange = (nextRole: Role) => {
     setCurrentRole(nextRole);
@@ -365,7 +333,6 @@ export default function Home() {
             db={db}
             setActiveTab={handleTabChange}
             onApproveRestaurant={handleApproveRestaurantFromOverview}
-            onApproveDriver={handleApproveDriverFromOverview}
           />
         );
       case "restaurants":
@@ -383,35 +350,12 @@ export default function Home() {
         return <CustomersSection db={db} searchQuery={searchQuery} />;
       case "orders":
         return <OrdersSection searchQuery={searchQuery} />;
-      case "drivers":
-        return (
-          <DriversSection
-            db={db}
-            onUpdateDriver={handleUpdateDriver}
-            searchQuery={searchQuery}
-          />
-        );
-      case "promos":
-        return (
-          <PromosSection
-            db={db}
-            onUpdatePromos={handleUpdatePromos}
-            searchQuery={searchQuery}
-          />
-        );
-      case "reports":
-        return <ReportsSection db={db} searchQuery={searchQuery} />;
       case "system_users":
         return <SystemUsersSection />;
       case "currencies":
         return <CurrenciesSection searchQuery={searchQuery} />;
-      case "settings":
-        return (
-          <SettingsSection
-            db={db}
-            onUpdateSettings={handleUpdateSettings}
-          />
-        );
+      case "notifications":
+        return <NotificationsSection />;
 
 
       // Restaurant Owner (applicant) portal
@@ -439,7 +383,6 @@ export default function Home() {
         }}
         pendingOrdersCount={pendingOrdersCount}
         pendingRestaurantsCount={pendingRestaurantsCount}
-        pendingDriversCount={pendingDriversCount}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         currentRole={currentRole}
