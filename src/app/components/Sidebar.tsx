@@ -11,6 +11,7 @@ import {
   Users2,
   Coins,
   Bell,
+  Smartphone,
 } from "lucide-react";
 import { Restaurant } from "../data/mockData";
 
@@ -67,10 +68,12 @@ export default function Sidebar({
           label: "Store Categories",
           icon: Store,
         },
+        { id: "reels", label: "Reels Management", icon: Sparkles },
         { id: "customers", label: "Customers", icon: Users },
         { id: "currencies", label: "Currencies & Rates", icon: Coins },
         { id: "system_users", label: "System Users", icon: Users2 },
         { id: "notifications", label: "Notifications", icon: Bell },
+        { id: "app_version", label: "App Version Control", icon: Smartphone },
       ];
     } else if (currentRole.type === "restaurant_owner") {
       return [
@@ -83,6 +86,7 @@ export default function Sidebar({
           label: "My Dashboard",
           icon: LayoutDashboard,
         },
+        { id: "restaurant_reels", label: "My Reels", icon: Sparkles },
       ];
     }
   };

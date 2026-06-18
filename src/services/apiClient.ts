@@ -8,6 +8,7 @@ const formatApiError = (status: number, errorText: string): string => {
     
     // Extract human-readable messages from common JSON error structures
     if (typeof data.message === 'string') return data.message;
+    if (Array.isArray(data.message)) return data.message.join(', ');
     if (typeof data.detail === 'string') return data.detail;
     if (typeof data.error === 'string') return data.error;
     if (data.error && typeof data.error.message === 'string') return data.error.message;

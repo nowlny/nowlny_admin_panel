@@ -16,10 +16,8 @@ import LoginScreen from "../components/LoginScreen";
 import { useNotifications } from "../../hooks/useNotifications";
 
 // Restaurant-specific views
-import RestaurantOverviewSection from "../components/RestaurantOverviewSection";
-import RestaurantMenuSection from "../components/RestaurantMenuSection";
-import RestaurantSettingsSection from "../components/RestaurantSettingsSection";
 import RestaurantApplicationSection from "../components/RestaurantApplicationSection";
+import AppVersionSection from "../components/AppVersionSection";
 import {
   restaurantsService,
   RestaurantSubmission,
@@ -36,6 +34,8 @@ import {
   SystemSettings,
   SystemNotification,
 } from "../data/mockData";
+import RestaurantReelsSection from "../components/RestaurantReelsSection";
+import ReelsSection from "../components/ReelsSection";
 
 export default function Home() {
   const router = useRouter();
@@ -62,7 +62,8 @@ export default function Home() {
     useState<RestaurantSubmission | null>(null);
 
   // Initialize FCM notifications if authenticated
-  const { fcmToken, notificationToast, setNotificationToast } = useNotifications(!!authToken);
+  const { fcmToken, notificationToast, setNotificationToast } =
+    useNotifications(!!authToken);
 
   // Initialize theme from localStorage/system preferences on mount
   useEffect(() => {
@@ -156,7 +157,10 @@ export default function Home() {
       setCurrentRole({ type: "restaurant_owner" });
       handleTabChange(currentHash || "restaurant_application");
       refetchSubmissionStatus();
-    } else if (decoded.userType === "admin" || decoded.userType === "super_admin") {
+    } else if (
+      decoded.userType === "admin" ||
+      decoded.userType === "super_admin"
+    ) {
       // Default: treat as admin
       setCurrentRole({ type: "admin" });
       handleTabChange(currentHash || "overview");
@@ -164,7 +168,11 @@ export default function Home() {
       // Reject unauthorized users (e.g. customers, drivers)
       localStorage.removeItem("token");
       setAuthToken(null);
-      import("react-hot-toast").then((toast) => toast.default.error("Unauthorized. Admin or Restaurant Owner access required."));
+      import("react-hot-toast").then((toast) =>
+        toast.default.error(
+          "Unauthorized. Admin or Restaurant Owner access required.",
+        ),
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
@@ -356,7 +364,10 @@ export default function Home() {
         return <CurrenciesSection searchQuery={searchQuery} />;
       case "notifications":
         return <NotificationsSection />;
-
+      case "app_version":
+        return <AppVersionSection />;
+      case "reels":
+        return <ReelsSection />;
 
       // Restaurant Owner (applicant) portal
       case "restaurant_application":
@@ -366,6 +377,8 @@ export default function Home() {
             onRefreshSubmissionStatus={refetchSubmissionStatus}
           />
         );
+      case "restaurant_reels":
+        return <RestaurantReelsSection />;
 
       default:
         return <div className="p-8 text-xs font-bold">Routing Error</div>;
@@ -415,10 +428,26 @@ export default function Home() {
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-3">
               {notificationToast.icon ? (
-                <img src={notificationToast.icon} alt="icon" className="w-8 h-8 rounded-full object-cover" />
+                <img
+                  src={notificationToast.icon}
+                  alt="icon"
+                  className="w-8 h-8 rounded-full object-cover"
+                />
               ) : (
                 <div className="w-8 h-8 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-500 shrink-0">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                  </svg>
                 </div>
               )}
               <div className="flex flex-col">
@@ -434,7 +463,19 @@ export default function Home() {
               onClick={() => setNotificationToast(null)}
               className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg shrink-0 transition-colors"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
             </button>
           </div>
         </div>
