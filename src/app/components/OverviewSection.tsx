@@ -5,7 +5,6 @@ import {
   DollarSign, 
   Store, 
   Users, 
-  Bike, 
   TrendingUp, 
   TrendingDown, 
   ShoppingBag,
@@ -21,16 +20,14 @@ interface OverviewProps {
   db: ReturnType<typeof loadDb>;
   setActiveTab: (tab: string) => void;
   onApproveRestaurant: (id: string) => void;
-  onApproveDriver: (id: string) => void;
 }
 
 export default function OverviewSection({
   db,
   setActiveTab,
-  onApproveRestaurant,
-  onApproveDriver
+  onApproveRestaurant
 }: OverviewProps) {
-  const { restaurants, customers, drivers, orders, settings } = db;
+  const { restaurants, customers, orders, settings } = db;
 
   // 1. Calculate stats
   const completedOrders = orders.filter(o => o.status === "Delivered");
@@ -47,7 +44,6 @@ export default function OverviewSection({
   }, 0);
 
   const pendingRestaurants = restaurants.filter(r => r.status === "Pending");
-  const pendingDrivers = drivers.filter(d => d.verificationStatus === "Pending");
 
   // Mock charts data points (revenue per month in $)
   const monthlyRevenue = [
@@ -144,28 +140,6 @@ export default function OverviewSection({
           </div>
         </div>
 
-        {/* Fleet Card */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 group">
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 tracking-wide uppercase">Active Fleet</p>
-              <h4 className="text-2xl font-black text-zinc-900 dark:text-white mt-2">{drivers.length} Drivers</h4>
-            </div>
-            <div className="p-3 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-xl">
-              <Bike className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="flex items-center gap-2 mt-4 text-xs font-bold">
-            <span className="text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-              {drivers.filter(d => d.status === "Online").length} Online
-            </span>
-            {pendingDrivers.length > 0 && (
-              <span className="text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full animate-pulse">
-                {pendingDrivers.length} Pending
-              </span>
-            )}
-          </div>
-        </div>
       </div>
 
       {/* Charts & Graphs Row */}
@@ -299,7 +273,7 @@ export default function OverviewSection({
       </div>
 
       {/* Operational Task Center */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6">
         {/* Left Column: Pending Approvals */}
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
           <div className="flex justify-between items-center mb-4">
@@ -338,52 +312,6 @@ export default function OverviewSection({
                       className="text-[10px] font-bold bg-gradient-to-r from-orange-500 to-red-500 hover:opacity-95 text-white px-2.5 py-1.5 rounded-lg shadow shadow-orange-500/10"
                     >
                       Approve
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Right Column: Driver Applications */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
-          <div className="flex justify-between items-center mb-4">
-            <h4 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-              <Bike className="w-4 h-4 text-orange-500" /> Driver Verification Queue
-            </h4>
-            <span className="text-[10px] font-bold bg-blue-500/10 text-blue-500 px-2 py-0.5 rounded border border-blue-500/20">
-              {pendingDrivers.length} Pending
-            </span>
-          </div>
-
-          <div className="space-y-3">
-            {pendingDrivers.length === 0 ? (
-              <div className="text-center py-8 text-zinc-400 text-xs font-medium">
-                No new driver applications waiting.
-              </div>
-            ) : (
-              pendingDrivers.map((driver) => (
-                <div key={driver.id} className="flex items-center justify-between p-3.5 rounded-xl border border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30">
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl p-1 bg-white dark:bg-zinc-800 rounded-xl shadow-sm">{driver.avatar}</span>
-                    <div>
-                      <h5 className="text-xs font-bold text-zinc-900 dark:text-white">{driver.name}</h5>
-                      <p className="text-[10px] text-zinc-400 mt-0.5">Vehicle: {driver.vehicleType} • Joined: {driver.joinedDate}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setActiveTab("drivers")}
-                      className="text-[10px] font-bold bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 px-2.5 py-1.5 rounded-lg transition-all"
-                    >
-                      Details
-                    </button>
-                    <button
-                      onClick={() => onApproveDriver(driver.id)}
-                      className="text-[10px] font-bold bg-gradient-to-r from-orange-500 to-red-500 hover:opacity-95 text-white px-2.5 py-1.5 rounded-lg shadow shadow-orange-500/10"
-                    >
-                      Verify
                     </button>
                   </div>
                 </div>

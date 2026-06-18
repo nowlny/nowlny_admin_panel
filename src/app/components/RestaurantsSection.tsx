@@ -1028,7 +1028,11 @@ export default function RestaurantsSection({
 
         {innerTab === "orders" && (
           <div className="animate-in fade-in duration-200 border-t border-zinc-200 dark:border-zinc-800 pt-4">
-            <OrdersSection searchQuery="" restaurantId={selectedRest.id} />
+            <OrdersSection 
+              searchQuery="" 
+              restaurantId={selectedRest.id} 
+              isOwnerView={currentRole?.type === "restaurant"}
+            />
           </div>
         )}
       </div>

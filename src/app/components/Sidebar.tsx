@@ -6,14 +6,12 @@ import {
   ShoppingBag,
   Store,
   Users,
-  Bike,
-  Ticket,
-  BarChart3,
-  Settings,
   LogOut,
   Sparkles,
   Users2,
   Coins,
+  Bell,
+  Smartphone,
 } from "lucide-react";
 import { Restaurant } from "../data/mockData";
 
@@ -27,7 +25,6 @@ interface SidebarProps {
   setActiveTab: (tab: string) => void;
   pendingOrdersCount: number;
   pendingRestaurantsCount: number;
-  pendingDriversCount: number;
   isOpen?: boolean;
   onClose?: () => void;
   currentRole: Role;
@@ -40,7 +37,6 @@ export default function Sidebar({
   setActiveTab,
   pendingOrdersCount,
   pendingRestaurantsCount,
-  pendingDriversCount,
   isOpen,
   onClose,
   currentRole,
@@ -72,19 +68,12 @@ export default function Sidebar({
           label: "Store Categories",
           icon: Store,
         },
+        { id: "reels", label: "Reels Management", icon: Sparkles },
         { id: "customers", label: "Customers", icon: Users },
-        {
-          id: "drivers",
-          label: "Drivers Fleet",
-          icon: Bike,
-          badge: pendingDriversCount > 0 ? pendingDriversCount : undefined,
-          badgeColor: "bg-blue-500 text-white",
-        },
-        { id: "promos", label: "Promo & Offers", icon: Ticket },
-        { id: "reports", label: "Financials & Reports", icon: BarChart3 },
         { id: "currencies", label: "Currencies & Rates", icon: Coins },
         { id: "system_users", label: "System Users", icon: Users2 },
-        { id: "settings", label: "System Settings", icon: Settings },
+        { id: "notifications", label: "Notifications", icon: Bell },
+        { id: "app_version", label: "App Version Control", icon: Smartphone },
       ];
     } else if (currentRole.type === "restaurant_owner") {
       return [
@@ -97,6 +86,7 @@ export default function Sidebar({
           label: "My Dashboard",
           icon: LayoutDashboard,
         },
+        { id: "restaurant_reels", label: "My Reels", icon: Sparkles },
       ];
     }
   };
