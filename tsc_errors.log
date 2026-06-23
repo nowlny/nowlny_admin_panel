@@ -1,0 +1,41 @@
+src/app/components/AddRestaurantModal.tsx(111,68): error TS2339: Property 'cuisineType' does not exist on type '{ name: string; description: string; phone: string; website: string; categoryId: string; city: string; street: string; building: string; latitude: string; longitude: string; deliveryFee: string; deliveryTimeMinMinutes: string; deliveryTimeMaxMinutes: string; logo: string; backgroundImageUrl: string; }'.
+src/app/components/AddRestaurantModal.tsx(120,75): error TS2339: Property 'email' does not exist on type '{ name: string; description: string; phone: string; website: string; categoryId: string; city: string; street: string; building: string; latitude: string; longitude: string; deliveryFee: string; deliveryTimeMinMinutes: string; deliveryTimeMaxMinutes: string; logo: string; backgroundImageUrl: string; }'.
+src/app/components/AddRestaurantModal.tsx(133,64): error TS2339: Property 'address' does not exist on type '{ name: string; description: string; phone: string; website: string; categoryId: string; city: string; street: string; building: string; latitude: string; longitude: string; deliveryFee: string; deliveryTimeMinMinutes: string; deliveryTimeMaxMinutes: string; logo: string; backgroundImageUrl: string; }'.
+src/app/components/AddRestaurantModal.tsx(151,95): error TS2339: Property 'estimatedDeliveryMinutes' does not exist on type '{ name: string; description: string; phone: string; website: string; categoryId: string; city: string; street: string; building: string; latitude: string; longitude: string; deliveryFee: string; deliveryTimeMinMinutes: string; deliveryTimeMaxMinutes: string; logo: string; backgroundImageUrl: string; }'.
+src/app/components/AddRestaurantModal.tsx(160,58): error TS2339: Property 'coverImage' does not exist on type '{ name: string; description: string; phone: string; website: string; categoryId: string; city: string; street: string; building: string; latitude: string; longitude: string; deliveryFee: string; deliveryTimeMinMinutes: string; deliveryTimeMaxMinutes: string; logo: string; backgroundImageUrl: string; }'.
+src/app/components/RestaurantApplicationSection.tsx(61,5): error TS2559: Type 'string' has no properties in common with type 'Address'.
+src/app/components/RestaurantApplicationSection.tsx(64,5): error TS2740: Type '{ entries: ({ day: string; is24Hours: false; openTime: string; closeTime: string; } | { day: string; is24Hours: true; openTime: string; closeTime: string; })[]; }' is missing the following properties from type 'OpeningHourEntry[]': length, pop, push, concat, and 34 more.
+src/app/components/RestaurantApplicationSection.tsx(102,19): error TS2345: Argument of type '{ name: string; description: string; logo: string; deliveryFee: number; address: Address; openingHours: OpeningHourEntry[] | undefined; }' is not assignable to parameter of type 'SetStateAction<RestaurantCreate>'.
+  Property 'phone' is missing in type '{ name: string; description: string; logo: string; deliveryFee: number; address: Address; openingHours: OpeningHourEntry[] | undefined; }' but required in type 'RestaurantCreate'.
+src/app/components/RestaurantApplicationSection.tsx(559,21): error TS2367: This comparison appears to be unintentional because the types '"pending" | "approved" | "rejected"' and '"cancelled"' have no overlap.
+src/app/components/RestaurantsSection.tsx(182,10): error TS2339: Property 'cuisineType' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(183,25): error TS2339: Property 'toLowerCase' does not exist on type '"" | Address'.
+  Property 'toLowerCase' does not exist on type 'Address'.
+src/app/components/RestaurantsSection.tsx(196,10): error TS2339: Property 'cuisineType' does not exist on type 'RestaurantSubmission'.
+src/app/components/RestaurantsSection.tsx(335,36): error TS2339: Property 'coverImage' does not exist on type 'RestaurantSubmission'.
+src/app/components/RestaurantsSection.tsx(384,39): error TS2339: Property 'cuisineType' does not exist on type 'RestaurantSubmission'.
+src/app/components/RestaurantsSection.tsx(490,37): error TS2339: Property 'estimatedDeliveryMinutes' does not exist on type 'RestaurantSubmission'.
+src/app/components/RestaurantsSection.tsx(518,37): error TS2339: Property 'cuisineType' does not exist on type 'RestaurantSubmission'.
+src/app/components/RestaurantsSection.tsx(538,41): error TS2339: Property 'email' does not exist on type 'RestaurantSubmission'.
+src/app/components/RestaurantsSection.tsx(652,30): error TS2339: Property 'coverImage' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(719,33): error TS2339: Property 'cuisineType' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(724,58): error TS2339: Property 'city' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(972,37): error TS2339: Property 'email' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(1023,37): error TS2339: Property 'cuisineType' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(1039,37): error TS2339: Property 'estimatedDeliveryMinutes' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(1061,58): error TS2339: Property 'map' does not exist on type '() => ArrayIterator<[number, OpeningHourEntry]>'.
+src/app/components/RestaurantsSection.tsx(1061,63): error TS7006: Parameter 'entry' implicitly has an 'any' type.
+src/app/components/RestaurantsSection.tsx(1061,70): error TS7006: Parameter 'idx' implicitly has an 'any' type.
+src/app/components/RestaurantsSection.tsx(1096,39): error TS2339: Property 'city' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(1104,25): error TS2322: Type 'Address | undefined' is not assignable to type 'ReactNode'.
+  Type 'Address' is not assignable to type 'ReactNode'.
+src/app/components/RestaurantsSection.tsx(1108,33): error TS2339: Property 'latitude' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(1108,58): error TS2339: Property 'longitude' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(1117,77): error TS2339: Property 'latitude' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(1117,102): error TS2339: Property 'longitude' does not exist on type 'RestaurantResponse'.
+src/app/components/RestaurantsSection.tsx(1304,28): error TS2339: Property 'coverImage' does not exist on type 'RestaurantSubmission | RestaurantResponse'.
+  Property 'coverImage' does not exist on type 'RestaurantSubmission'.
+src/app/components/RestaurantsSection.tsx(1372,33): error TS2339: Property 'cuisineType' does not exist on type 'RestaurantSubmission | RestaurantResponse'.
+  Property 'cuisineType' does not exist on type 'RestaurantSubmission'.
+src/app/components/RestaurantsSection.tsx(1413,35): error TS2339: Property 'estimatedDeliveryMinutes' does not exist on type 'RestaurantSubmission | RestaurantResponse'.
+  Property 'estimatedDeliveryMinutes' does not exist on type 'RestaurantSubmission'.

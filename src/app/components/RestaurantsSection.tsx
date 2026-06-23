@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import dynamic from 'next/dynamic';
+import dynamic from "next/dynamic";
 import {
   Store,
   Search,
@@ -24,7 +24,7 @@ import {
   restaurantsService,
   RestaurantResponse,
   RestaurantSubmission,
-  RestaurantFullResponse
+  RestaurantFullResponse,
 } from "../../services/restaurants";
 import AddRestaurantModal from "./AddRestaurantModal";
 import EditRestaurantModal from "./EditRestaurantModal";
@@ -32,7 +32,9 @@ import RestaurantMenuSection from "./RestaurantMenuSection";
 import OrdersSection from "./OrdersSection";
 import StoriesViewerModal from "./StoriesViewerModal";
 
-const DeliveryZoneMap = dynamic(() => import('./DeliveryZoneMapClient'), { ssr: false });
+const DeliveryZoneMap = dynamic(() => import("./DeliveryZoneMapClient"), {
+  ssr: false,
+});
 
 interface RestaurantsSectionProps {
   db?: any;
@@ -52,16 +54,19 @@ export default function RestaurantsSection({
   const [error, setError] = useState<string | null>(null);
 
   const [selectedRestId, setSelectedRestId] = useState<string | null>(
-    currentRole?.type === "restaurant" ? currentRole.restaurantId : null
+    currentRole?.type === "restaurant" ? currentRole.restaurantId : null,
   );
-  const [fullSelectedRest, setFullSelectedRest] = useState<RestaurantFullResponse | null>(null);
+  const [fullSelectedRest, setFullSelectedRest] =
+    useState<RestaurantFullResponse | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<
     string | null
   >(null);
   const [viewMode, setViewMode] = useState<"merchants" | "applications">(
     "merchants",
   );
-  const [innerTab, setInnerTab] = useState<"overview" | "profile" | "menu" | "orders" | "delivery">("overview");
+  const [innerTab, setInnerTab] = useState<
+    "overview" | "profile" | "menu" | "orders" | "delivery"
+  >("overview");
   const [merchantStatus, setMerchantStatus] = useState<
     "all" | "active" | "suspended"
   >("all");
@@ -75,9 +80,10 @@ export default function RestaurantsSection({
   // Review form states
   const [isReviewing, setIsReviewing] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
-  
+
   // Stories viewer state
-  const [viewingStoriesFor, setViewingStoriesFor] = useState<RestaurantResponse | null>(null);
+  const [viewingStoriesFor, setViewingStoriesFor] =
+    useState<RestaurantResponse | null>(null);
 
   const fetchMerchants = async () => {
     try {
@@ -151,15 +157,20 @@ export default function RestaurantsSection({
 
   useEffect(() => {
     if (selectedRestId && viewMode === "merchants") {
-      restaurantsService.getRestaurantFull(selectedRestId)
+      restaurantsService
+        .getRestaurantFull(selectedRestId)
         .then((data) => setFullSelectedRest(data))
-        .catch((err) => console.error("Failed to fetch full restaurant details:", err));
+        .catch((err) =>
+          console.error("Failed to fetch full restaurant details:", err),
+        );
     } else {
       setFullSelectedRest(null);
     }
   }, [selectedRestId, viewMode]);
 
-  const selectedRest = fullSelectedRest?.restaurant || restaurants.find((r) => r.id === selectedRestId);
+  const selectedRest =
+    fullSelectedRest?.restaurant ||
+    restaurants.find((r) => r.id === selectedRestId);
   const selectedSubmission = submissions.find(
     (s) => s.id === selectedSubmissionId,
   );
@@ -229,7 +240,10 @@ export default function RestaurantsSection({
     }
   };
 
-  const handleToggleFeatured = async (restId: string, isCurrentlyFeatured: boolean) => {
+  const handleToggleFeatured = async (
+    restId: string,
+    isCurrentlyFeatured: boolean,
+  ) => {
     try {
       setIsSubmitting(true);
       if (isCurrentlyFeatured) {
@@ -239,15 +253,18 @@ export default function RestaurantsSection({
         await restaurantsService.markAsFeatured(restId);
         toast.success(`Restaurant featured successfully!`);
       }
-      
+
       // Update selected restaurant state directly for immediate feedback
       if (fullSelectedRest) {
         setFullSelectedRest({
           ...fullSelectedRest,
-          restaurant: { ...fullSelectedRest.restaurant, isFeatured: !isCurrentlyFeatured }
+          restaurant: {
+            ...fullSelectedRest.restaurant,
+            isFeatured: !isCurrentlyFeatured,
+          },
         });
       }
-      
+
       if (viewMode === "merchants") fetchMerchants();
     } catch (err: any) {
       toast.error(`Failed to toggle featured status: ${err.message}`);
@@ -314,7 +331,8 @@ export default function RestaurantsSection({
           <div className="h-40 relative">
             <img
               src={
-                selectedSubmission.backgroundImageUrl || selectedSubmission.coverImage ||
+                selectedSubmission.backgroundImageUrl ||
+                selectedSubmission.coverImage ||
                 "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
               }
               alt={selectedSubmission.name}
@@ -398,16 +416,21 @@ export default function RestaurantsSection({
                       disabled={isSubmitting}
                       className="flex items-center bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                      {isSubmitting && (
+                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      )}
                       Approve Application
                     </button>
                   )}
-                  {(selectedSubmission.status === "pending" || selectedSubmission.status === "approved") && (
+                  {(selectedSubmission.status === "pending" ||
+                    selectedSubmission.status === "approved") && (
                     <button
                       onClick={() => setIsReviewing(true)}
                       className="bg-zinc-800 hover:bg-red-500 hover:text-white text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
                     >
-                      {selectedSubmission.status === "approved" ? "Revoke / Reject" : "Reject Application"}
+                      {selectedSubmission.status === "approved"
+                        ? "Revoke / Reject"
+                        : "Reject Application"}
                     </button>
                   )}
                 </>
@@ -444,7 +467,9 @@ export default function RestaurantsSection({
                 disabled={isSubmitting}
                 className="flex items-center bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                {isSubmitting && (
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                )}
                 Confirm Rejection
               </button>
             </div>
@@ -623,7 +648,8 @@ export default function RestaurantsSection({
           <div className="h-40 relative">
             <img
               src={
-                selectedRest.backgroundImageUrl || selectedRest.coverImage ||
+                selectedRest.backgroundImageUrl ||
+                selectedRest.coverImage ||
                 "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
               }
               alt={selectedRest.name}
@@ -653,17 +679,20 @@ export default function RestaurantsSection({
             <div className="flex gap-4 items-end">
               {selectedRest.logo ? (
                 selectedRest.logo.length > 5 ? (
-                  <button 
+                  <button
                     onClick={(e) => {
-                      if (selectedRest.stories && selectedRest.stories.length > 0) {
+                      if (
+                        selectedRest.stories &&
+                        selectedRest.stories.length > 0
+                      ) {
                         e.stopPropagation();
                         setViewingStoriesFor(selectedRest);
                       }
                     }}
                     className={`relative w-16 h-16 rounded-2xl shadow-xl overflow-hidden bg-zinc-900 border-2 transition-transform ${
-                      selectedRest.stories && selectedRest.stories.length > 0 
-                        ? 'border-orange-500 hover:scale-105 cursor-pointer p-[2px]' 
-                        : 'border-zinc-800'
+                      selectedRest.stories && selectedRest.stories.length > 0
+                        ? "border-orange-500 hover:scale-105 cursor-pointer p-[2px]"
+                        : "border-zinc-800"
                     }`}
                   >
                     <img
@@ -723,7 +752,9 @@ export default function RestaurantsSection({
                 disabled={isSubmitting}
                 className="flex items-center bg-zinc-800 hover:bg-red-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                {isSubmitting && (
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                )}
                 Delete
               </button>
               {selectedRest.status === "active" && (
@@ -734,7 +765,9 @@ export default function RestaurantsSection({
                   disabled={isSubmitting}
                   className="flex items-center bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                  {isSubmitting && (
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  )}
                   Suspend Merchant
                 </button>
               )}
@@ -744,22 +777,33 @@ export default function RestaurantsSection({
                   disabled={isSubmitting}
                   className="flex items-center bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-                  Reactivate Merchant
+                  {isSubmitting && (
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  )}
+                  Make Available
                 </button>
               )}
               {selectedRest.status === "active" && (
                 <button
-                  onClick={() => handleToggleFeatured(selectedRest.id, !!selectedRest.isFeatured)}
+                  onClick={() =>
+                    handleToggleFeatured(
+                      selectedRest.id,
+                      !!selectedRest.isFeatured,
+                    )
+                  }
                   disabled={isSubmitting}
                   className={`flex items-center active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-                    selectedRest.isFeatured 
-                      ? "bg-zinc-700 hover:bg-zinc-800" 
+                    selectedRest.isFeatured
+                      ? "bg-zinc-700 hover:bg-zinc-800"
                       : "bg-purple-600 hover:bg-purple-700 shadow-lg shadow-purple-500/20"
                   }`}
                 >
-                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-                  <Star className={`w-4 h-4 mr-1.5 ${selectedRest.isFeatured ? "opacity-50" : "fill-white"}`} />
+                  {isSubmitting && (
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  )}
+                  <Star
+                    className={`w-4 h-4 mr-1.5 ${selectedRest.isFeatured ? "opacity-50" : "fill-white"}`}
+                  />
                   {selectedRest.isFeatured ? "Unfeature" : "Feature Merchant"}
                 </button>
               )}
@@ -825,8 +869,13 @@ export default function RestaurantsSection({
           <div className="space-y-6 animate-in fade-in duration-200">
             {fullSelectedRest.deliveryZones.length > 0 ? (
               fullSelectedRest.deliveryZones.map((zone) => (
-                <div key={zone.id} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm">
-                  <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">{zone.name}</h3>
+                <div
+                  key={zone.id}
+                  className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm"
+                >
+                  <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">
+                    {zone.name}
+                  </h3>
                   <div className="w-full h-[400px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-950 relative z-0">
                     <DeliveryZoneMap polygon={zone.polygon} />
                   </div>
@@ -835,8 +884,12 @@ export default function RestaurantsSection({
             ) : (
               <div className="text-center py-12 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl">
                 <MapPin className="w-12 h-12 text-zinc-300 mx-auto mb-3" />
-                <h3 className="text-lg font-bold text-zinc-900 dark:text-white">No Delivery Zones Setup</h3>
-                <p className="text-zinc-500 text-sm">This restaurant hasn't configured any delivery zones yet.</p>
+                <h3 className="text-lg font-bold text-zinc-900 dark:text-white">
+                  No Delivery Zones Setup
+                </h3>
+                <p className="text-zinc-500 text-sm">
+                  This restaurant hasn't configured any delivery zones yet.
+                </p>
               </div>
             )}
           </div>
@@ -845,60 +898,60 @@ export default function RestaurantsSection({
         {innerTab === "overview" && (
           <div className="space-y-6 animate-in fade-in duration-200">
             {/* Info Grid (Summary Payouts + Documents Verification) */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
-            <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl">
-              <DollarSign className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                Gross Income
-              </p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">
-                $
-                {(selectedRest.revenue || 0).toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                })}
-              </p>
-            </div>
-          </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
+                <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl">
+                  <DollarSign className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    Gross Income
+                  </p>
+                  <p className="text-lg font-black text-zinc-900 dark:text-white">
+                    $
+                    {(selectedRest.revenue || 0).toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                    })}
+                  </p>
+                </div>
+              </div>
 
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
-            <div className="p-3 bg-orange-500/10 text-orange-600 dark:text-orange-400 rounded-xl">
-              <ShoppingBag className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                Total Sales Orders
-              </p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">
-                {selectedRest.ordersCount || 0} Orders
-              </p>
-            </div>
-          </div>
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
+                <div className="p-3 bg-orange-500/10 text-orange-600 dark:text-orange-400 rounded-xl">
+                  <ShoppingBag className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    Total Sales Orders
+                  </p>
+                  <p className="text-lg font-black text-zinc-900 dark:text-white">
+                    {selectedRest.ordersCount || 0} Orders
+                  </p>
+                </div>
+              </div>
 
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
-            <div className="p-3 bg-amber-500/10 text-amber-500 rounded-xl">
-              <Star className="w-5 h-5 fill-amber-500" />
-            </div>
-            <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                Review Rating
-              </p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">
-                {selectedRest.rating || 0} ★{" "}
-                <span className="text-xs font-normal text-zinc-400">
-                  (
-                  {selectedRest.reviewsCount ||
-                    (selectedRest as any).totalRatings ||
-                    0}{" "}
-                  votes)
-                </span>
-              </p>
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
+                <div className="p-3 bg-amber-500/10 text-amber-500 rounded-xl">
+                  <Star className="w-5 h-5 fill-amber-500" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    Review Rating
+                  </p>
+                  <p className="text-lg font-black text-zinc-900 dark:text-white">
+                    {selectedRest.rating || 0} ★{" "}
+                    <span className="text-xs font-normal text-zinc-400">
+                      (
+                      {selectedRest.reviewsCount ||
+                        (selectedRest as any).totalRatings ||
+                        0}{" "}
+                      votes)
+                    </span>
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-        </div>
         )}
 
         {innerTab === "profile" && (
@@ -912,25 +965,44 @@ export default function RestaurantsSection({
                 </h4>
                 <div className="space-y-3 text-sm">
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Email</span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">{selectedRest.email}</span>
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                      Email
+                    </span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+                      {selectedRest.email}
+                    </span>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Phone</span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">{selectedRest.phone}</span>
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                      Phone
+                    </span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+                      {selectedRest.phone}
+                    </span>
                   </div>
                   {selectedRest.website && (
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Website</span>
-                      <a href={selectedRest.website} target="_blank" rel="noreferrer" className="font-semibold text-blue-500 hover:underline">
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                        Website
+                      </span>
+                      <a
+                        href={selectedRest.website}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-semibold text-blue-500 hover:underline"
+                      >
                         {selectedRest.website}
                       </a>
                     </div>
                   )}
                   {selectedRest.description && (
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Description</span>
-                      <span className="text-zinc-600 dark:text-zinc-400 text-xs leading-relaxed">{selectedRest.description}</span>
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                        Description
+                      </span>
+                      <span className="text-zinc-600 dark:text-zinc-400 text-xs leading-relaxed">
+                        {selectedRest.description}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -944,21 +1016,37 @@ export default function RestaurantsSection({
                 </h4>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Cuisine Type</span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200 capitalize">{selectedRest.cuisineType}</span>
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                      Cuisine Type
+                    </span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200 capitalize">
+                      {selectedRest.cuisineType}
+                    </span>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Delivery Fee</span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">${selectedRest.deliveryFee?.toFixed(2)}</span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Est. Delivery</span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">{selectedRest.estimatedDeliveryMinutes} mins</span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Joined Date</span>
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                      Delivery Fee
+                    </span>
                     <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      {selectedRest.joinedDate ? new Date(selectedRest.joinedDate).toLocaleDateString() : "—"}
+                      ${selectedRest.deliveryFee?.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                      Est. Delivery
+                    </span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+                      {selectedRest.estimatedDeliveryMinutes} mins
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                      Joined Date
+                    </span>
+                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+                      {selectedRest.joinedDate
+                        ? new Date(selectedRest.joinedDate).toLocaleDateString()
+                        : "—"}
                     </span>
                   </div>
                 </div>
@@ -966,13 +1054,24 @@ export default function RestaurantsSection({
                 {/* Opening Hours */}
                 {selectedRest.openingHours?.entries && (
                   <div className="mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-800">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide block mb-2">Opening Hours</span>
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide block mb-2">
+                      Opening Hours
+                    </span>
                     <div className="space-y-1.5 text-xs">
                       {selectedRest.openingHours.entries.map((entry, idx) => (
-                        <div key={idx} className="flex justify-between items-center">
-                          <span className="capitalize font-medium text-zinc-600 dark:text-zinc-400 w-24">{entry.day}</span>
+                        <div
+                          key={idx}
+                          className="flex justify-between items-center"
+                        >
+                          <span className="capitalize font-medium text-zinc-600 dark:text-zinc-400 w-24">
+                            {entry.day}
+                          </span>
                           <span className="font-bold text-zinc-800 dark:text-zinc-200">
-                            {entry.is24Hours ? "24 Hours" : entry.openTime && entry.closeTime ? `${entry.openTime} - ${entry.closeTime}` : "Closed"}
+                            {entry.is24Hours
+                              ? "24 Hours"
+                              : entry.openTime && entry.closeTime
+                                ? `${entry.openTime} - ${entry.closeTime}`
+                                : "Closed"}
                           </span>
                         </div>
                       ))}
@@ -990,12 +1089,20 @@ export default function RestaurantsSection({
                 <div className="flex flex-col md:flex-row gap-6">
                   <div className="flex-1 space-y-3 text-sm">
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">City</span>
-                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">{selectedRest.city}</span>
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                        City
+                      </span>
+                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+                        {selectedRest.city}
+                      </span>
                     </div>
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Address</span>
-                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">{selectedRest.address}</span>
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                        Address
+                      </span>
+                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+                        {selectedRest.address}
+                      </span>
                     </div>
                   </div>
                   {selectedRest.latitude && selectedRest.longitude && (
@@ -1028,13 +1135,24 @@ export default function RestaurantsSection({
 
         {innerTab === "orders" && (
           <div className="animate-in fade-in duration-200 border-t border-zinc-200 dark:border-zinc-800 pt-4">
-            <OrdersSection 
-              searchQuery="" 
-              restaurantId={selectedRest.id} 
+            <OrdersSection
+              searchQuery=""
+              restaurantId={selectedRest.id}
               isOwnerView={currentRole?.type === "restaurant"}
             />
           </div>
         )}
+
+        {/* Edit Restaurant Modal */}
+        <EditRestaurantModal
+          isOpen={isEditModalOpen}
+          onClose={() => setIsEditModalOpen(false)}
+          restaurant={selectedRest || null}
+          onSuccess={() => {
+            setIsEditModalOpen(false);
+            fetchMerchants();
+          }}
+        />
       </div>
     );
   }
@@ -1182,7 +1300,8 @@ export default function RestaurantsSection({
                 <div className="h-32 relative">
                   <img
                     src={
-                      (item as any).backgroundImageUrl || item.coverImage ||
+                      (item as any).backgroundImageUrl ||
+                      item.coverImage ||
                       "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
                     }
                     alt={item.name}
@@ -1215,17 +1334,23 @@ export default function RestaurantsSection({
                       {item.logo &&
                       typeof item.logo === "string" &&
                       item.logo.length > 5 ? (
-                        <button 
+                        <button
                           onClick={(e) => {
-                            if (!isSub && (item as any).stories && (item as any).stories.length > 0) {
+                            if (
+                              !isSub &&
+                              (item as any).stories &&
+                              (item as any).stories.length > 0
+                            ) {
                               e.stopPropagation();
                               setViewingStoriesFor(item as any);
                             }
                           }}
                           className={`w-11 h-11 rounded-xl shadow-sm overflow-hidden bg-zinc-50 dark:bg-zinc-800 border-2 shrink-0 transition-transform ${
-                            !isSub && (item as any).stories && (item as any).stories.length > 0
-                              ? 'border-orange-500 hover:scale-110 cursor-pointer p-[1.5px]'
-                              : 'border-zinc-200 dark:border-zinc-700'
+                            !isSub &&
+                            (item as any).stories &&
+                            (item as any).stories.length > 0
+                              ? "border-orange-500 hover:scale-110 cursor-pointer p-[1.5px]"
+                              : "border-zinc-200 dark:border-zinc-700"
                           }`}
                         >
                           <img
@@ -1363,7 +1488,7 @@ export default function RestaurantsSection({
         }}
       />
       {/* Stories Viewer Modal */}
-      <StoriesViewerModal 
+      <StoriesViewerModal
         isOpen={!!viewingStoriesFor}
         onClose={() => setViewingStoriesFor(null)}
         restaurant={viewingStoriesFor}

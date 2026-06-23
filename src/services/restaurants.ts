@@ -1,4 +1,4 @@
-import { apiClient } from './apiClient';
+import { apiClient } from "./apiClient";
 
 export interface OpeningHourEntry {
   day: string;
@@ -28,6 +28,17 @@ export interface RestaurantCreate {
   };
   status?: string;
   isFeatured?: boolean;
+  ownerFullName?: string;
+  ownerPhoneNumber?: string;
+  deliveryTimeMinMinutes?: number;
+  deliveryTimeMaxMinutes?: number;
+  restaurantAddress?: {
+    city: string;
+    street: string;
+    building?: string;
+    latitude: number;
+    longitude: number;
+  };
 }
 
 export type RestaurantUpdate = Partial<RestaurantCreate>;
@@ -105,7 +116,7 @@ export interface RestaurantSubmission {
   openingHours?: OpeningHourEntry[] | null;
   address?: SubmissionAddress | null;
   categoryIds?: string[];
-  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  status: "pending" | "approved" | "rejected" | "cancelled";
   rejectionReason?: string | null;
   restaurantId?: string | null;
   createdAt?: string;
@@ -119,8 +130,8 @@ export const restaurantsService = {
    * Get all restaurants
    */
   getRestaurants: () => {
-    return apiClient<RestaurantResponse[]>('/api/v1/restaurants', {
-      method: 'GET',
+    return apiClient<RestaurantResponse[]>("/api/v1/restaurants", {
+      method: "GET",
     });
   },
 
@@ -129,7 +140,7 @@ export const restaurantsService = {
    */
   getRestaurantById: (id: string) => {
     return apiClient<RestaurantResponse>(`/api/v1/restaurants/${id}`, {
-      method: 'GET',
+      method: "GET",
     });
   },
 
@@ -137,8 +148,8 @@ export const restaurantsService = {
    * Create a restaurant (admin)
    */
   createRestaurant: (data: RestaurantCreate) => {
-    return apiClient<RestaurantResponse>('/api/v1/restaurants', {
-      method: 'POST',
+    return apiClient<RestaurantResponse>("/api/v1/restaurants", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   },
@@ -148,7 +159,7 @@ export const restaurantsService = {
    */
   updateRestaurant: (id: string, data: RestaurantUpdate) => {
     return apiClient<void>(`/api/v1/restaurants/${id}`, {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify(data),
     });
   },
@@ -159,7 +170,7 @@ export const restaurantsService = {
    */
   deleteRestaurant: (id: string) => {
     return apiClient<void>(`/api/v1/restaurants/${id}`, {
-      method: 'DELETE',
+      method: "DELETE",
     });
   },
 
@@ -169,7 +180,7 @@ export const restaurantsService = {
    */
   markAsFeatured: (id: string) => {
     return apiClient<void>(`/api/v1/restaurants/${id}/featured`, {
-      method: 'PUT',
+      method: "PUT",
     });
   },
 
@@ -179,7 +190,7 @@ export const restaurantsService = {
    */
   removeFeatured: (id: string) => {
     return apiClient<void>(`/api/v1/restaurants/${id}/featured`, {
-      method: 'DELETE',
+      method: "DELETE",
     });
   },
 
@@ -188,7 +199,7 @@ export const restaurantsService = {
    */
   reviewRestaurant: (id: string, data: RestaurantReview) => {
     return apiClient<void>(`/api/v1/restaurants/${id}/review`, {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify(data),
     });
   },
@@ -197,18 +208,23 @@ export const restaurantsService = {
    * Get all restaurant applications (admin)
    * GET /api/v1/restaurants/submissions
    */
-  getSubmissions: (params?: { status?: string; page?: number; limit?: number }) => {
-    let query = '';
+  getSubmissions: (params?: {
+    status?: string;
+    page?: number;
+    limit?: number;
+  }) => {
+    let query = "";
     if (params) {
       const searchParams = new URLSearchParams();
-      if (params.status && params.status !== 'all') searchParams.append('status', params.status);
-      if (params.page) searchParams.append('page', params.page.toString());
-      if (params.limit) searchParams.append('limit', params.limit.toString());
+      if (params.status && params.status !== "all")
+        searchParams.append("status", params.status);
+      if (params.page) searchParams.append("page", params.page.toString());
+      if (params.limit) searchParams.append("limit", params.limit.toString());
       const str = searchParams.toString();
       if (str) query = `?${str}`;
     }
     return apiClient<any>(`/api/v1/restaurants/submissions${query}`, {
-      method: 'GET',
+      method: "GET",
     });
   },
 
@@ -218,7 +234,7 @@ export const restaurantsService = {
    */
   reviewSubmission: (id: string, data: RestaurantReview) => {
     return apiClient<void>(`/api/v1/restaurants/submissions/${id}/review`, {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify(data),
     });
   },
@@ -228,8 +244,8 @@ export const restaurantsService = {
    * POST /api/v1/restaurants/me/apply
    */
   applyRestaurant: (data: RestaurantApplyPayload) => {
-    return apiClient<RestaurantSubmission>('/api/v1/restaurants/me/apply', {
-      method: 'POST',
+    return apiClient<RestaurantSubmission>("/api/v1/restaurants/me/apply", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   },
@@ -239,8 +255,8 @@ export const restaurantsService = {
    * PATCH /api/v1/restaurants/me/submission/cancel
    */
   cancelMySubmission: () => {
-    return apiClient<void>('/api/v1/restaurants/me/submission/cancel', {
-      method: 'PATCH',
+    return apiClient<void>("/api/v1/restaurants/me/submission/cancel", {
+      method: "PATCH",
     });
   },
 
@@ -249,27 +265,33 @@ export const restaurantsService = {
    * GET /api/v1/restaurants/me/submission
    */
   getMySubmission: () => {
-    return apiClient<RestaurantSubmission>('/api/v1/restaurants/me/submission', {
-      method: 'GET',
-    });
+    return apiClient<RestaurantSubmission>(
+      "/api/v1/restaurants/me/submission",
+      {
+        method: "GET",
+      },
+    );
   },
 
   /**
    * Edit own pending restaurant submission (partial update)
    */
   updateMySubmission: (data: Partial<RestaurantSubmission>) => {
-    return apiClient<RestaurantSubmission>('/api/v1/restaurants/me/submission', {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    });
+    return apiClient<RestaurantSubmission>(
+      "/api/v1/restaurants/me/submission",
+      {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      },
+    );
   },
 
   /**
    * Get own restaurant profile
    */
   getMyRestaurant: () => {
-    return apiClient<RestaurantResponse>('/api/v1/restaurants/me', {
-      method: 'GET',
+    return apiClient<RestaurantResponse>("/api/v1/restaurants/me", {
+      method: "GET",
     });
   },
 
@@ -277,8 +299,8 @@ export const restaurantsService = {
    * Update own restaurant info
    */
   updateMyRestaurant: (data: RestaurantUpdate) => {
-    return apiClient<RestaurantResponse>('/api/v1/restaurants/me', {
-      method: 'PATCH',
+    return apiClient<RestaurantResponse>("/api/v1/restaurants/me", {
+      method: "PATCH",
       body: JSON.stringify(data),
     });
   },
@@ -287,8 +309,8 @@ export const restaurantsService = {
    * Get current restaurant address (owner)
    */
   getMyAddress: () => {
-    return apiClient<SubmissionAddress>('/api/v1/restaurants/me/address', {
-      method: 'GET',
+    return apiClient<SubmissionAddress>("/api/v1/restaurants/me/address", {
+      method: "GET",
     });
   },
 
@@ -296,8 +318,8 @@ export const restaurantsService = {
    * Create or replace restaurant address (owner)
    */
   createMyAddress: (data: SubmissionAddress) => {
-    return apiClient<SubmissionAddress>('/api/v1/restaurants/me/address', {
-      method: 'POST',
+    return apiClient<SubmissionAddress>("/api/v1/restaurants/me/address", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   },
@@ -306,8 +328,8 @@ export const restaurantsService = {
    * Update a restaurant address (owner)
    */
   updateMyAddress: (data: Partial<SubmissionAddress>) => {
-    return apiClient<SubmissionAddress>('/api/v1/restaurants/me/address', {
-      method: 'PATCH',
+    return apiClient<SubmissionAddress>("/api/v1/restaurants/me/address", {
+      method: "PATCH",
       body: JSON.stringify(data),
     });
   },
@@ -316,8 +338,8 @@ export const restaurantsService = {
    * Delete a restaurant address (owner)
    */
   deleteMyAddress: () => {
-    return apiClient<void>('/api/v1/restaurants/me/address', {
-      method: 'DELETE',
+    return apiClient<void>("/api/v1/restaurants/me/address", {
+      method: "DELETE",
     });
   },
 
@@ -326,7 +348,7 @@ export const restaurantsService = {
    */
   getRestaurantFull: (id: string) => {
     return apiClient<RestaurantFullResponse>(`/api/v1/restaurants/${id}/full`, {
-      method: 'GET',
+      method: "GET",
     });
   },
 
@@ -335,7 +357,7 @@ export const restaurantsService = {
    */
   getRestaurantMenu: (id: string) => {
     return apiClient<any[]>(`/api/v1/restaurants/${id}/menu`, {
-      method: 'GET',
+      method: "GET",
     });
   },
 
@@ -344,7 +366,7 @@ export const restaurantsService = {
    */
   rateRestaurant: (id: string, data: { rating: number; review?: string }) => {
     return apiClient<void>(`/api/v1/restaurants/${id}/rating`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(data),
     });
   },
@@ -353,8 +375,11 @@ export const restaurantsService = {
    * Get own rating for a restaurant (customer)
    */
   getMyRating: (id: string) => {
-    return apiClient<{ rating: number; review?: string }>(`/api/v1/restaurants/${id}/rating/me`, {
-      method: 'GET',
-    });
-  }
+    return apiClient<{ rating: number; review?: string }>(
+      `/api/v1/restaurants/${id}/rating/me`,
+      {
+        method: "GET",
+      },
+    );
+  },
 };

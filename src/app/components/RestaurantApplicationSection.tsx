@@ -1,32 +1,37 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { 
-  Store, 
-  Send, 
-  X, 
-  ShieldAlert, 
-  CheckCircle2, 
-  ChevronRight, 
-  ChevronLeft, 
-  MapPin, 
-  DollarSign, 
-  Clock, 
-  HelpCircle, 
-  Loader2, 
-  AlertCircle, 
-  Info, 
-  Calendar, 
-  Sparkles, 
-  Plus, 
+import {
+  Store,
+  Send,
+  X,
+  ShieldAlert,
+  CheckCircle2,
+  ChevronRight,
+  ChevronLeft,
+  MapPin,
+  DollarSign,
+  Clock,
+  HelpCircle,
+  Loader2,
+  AlertCircle,
+  Info,
+  Calendar,
+  Sparkles,
+  Plus,
   Trash,
   Phone,
   Mail,
   Globe,
-  FileImage
+  FileImage,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { restaurantsService, RestaurantSubmission, RestaurantCreate, OpeningHourEntry } from "../../services/restaurants";
+import {
+  restaurantsService,
+  RestaurantSubmission,
+  RestaurantCreate,
+  OpeningHourEntry,
+} from "../../services/restaurants";
 
 interface RestaurantApplicationSectionProps {
   onRefreshSubmissionStatus: () => void;
@@ -35,9 +40,11 @@ interface RestaurantApplicationSectionProps {
 
 export default function RestaurantApplicationSection({
   onRefreshSubmissionStatus,
-  initialSubmission
+  initialSubmission,
 }: RestaurantApplicationSectionProps) {
-  const [submission, setSubmission] = useState<RestaurantSubmission | null>(initialSubmission);
+  const [submission, setSubmission] = useState<RestaurantSubmission | null>(
+    initialSubmission,
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -63,15 +70,50 @@ export default function RestaurantApplicationSection({
     longitude: 46.6753,
     openingHours: {
       entries: [
-        { day: "Monday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-        { day: "Tuesday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-        { day: "Wednesday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-        { day: "Thursday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-        { day: "Friday", is24Hours: true, openTime: "00:00", closeTime: "00:00" },
-        { day: "Saturday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-        { day: "Sunday", is24Hours: false, openTime: "08:00", closeTime: "23:00" }
-      ]
-    }
+        {
+          day: "Monday",
+          is24Hours: false,
+          openTime: "08:00",
+          closeTime: "23:00",
+        },
+        {
+          day: "Tuesday",
+          is24Hours: false,
+          openTime: "08:00",
+          closeTime: "23:00",
+        },
+        {
+          day: "Wednesday",
+          is24Hours: false,
+          openTime: "08:00",
+          closeTime: "23:00",
+        },
+        {
+          day: "Thursday",
+          is24Hours: false,
+          openTime: "08:00",
+          closeTime: "23:00",
+        },
+        {
+          day: "Friday",
+          is24Hours: true,
+          openTime: "00:00",
+          closeTime: "00:00",
+        },
+        {
+          day: "Saturday",
+          is24Hours: false,
+          openTime: "08:00",
+          closeTime: "23:00",
+        },
+        {
+          day: "Sunday",
+          is24Hours: false,
+          openTime: "08:00",
+          closeTime: "23:00",
+        },
+      ],
+    },
   });
 
   useEffect(() => {
@@ -97,8 +139,11 @@ export default function RestaurantApplicationSection({
   };
 
   const handleApplyClick = () => {
-    if (submission && submission.status === "rejected") {
-      // Pre-fill from rejected submission to make editing and re-submitting ultra premium and convenient
+    if (
+      submission &&
+      (submission.status === "rejected" || submission.status === "pending")
+    ) {
+      // Pre-fill from existing submission to make editing convenient
       setFormData({
         name: submission.name || "",
         description: submission.description || "",
@@ -116,7 +161,7 @@ export default function RestaurantApplicationSection({
         longitude: submission.address?.longitude || 46.6753,
         openingHours: submission.openingHours
           ? { entries: submission.openingHours }
-          : formData.openingHours
+          : formData.openingHours,
       });
     }
     setIsApplying(true);
@@ -124,7 +169,12 @@ export default function RestaurantApplicationSection({
   };
 
   const handleCancelApplication = async () => {
-    if (!confirm("Are you sure you want to cancel your pending restaurant application?")) return;
+    if (
+      !confirm(
+        "Are you sure you want to cancel your pending restaurant application?",
+      )
+    )
+      return;
     try {
       setIsLoading(true);
       await restaurantsService.cancelMySubmission();
@@ -138,39 +188,58 @@ export default function RestaurantApplicationSection({
     }
   };
 
-  const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+  const handleFormChange = (
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+    >,
+  ) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      [name]: name === "deliveryFee" || name === "estimatedDeliveryMinutes" || name === "latitude" || name === "longitude" 
-        ? parseFloat(value) || 0 
-        : value
+      [name]:
+        name === "deliveryFee" ||
+        name === "estimatedDeliveryMinutes" ||
+        name === "latitude" ||
+        name === "longitude"
+          ? parseFloat(value) || 0
+          : value,
     }));
   };
 
-  const handleHoursChange = (index: number, field: keyof OpeningHourEntry, value: any) => {
+  const handleHoursChange = (
+    index: number,
+    field: keyof OpeningHourEntry,
+    value: any,
+  ) => {
     const entries = [...(formData.openingHours?.entries || [])];
     entries[index] = {
       ...entries[index],
-      [field]: value
+      [field]: value,
     };
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      openingHours: { entries }
+      openingHours: { entries },
     }));
   };
 
   const handleNextStep = () => {
     // Basic validation per step
     if (currentStep === 1) {
-      if (!formData.name.trim() || !formData.cuisineType.trim() || !formData.email.trim() || !formData.phone.trim()) {
+      if (
+        !formData.name.trim() ||
+        !formData.cuisineType.trim() ||
+        !formData.email.trim() ||
+        !formData.phone.trim()
+      ) {
         toast.error("Please fill out all required fields marked with *");
         return;
       }
     }
     if (currentStep === 2) {
       if (!formData.logo?.trim() || !formData.coverImage?.trim()) {
-        toast.error("Please provide valid URLs for both the Logo and Cover Banner");
+        toast.error(
+          "Please provide valid URLs for both the Logo and Cover Banner",
+        );
         return;
       }
     }
@@ -180,26 +249,50 @@ export default function RestaurantApplicationSection({
         return;
       }
     }
-    setCurrentStep(prev => prev + 1);
+    setCurrentStep((prev) => prev + 1);
   };
 
   const handlePrevStep = () => {
-    setCurrentStep(prev => prev - 1);
+    setCurrentStep((prev) => prev - 1);
   };
 
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       setIsSubmitting(true);
-      
-      await restaurantsService.applyRestaurant(formData);
+      if (submission && submission.status === "pending") {
+        const updatePayload: Partial<RestaurantSubmission> = {
+          name: formData.name,
+          description: formData.description,
+          logo: formData.logo,
+          coverImage: formData.coverImage,
+          email: formData.email,
+          phone: formData.phone,
+          website: formData.website,
+          cuisineType: formData.cuisineType,
+          deliveryFee: formData.deliveryFee,
+          estimatedDeliveryMinutes: formData.estimatedDeliveryMinutes,
+          openingHours: formData.openingHours?.entries || [],
+          address: {
+            city: formData.city,
+            street: formData.address,
+            latitude: formData.latitude,
+            longitude: formData.longitude,
+          },
+        };
+        await restaurantsService.updateMySubmission(updatePayload);
+      } else {
+        await restaurantsService.applyRestaurant(formData);
+      }
       setIsApplying(false);
       await loadStatus();
       toast.success("Application submitted successfully!");
       onRefreshSubmissionStatus();
     } catch (err: any) {
       console.error("Submission failed:", err);
-      toast.error(`Application submission failed: ${err.message || 'Unknown error'}`);
+      toast.error(
+        `Application submission failed: ${err.message || "Unknown error"}`,
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -220,34 +313,40 @@ export default function RestaurantApplicationSection({
       <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300">
         {/* Progress Bar & Header */}
         <div className="bg-gradient-to-r from-orange-500 via-orange-600 to-amber-600 p-6 text-white relative">
-          <button 
+          <button
             type="button"
             onClick={() => setIsApplying(false)}
             className="absolute top-4 right-4 text-white/80 hover:text-white bg-black/10 hover:bg-black/20 p-2 rounded-full transition-all"
           >
             <X className="w-4 h-4" />
           </button>
-          
+
           <div className="flex items-center gap-3">
             <div className="p-2.5 bg-white/10 rounded-2xl">
               <Store className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="text-lg font-black tracking-tight">Restaurant Partner Application</h3>
-              <p className="text-xs text-orange-100">Step {currentStep} of 4: {
-                currentStep === 1 ? "General Information" :
-                currentStep === 2 ? "Branding & Operations" :
-                currentStep === 3 ? "Location Details" :
-                "Opening Hours & Review"
-              }</p>
+              <h3 className="text-lg font-black tracking-tight">
+                Restaurant Partner Application
+              </h3>
+              <p className="text-xs text-orange-100">
+                Step {currentStep} of 4:{" "}
+                {currentStep === 1
+                  ? "General Information"
+                  : currentStep === 2
+                    ? "Branding & Operations"
+                    : currentStep === 3
+                      ? "Location Details"
+                      : "Opening Hours & Review"}
+              </p>
             </div>
           </div>
 
           {/* Stepper bar */}
           <div className="flex gap-2 mt-6">
-            {[1, 2, 3, 4].map(step => (
-              <div 
-                key={step} 
+            {[1, 2, 3, 4].map((step) => (
+              <div
+                key={step}
                 className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${
                   step <= currentStep ? "bg-white" : "bg-white/20"
                 }`}
@@ -257,15 +356,16 @@ export default function RestaurantApplicationSection({
         </div>
 
         <form onSubmit={handleFormSubmit} className="p-8 space-y-6">
-
           {/* STEP 1: GENERAL INFO */}
           {currentStep === 1 && (
             <div className="space-y-4 animate-in fade-in duration-200">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Restaurant Name *</label>
-                  <input 
-                    type="text" 
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Restaurant Name *
+                  </label>
+                  <input
+                    type="text"
                     name="name"
                     required
                     value={formData.name}
@@ -275,9 +375,11 @@ export default function RestaurantApplicationSection({
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Cuisine Type *</label>
-                  <input 
-                    type="text" 
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Cuisine Type *
+                  </label>
+                  <input
+                    type="text"
                     name="cuisineType"
                     required
                     value={formData.cuisineType}
@@ -289,8 +391,10 @@ export default function RestaurantApplicationSection({
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Description</label>
-                <textarea 
+                <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                  Description
+                </label>
+                <textarea
                   name="description"
                   value={formData.description}
                   onChange={handleFormChange}
@@ -301,11 +405,13 @@ export default function RestaurantApplicationSection({
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Contact Email *</label>
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Contact Email *
+                  </label>
                   <div className="relative">
                     <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400" />
-                    <input 
-                      type="email" 
+                    <input
+                      type="email"
                       name="email"
                       required
                       value={formData.email}
@@ -316,11 +422,13 @@ export default function RestaurantApplicationSection({
                   </div>
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Contact Phone *</label>
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Contact Phone *
+                  </label>
                   <div className="relative">
                     <Phone className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400" />
-                    <input 
-                      type="tel" 
+                    <input
+                      type="tel"
                       name="phone"
                       required
                       value={formData.phone}
@@ -331,11 +439,13 @@ export default function RestaurantApplicationSection({
                   </div>
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Website (Optional)</label>
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Website (Optional)
+                  </label>
                   <div className="relative">
                     <Globe className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400" />
-                    <input 
-                      type="url" 
+                    <input
+                      type="url"
                       name="website"
                       value={formData.website}
                       onChange={handleFormChange}
@@ -353,11 +463,13 @@ export default function RestaurantApplicationSection({
             <div className="space-y-4 animate-in fade-in duration-200">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Logo URL *</label>
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Logo URL *
+                  </label>
                   <div className="relative">
                     <FileImage className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400" />
-                    <input 
-                      type="url" 
+                    <input
+                      type="url"
                       name="logo"
                       required
                       value={formData.logo}
@@ -366,14 +478,19 @@ export default function RestaurantApplicationSection({
                       className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 focus:border-orange-500 focus:outline-none text-zinc-950 dark:text-zinc-50 text-sm rounded-xl pl-10 pr-3 py-3"
                     />
                   </div>
-                  <span className="text-[10px] text-zinc-400 mt-1 block">You can use direct image links from Unsplash or other hosting sites.</span>
+                  <span className="text-[10px] text-zinc-400 mt-1 block">
+                    You can use direct image links from Unsplash or other
+                    hosting sites.
+                  </span>
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Cover Banner URL *</label>
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Cover Banner URL *
+                  </label>
                   <div className="relative">
                     <FileImage className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400" />
-                    <input 
-                      type="url" 
+                    <input
+                      type="url"
                       name="coverImage"
                       required
                       value={formData.coverImage}
@@ -382,17 +499,21 @@ export default function RestaurantApplicationSection({
                       className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 focus:border-orange-500 focus:outline-none text-zinc-950 dark:text-zinc-50 text-sm rounded-xl pl-10 pr-3 py-3"
                     />
                   </div>
-                  <span className="text-[10px] text-zinc-400 mt-1 block">Recommended size: 1200 x 400 pixels.</span>
+                  <span className="text-[10px] text-zinc-400 mt-1 block">
+                    Recommended size: 1200 x 400 pixels.
+                  </span>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Delivery Fee ($) *</label>
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Delivery Fee ($) *
+                  </label>
                   <div className="relative">
                     <DollarSign className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400" />
-                    <input 
-                      type="number" 
+                    <input
+                      type="number"
                       name="deliveryFee"
                       step="0.5"
                       min="0"
@@ -404,11 +525,13 @@ export default function RestaurantApplicationSection({
                   </div>
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Estimated Delivery Time (Mins) *</label>
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Estimated Delivery Time (Mins) *
+                  </label>
                   <div className="relative">
                     <Clock className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400" />
-                    <input 
-                      type="number" 
+                    <input
+                      type="number"
                       name="estimatedDeliveryMinutes"
                       min="5"
                       required
@@ -427,8 +550,10 @@ export default function RestaurantApplicationSection({
             <div className="space-y-4 animate-in fade-in duration-200">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-1">
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">City *</label>
-                  <select 
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    City *
+                  </label>
+                  <select
                     name="city"
                     value={formData.city}
                     onChange={handleFormChange}
@@ -442,9 +567,11 @@ export default function RestaurantApplicationSection({
                   </select>
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Physical Street Address *</label>
-                  <input 
-                    type="text" 
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Physical Street Address *
+                  </label>
+                  <input
+                    type="text"
                     name="address"
                     required
                     value={formData.address}
@@ -457,9 +584,11 @@ export default function RestaurantApplicationSection({
 
               <div className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-850 p-4 rounded-2xl grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-zinc-400 uppercase mb-1">Latitude Coordinate</label>
-                  <input 
-                    type="number" 
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase mb-1">
+                    Latitude Coordinate
+                  </label>
+                  <input
+                    type="number"
                     step="0.000001"
                     name="latitude"
                     value={formData.latitude}
@@ -468,9 +597,11 @@ export default function RestaurantApplicationSection({
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-zinc-400 uppercase mb-1">Longitude Coordinate</label>
-                  <input 
-                    type="number" 
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase mb-1">
+                    Longitude Coordinate
+                  </label>
+                  <input
+                    type="number"
                     step="0.000001"
                     name="longitude"
                     value={formData.longitude}
@@ -486,17 +617,30 @@ export default function RestaurantApplicationSection({
           {currentStep === 4 && (
             <div className="space-y-6 animate-in fade-in duration-200">
               <div>
-                <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Configure Weekly Opening Hours</label>
+                <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-2">
+                  Configure Weekly Opening Hours
+                </label>
                 <div className="space-y-2.5 max-h-[220px] overflow-y-auto pr-2 border border-zinc-100 dark:border-zinc-850 rounded-xl p-3 bg-zinc-50 dark:bg-zinc-950 custom-scrollbar">
                   {(formData.openingHours?.entries || []).map((entry, idx) => (
-                    <div key={idx} className="flex flex-wrap items-center gap-3 py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 last:border-b-0 text-xs">
-                      <span className="font-extrabold w-20 text-zinc-700 dark:text-zinc-300">{entry.day}</span>
-                      
+                    <div
+                      key={idx}
+                      className="flex flex-wrap items-center gap-3 py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 last:border-b-0 text-xs"
+                    >
+                      <span className="font-extrabold w-20 text-zinc-700 dark:text-zinc-300">
+                        {entry.day}
+                      </span>
+
                       <label className="flex items-center gap-1.5 text-zinc-500 cursor-pointer">
-                        <input 
-                          type="checkbox" 
+                        <input
+                          type="checkbox"
                           checked={entry.is24Hours}
-                          onChange={e => handleHoursChange(idx, "is24Hours", e.target.checked)}
+                          onChange={(e) =>
+                            handleHoursChange(
+                              idx,
+                              "is24Hours",
+                              e.target.checked,
+                            )
+                          }
                           className="accent-orange-500"
                         />
                         <span>24h Open</span>
@@ -504,19 +648,27 @@ export default function RestaurantApplicationSection({
 
                       {!entry.is24Hours && (
                         <div className="flex items-center gap-2 ml-auto">
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             placeholder="08:00"
                             value={entry.openTime || ""}
-                            onChange={e => handleHoursChange(idx, "openTime", e.target.value)}
+                            onChange={(e) =>
+                              handleHoursChange(idx, "openTime", e.target.value)
+                            }
                             className="w-16 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded p-1 text-center font-semibold text-xs text-zinc-700 dark:text-zinc-300"
                           />
                           <span>to</span>
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             placeholder="23:00"
                             value={entry.closeTime || ""}
-                            onChange={e => handleHoursChange(idx, "closeTime", e.target.value)}
+                            onChange={(e) =>
+                              handleHoursChange(
+                                idx,
+                                "closeTime",
+                                e.target.value,
+                              )
+                            }
                             className="w-16 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded p-1 text-center font-semibold text-xs text-zinc-700 dark:text-zinc-300"
                           />
                         </div>
@@ -533,7 +685,9 @@ export default function RestaurantApplicationSection({
                   Ready to submit your application!
                 </h4>
                 <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  By submitting this form, you verify that you own this restaurant business and all coordinate locations are correct. Administrators will review your submission within 24-48 hours.
+                  By submitting this form, you verify that you own this
+                  restaurant business and all coordinate locations are correct.
+                  Administrators will review your submission within 24-48 hours.
                 </p>
               </div>
             </div>
@@ -542,8 +696,8 @@ export default function RestaurantApplicationSection({
           {/* Action Navigation buttons */}
           <div className="pt-6 border-t border-zinc-100 dark:border-zinc-800 flex justify-between">
             {currentStep > 1 ? (
-              <button 
-                type="button" 
+              <button
+                type="button"
                 onClick={handlePrevStep}
                 disabled={isSubmitting}
                 className="flex items-center gap-1.5 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
@@ -556,8 +710,8 @@ export default function RestaurantApplicationSection({
             )}
 
             {currentStep < 4 ? (
-              <button 
-                type="button" 
+              <button
+                type="button"
                 onClick={handleNextStep}
                 className="flex items-center gap-1.5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 hover:opacity-90 text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-md ml-auto"
               >
@@ -565,8 +719,8 @@ export default function RestaurantApplicationSection({
                 <ChevronRight className="w-4 h-4" />
               </button>
             ) : (
-              <button 
-                type="submit" 
+              <button
+                type="submit"
                 disabled={isSubmitting}
                 className="flex items-center gap-1.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white hover:opacity-90 active:scale-95 text-xs font-bold px-6 py-2.5 rounded-xl transition-all shadow-lg shadow-orange-500/20 disabled:opacity-50 ml-auto"
               >
@@ -595,40 +749,62 @@ export default function RestaurantApplicationSection({
       <div className="max-w-xl mx-auto space-y-6">
         <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border border-zinc-200 dark:border-zinc-800 p-8 rounded-3xl text-center space-y-6 shadow-xl relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 to-orange-500 animate-pulse" />
-          
+
           <div className="relative inline-flex items-center justify-center">
             <div className="absolute inset-0 bg-amber-500/20 rounded-full blur-xl animate-ping duration-1000" />
             <div className="p-4 bg-amber-500/10 text-amber-500 border border-amber-500/20 rounded-full relative">
-              <Clock className="w-10 h-10 animate-spin" style={{ animationDuration: "8s" }} />
+              <Clock
+                className="w-10 h-10 animate-spin"
+                style={{ animationDuration: "8s" }}
+              />
             </div>
           </div>
 
           <div className="space-y-2">
-            <h3 className="text-xl font-black text-zinc-900 dark:text-white tracking-tight">Application Under Review</h3>
+            <h3 className="text-xl font-black text-zinc-900 dark:text-white tracking-tight">
+              Application Under Review
+            </h3>
             <p className="text-xs text-zinc-400 max-w-sm mx-auto leading-relaxed">
-              We have received your request to launch <span className="font-extrabold text-orange-500">"{submission.name}"</span> on Nowlny. Our administrators are currently reviewing your documents.
+              We have received your request to launch{" "}
+              <span className="font-extrabold text-orange-500">
+                "{submission.name}"
+              </span>{" "}
+              on Nowlny. Our administrators are currently reviewing your
+              documents.
             </p>
           </div>
 
           <div className="p-4 bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-100 dark:border-zinc-800/80 rounded-2xl text-left space-y-2.5 text-xs">
             <div className="flex justify-between items-center text-zinc-400">
               <span>Application ID</span>
-              <span className="font-mono font-bold text-zinc-700 dark:text-zinc-300">{submission.id}</span>
+              <span className="font-mono font-bold text-zinc-700 dark:text-zinc-300">
+                {submission.id}
+              </span>
             </div>
             <div className="flex justify-between items-center text-zinc-400">
               <span>Contact Email</span>
-              <span className="font-bold text-zinc-700 dark:text-zinc-300">{submission.email || "Not provided"}</span>
+              <span className="font-bold text-zinc-700 dark:text-zinc-300">
+                {submission.email || "Not provided"}
+              </span>
             </div>
             <div className="flex justify-between items-center text-zinc-400">
               <span>Submission Date</span>
               <span className="font-bold text-zinc-700 dark:text-zinc-300">
-                {submission.createdAt ? new Date(submission.createdAt).toLocaleDateString() : "Just now"}
+                {submission.createdAt
+                  ? new Date(submission.createdAt).toLocaleDateString()
+                  : "Just now"}
               </span>
             </div>
           </div>
 
           <div className="pt-2 flex flex-col sm:flex-row gap-3 justify-center">
-            <button 
+            <button
+              onClick={handleApplyClick}
+              className="bg-zinc-850 dark:bg-zinc-800/40 text-blue-500 border border-blue-500/10 hover:bg-blue-500 hover:text-white text-xs font-bold px-5 py-3 rounded-xl transition-all"
+            >
+              Edit Application
+            </button>
+            <button
               onClick={handleCancelApplication}
               className="bg-zinc-850 dark:bg-zinc-800/40 text-red-500 border border-red-500/10 hover:bg-red-500 hover:text-white text-xs font-bold px-5 py-3 rounded-xl transition-all"
             >
@@ -646,26 +822,37 @@ export default function RestaurantApplicationSection({
       <div className="max-w-xl mx-auto space-y-6">
         <div className="bg-red-500/5 dark:bg-red-500/10 border border-red-500/20 p-8 rounded-3xl text-center space-y-6 shadow-xl relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-red-500" />
-          
+
           <div className="p-4 bg-red-500/10 text-red-500 border border-red-500/20 rounded-full inline-flex">
             <ShieldAlert className="w-10 h-10" />
           </div>
 
           <div className="space-y-2">
-            <h3 className="text-xl font-black text-red-500 tracking-tight">Application Declined</h3>
+            <h3 className="text-xl font-black text-red-500 tracking-tight">
+              Application Declined
+            </h3>
             <p className="text-xs text-zinc-400 max-w-sm mx-auto leading-relaxed">
-              Unfortunately, your application for <span className="font-extrabold text-orange-500">"{submission.name}"</span> was rejected. Please review the reason below.
+              Unfortunately, your application for{" "}
+              <span className="font-extrabold text-orange-500">
+                "{submission.name}"
+              </span>{" "}
+              was rejected. Please review the reason below.
             </p>
           </div>
 
           {/* Rejection reason box */}
           <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-5 text-left text-xs text-red-600 dark:text-red-400 space-y-1.5">
-            <p className="font-extrabold uppercase tracking-wider text-[10px]">Rejection Reason:</p>
-            <p className="font-bold leading-relaxed">{submission.rejectionReason || "No details provided by administrator."}</p>
+            <p className="font-extrabold uppercase tracking-wider text-[10px]">
+              Rejection Reason:
+            </p>
+            <p className="font-bold leading-relaxed">
+              {submission.rejectionReason ||
+                "No details provided by administrator."}
+            </p>
           </div>
 
           <div className="pt-2">
-            <button 
+            <button
               onClick={handleApplyClick}
               className="bg-gradient-to-r from-orange-500 to-amber-500 text-white hover:opacity-90 active:scale-95 text-xs font-bold px-6 py-3 rounded-xl transition-all shadow-lg shadow-orange-500/20"
             >
@@ -687,14 +874,17 @@ export default function RestaurantApplicationSection({
           </div>
 
           <div className="space-y-2">
-            <h3 className="text-xl font-black text-zinc-900 dark:text-white tracking-tight">Application Cancelled</h3>
+            <h3 className="text-xl font-black text-zinc-900 dark:text-white tracking-tight">
+              Application Cancelled
+            </h3>
             <p className="text-xs text-zinc-400 max-w-sm mx-auto leading-relaxed">
-              Your application was cancelled. You can launch a brand-new application anytime.
+              Your application was cancelled. You can launch a brand-new
+              application anytime.
             </p>
           </div>
 
           <div className="pt-2">
-            <button 
+            <button
               onClick={handleApplyClick}
               className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold px-6 py-3 rounded-xl transition-all shadow-lg"
             >
@@ -722,10 +912,12 @@ export default function RestaurantApplicationSection({
             Grow Your Business with Nowlny Food
           </h2>
           <p className="text-xs text-zinc-400 leading-relaxed">
-            Reach thousands of hungry food lovers in your city. Partner with us to boost your sales, expand your kitchen's digital presence, and manage orders on our premium, state-of-the-art merchant ecosystem.
+            Reach thousands of hungry food lovers in your city. Partner with us
+            to boost your sales, expand your kitchen's digital presence, and
+            manage orders on our premium, state-of-the-art merchant ecosystem.
           </p>
-          
-          <button 
+
+          <button
             onClick={handleApplyClick}
             className="flex items-center gap-2 bg-gradient-to-r from-orange-500 via-orange-600 to-amber-600 text-white text-xs font-extrabold px-6 py-3.5 rounded-2xl hover:opacity-90 active:scale-95 shadow-lg shadow-orange-500/20 transition-all"
           >
@@ -741,9 +933,12 @@ export default function RestaurantApplicationSection({
           <div className="p-3 bg-orange-500/10 text-orange-500 rounded-xl w-fit">
             <CheckCircle2 className="w-5 h-5" />
           </div>
-          <h4 className="font-bold text-sm text-zinc-900 dark:text-white">Seamless Management</h4>
+          <h4 className="font-bold text-sm text-zinc-900 dark:text-white">
+            Seamless Management
+          </h4>
           <p className="text-xs text-zinc-400 leading-relaxed">
-            Configure catalogs, prices, descriptions, and categories dynamically using our merchant management app.
+            Configure catalogs, prices, descriptions, and categories dynamically
+            using our merchant management app.
           </p>
         </div>
 
@@ -751,9 +946,12 @@ export default function RestaurantApplicationSection({
           <div className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl w-fit">
             <DollarSign className="w-5 h-5" />
           </div>
-          <h4 className="font-bold text-sm text-zinc-900 dark:text-white">Instant Revenue tracking</h4>
+          <h4 className="font-bold text-sm text-zinc-900 dark:text-white">
+            Instant Revenue tracking
+          </h4>
           <p className="text-xs text-zinc-400 leading-relaxed">
-            Track daily gross revenue, successful orders count, and rating reviews in a real-time responsive dashboard.
+            Track daily gross revenue, successful orders count, and rating
+            reviews in a real-time responsive dashboard.
           </p>
         </div>
 
@@ -761,9 +959,12 @@ export default function RestaurantApplicationSection({
           <div className="p-3 bg-blue-500/10 text-blue-500 rounded-xl w-fit">
             <Clock className="w-5 h-5" />
           </div>
-          <h4 className="font-bold text-sm text-zinc-900 dark:text-white">Fast Logistics</h4>
+          <h4 className="font-bold text-sm text-zinc-900 dark:text-white">
+            Fast Logistics
+          </h4>
           <p className="text-xs text-zinc-400 leading-relaxed">
-            Our optimized delivery dispatch fleet ensures that food arrives warm, fresh, and on-time to customer doorsteps.
+            Our optimized delivery dispatch fleet ensures that food arrives
+            warm, fresh, and on-time to customer doorsteps.
           </p>
         </div>
       </div>
