@@ -13,6 +13,7 @@ import RestaurantCategoriesSection from "../components/RestaurantCategoriesSecti
 import CurrenciesSection from "../components/CurrenciesSection";
 import NotificationsSection from "../components/NotificationsSection";
 import LoginScreen from "../components/LoginScreen";
+import DeliveryCompaniesSection from "../components/DeliveryCompaniesSection";
 import { useNotifications } from "../../hooks/useNotifications";
 
 // Restaurant-specific views
@@ -354,6 +355,8 @@ export default function Home() {
         );
       case "restaurant_categories":
         return <RestaurantCategoriesSection />;
+      case "delivery_companies":
+        return <DeliveryCompaniesSection searchQuery={searchQuery} />;
       case "customers":
         return <CustomersSection db={db} searchQuery={searchQuery} />;
       case "orders":

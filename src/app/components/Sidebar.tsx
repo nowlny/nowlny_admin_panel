@@ -12,6 +12,7 @@ import {
   Coins,
   Bell,
   Smartphone,
+  Truck,
 } from "lucide-react";
 import { Restaurant } from "../data/mockData";
 
@@ -67,6 +68,11 @@ export default function Sidebar({
           id: "restaurant_categories",
           label: "Store Categories",
           icon: Store,
+        },
+        {
+          id: "delivery_companies",
+          label: "Delivery Companies",
+          icon: Truck,
         },
         { id: "reels", label: "Reels Management", icon: Sparkles },
         { id: "customers", label: "Customers", icon: Users },
