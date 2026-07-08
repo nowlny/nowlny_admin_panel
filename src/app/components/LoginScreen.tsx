@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import React, { useState, useRef } from "react";
@@ -15,7 +16,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [otp, setOtp] = useState("");
   const [otpArr, setOtpArr] = useState(["", "", "", ""]);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
-  
+
   const [isLoading, setIsLoading] = useState(false);
 
   const handleOtpChange = (index: number, value: string) => {
@@ -30,7 +31,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     }
   };
 
-  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleOtpKeyDown = (
+    index: number,
+    e: React.KeyboardEvent<HTMLInputElement>,
+  ) => {
     if (e.key === "Backspace" && !otpArr[index] && index > 0) {
       inputRefs.current[index - 1]?.focus();
     }
@@ -38,7 +42,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
   const handlePaste = (e: React.ClipboardEvent) => {
     e.preventDefault();
-    const pastedData = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 4);
+    const pastedData = e.clipboardData
+      .getData("text")
+      .replace(/\D/g, "")
+      .slice(0, 4);
     if (pastedData) {
       const newOtp = [...otpArr];
       for (let i = 0; i < pastedData.length; i++) {
@@ -68,7 +75,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
     try {
       setIsLoading(true);
-      await authService.sendOtp({ phoneNumber: getFullPhone() });
+      await authService.sendOtp({
+        phoneNumber: getFullPhone(),
+        channel: "sms",
+      });
       setStep("otp");
     } catch (err: any) {
       toast.error(err.message || "Failed to send OTP. Please try again.");
@@ -86,21 +96,26 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
     try {
       setIsLoading(true);
-      const res = await authService.verifyOtp({ phoneNumber: getFullPhone(), code: otp });
-      
+      const res = await authService.verifyOtp({
+        phoneNumber: getFullPhone(),
+        code: otp,
+      });
+
       const token = res.access_token || res.accessToken;
       const rToken = res.refresh_token || res.refreshToken;
 
       if (!token) {
-        throw new Error("Invalid response from server. No access token provided.");
+        throw new Error(
+          "Invalid response from server. No access token provided.",
+        );
       }
-      
+
       // Save token to localStorage for apiClient to use
       localStorage.setItem("token", token);
       if (rToken) {
         localStorage.setItem("refreshToken", rToken);
       }
-      
+
       // Trigger parent callback to show main app
       onLoginSuccess(token);
     } catch (err: any) {
@@ -123,8 +138,12 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           <div className="h-16 w-16 mx-auto rounded-2xl bg-gradient-to-tr from-orange-500 to-red-600 flex items-center justify-center shadow-lg shadow-orange-500/20 mb-4">
             <span className="text-white font-black text-3xl">N</span>
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">NOWLNY Admin</h1>
-          <p className="text-zinc-500 text-sm mt-2 font-medium">Secure Operations Portal</p>
+          <h1 className="text-2xl font-bold text-white tracking-tight">
+            NOWLNY Admin
+          </h1>
+          <p className="text-zinc-500 text-sm mt-2 font-medium">
+            Secure Operations Portal
+          </p>
         </div>
 
         <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 rounded-3xl p-8 shadow-2xl">
@@ -175,7 +194,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   {otpArr.map((digit, index) => (
                     <input
                       key={index}
-                      ref={(el) => { inputRefs.current[index] = el; }}
+                      ref={(el) => {
+                        inputRefs.current[index] = el;
+                      }}
                       type="text"
                       inputMode="numeric"
                       value={digit}
@@ -188,7 +209,14 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   ))}
                 </div>
                 <p className="text-[10px] text-zinc-500 mt-2 text-center">
-                  Code sent to {getFullPhone()}. <button type="button" onClick={() => setStep("phone")} className="text-orange-500 hover:underline">Change number</button>
+                  Code sent to {getFullPhone()}.{" "}
+                  <button
+                    type="button"
+                    onClick={() => setStep("phone")}
+                    className="text-orange-500 hover:underline"
+                  >
+                    Change number
+                  </button>
                 </p>
               </div>
 
@@ -206,9 +234,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             </form>
           )}
         </div>
-        
+
         <p className="text-center text-xs text-zinc-600 font-semibold mt-8">
-          &copy; {new Date().getFullYear()} NOWLNY Delivery. All rights reserved.
+          &copy; {new Date().getFullYear()} NOWLNY Delivery. All rights
+          reserved.
         </p>
       </div>
     </div>
