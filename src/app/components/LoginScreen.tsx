@@ -1,23 +1,42 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { authService } from "../../services/auth";
-import { Loader2, Phone, KeyRound, ArrowRight } from "lucide-react";
+import { Loader2, Phone, ArrowRight } from "lucide-react";
 import toast from "react-hot-toast";
 
 interface LoginScreenProps {
   onLoginSuccess: (token: string) => void;
 }
 
+const OTP_LENGTH = 4;
+const RESEND_COOLDOWN_SECONDS = 30;
+
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [step, setStep] = useState<"phone" | "otp">("phone");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [otp, setOtp] = useState("");
-  const [otpArr, setOtpArr] = useState(["", "", "", ""]);
+  const [otpArr, setOtpArr] = useState<string[]>(
+    Array(OTP_LENGTH).fill(""),
+  );
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const [isLoading, setIsLoading] = useState(false);
+  const [resendIn, setResendIn] = useState(0);
+
+  // Countdown for the resend button. Without a resend path the only recovery
+  // from an undelivered SMS was to back out via "Change number" and start over.
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const id = setInterval(() => setResendIn((s) => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(id);
+  }, [resendIn]);
+
+  // Move focus to the first OTP box as soon as the code step opens.
+  useEffect(() => {
+    if (step === "otp") inputRefs.current[0]?.focus();
+  }, [step]);
 
   const handleOtpChange = (index: number, value: string) => {
     if (!/^\d*$/.test(value)) return;
@@ -26,7 +45,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     setOtpArr(newOtp);
     setOtp(newOtp.join(""));
 
-    if (value && index < 3) {
+    if (value && index < OTP_LENGTH - 1) {
       inputRefs.current[index + 1]?.focus();
     }
   };
@@ -45,7 +64,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     const pastedData = e.clipboardData
       .getData("text")
       .replace(/\D/g, "")
-      .slice(0, 4);
+      .slice(0, OTP_LENGTH);
     if (pastedData) {
       const newOtp = [...otpArr];
       for (let i = 0; i < pastedData.length; i++) {
@@ -53,8 +72,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       }
       setOtpArr(newOtp);
       setOtp(newOtp.join(""));
-      const nextIndex = Math.min(pastedData.length, 3);
-      inputRefs.current[nextIndex === 4 ? 3 : nextIndex]?.focus();
+      const nextIndex = Math.min(pastedData.length, OTP_LENGTH - 1);
+      inputRefs.current[nextIndex]?.focus();
     }
   };
 
@@ -66,19 +85,26 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     return "+961" + cleanPhone;
   };
 
+  const sendOtp = useCallback(async () => {
+    await authService.sendOtp({
+      phoneNumber: getFullPhone(),
+      channel: "sms",
+    });
+    setResendIn(RESEND_COOLDOWN_SECONDS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phoneNumber]);
+
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!phoneNumber) {
-      toast.error("Please enter your phone number");
+    const digits = phoneNumber.replace(/\D/g, "");
+    if (digits.length < 7) {
+      toast.error("Enter a valid phone number");
       return;
     }
 
     try {
       setIsLoading(true);
-      await authService.sendOtp({
-        phoneNumber: getFullPhone(),
-        channel: "sms",
-      });
+      await sendOtp();
       setStep("otp");
     } catch (err: any) {
       toast.error(err.message || "Failed to send OTP. Please try again.");
@@ -87,43 +113,77 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     }
   };
 
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!otp) {
-      toast.error("Please enter the OTP");
-      return;
-    }
-
+  const handleResendOtp = async () => {
+    if (resendIn > 0 || isLoading) return;
     try {
       setIsLoading(true);
-      const res = await authService.verifyOtp({
-        phoneNumber: getFullPhone(),
-        code: otp,
-      });
-
-      const token = res.access_token || res.accessToken;
-      const rToken = res.refresh_token || res.refreshToken;
-
-      if (!token) {
-        throw new Error(
-          "Invalid response from server. No access token provided.",
-        );
-      }
-
-      // Save token to localStorage for apiClient to use
-      localStorage.setItem("token", token);
-      if (rToken) {
-        localStorage.setItem("refreshToken", rToken);
-      }
-
-      // Trigger parent callback to show main app
-      onLoginSuccess(token);
+      await sendOtp();
+      setOtpArr(Array(OTP_LENGTH).fill(""));
+      setOtp("");
+      inputRefs.current[0]?.focus();
+      toast.success("A new code is on its way");
     } catch (err: any) {
-      toast.error(err.message || "Invalid OTP. Please try again.");
+      toast.error(err.message || "Couldn't resend the code.");
     } finally {
       setIsLoading(false);
     }
   };
+
+  const handleVerifyOtp = useCallback(
+    async (e?: React.FormEvent, codeOverride?: string) => {
+      e?.preventDefault();
+      const code = codeOverride ?? otp;
+      if (code.length !== OTP_LENGTH) {
+        toast.error(`Enter the ${OTP_LENGTH}-digit code`);
+        return;
+      }
+
+      try {
+        setIsLoading(true);
+        const res = await authService.verifyOtp({
+          phoneNumber: getFullPhone(),
+          code,
+        });
+
+        const token = res.access_token || res.accessToken;
+        const rToken = res.refresh_token || res.refreshToken;
+
+        if (!token) {
+          throw new Error(
+            "Invalid response from server. No access token provided.",
+          );
+        }
+
+        // Save token to localStorage for apiClient to use
+        localStorage.setItem("token", token);
+        if (rToken) {
+          localStorage.setItem("refreshToken", rToken);
+        }
+
+        // Trigger parent callback to show main app
+        onLoginSuccess(token);
+      } catch (err: any) {
+        toast.error(err.message || "Invalid OTP. Please try again.");
+        // Clear the boxes so the operator can retype without 4 backspaces.
+        setOtpArr(Array(OTP_LENGTH).fill(""));
+        setOtp("");
+        inputRefs.current[0]?.focus();
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [otp, phoneNumber, onLoginSuccess],
+  );
+
+  // Submit as soon as the last digit lands — including after an SMS autofill —
+  // rather than making the user reach for the button.
+  useEffect(() => {
+    if (step === "otp" && otp.length === OTP_LENGTH && !isLoading) {
+      handleVerifyOtp(undefined, otp);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otp, step]);
 
   return (
     <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-4">
@@ -150,7 +210,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           {step === "phone" ? (
             <form onSubmit={handleRequestOtp} className="space-y-6">
               <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">
+                <label
+                  htmlFor="login-phone"
+                  className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2"
+                >
                   Phone Number
                 </label>
                 <div className="relative flex items-center">
@@ -160,7 +223,12 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                     <div className="h-5 w-px bg-zinc-800 ml-1"></div>
                   </div>
                   <input
+                    id="login-phone"
+                    name="phone"
                     type="tel"
+                    inputMode="tel"
+                    autoComplete="tel-national"
+                    autoFocus
                     value={phoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value)}
                     placeholder="71 000 000"
@@ -187,10 +255,17 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           ) : (
             <form onSubmit={handleVerifyOtp} className="space-y-6">
               <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-4 text-center">
+                <p
+                  id="otp-label"
+                  className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-4 text-center"
+                >
                   Verification Code
-                </label>
-                <div className="flex justify-center gap-3">
+                </p>
+                <div
+                  className="flex justify-center gap-3"
+                  role="group"
+                  aria-labelledby="otp-label"
+                >
                   {otpArr.map((digit, index) => (
                     <input
                       key={index}
@@ -199,31 +274,56 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                       }}
                       type="text"
                       inputMode="numeric"
+                      maxLength={1}
+                      // `one-time-code` on the first box is what lets iOS and
+                      // Android offer the SMS code straight from the keyboard.
+                      autoComplete={index === 0 ? "one-time-code" : "off"}
+                      aria-label={`Digit ${index + 1} of ${OTP_LENGTH}`}
                       value={digit}
                       onChange={(e) => handleOtpChange(index, e.target.value)}
                       onKeyDown={(e) => handleOtpKeyDown(index, e)}
+                      onFocus={(e) => e.target.select()}
                       onPaste={handlePaste}
                       className="w-14 h-14 bg-black border border-zinc-800 text-white text-center text-2xl font-bold rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all"
-                      required
                     />
                   ))}
                 </div>
-                <p className="text-[10px] text-zinc-500 mt-2 text-center">
-                  Code sent to {getFullPhone()}.{" "}
+                <p className="text-[11px] text-zinc-500 mt-4 text-center">
+                  Code sent to{" "}
+                  <span className="text-zinc-300 font-medium">
+                    {getFullPhone()}
+                  </span>
+                </p>
+                <div className="flex items-center justify-center gap-3 mt-2 text-[11px]">
                   <button
                     type="button"
-                    onClick={() => setStep("phone")}
-                    className="text-orange-500 hover:underline"
+                    onClick={handleResendOtp}
+                    disabled={resendIn > 0 || isLoading}
+                    className="text-orange-500 hover:underline disabled:text-zinc-600 disabled:no-underline disabled:cursor-not-allowed font-semibold"
+                  >
+                    {resendIn > 0 ? `Resend in ${resendIn}s` : "Resend code"}
+                  </button>
+                  <span className="text-zinc-700" aria-hidden="true">
+                    ·
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep("phone");
+                      setOtpArr(Array(OTP_LENGTH).fill(""));
+                      setOtp("");
+                    }}
+                    className="text-zinc-400 hover:text-white hover:underline font-semibold"
                   >
                     Change number
                   </button>
-                </p>
+                </div>
               </div>
 
               <button
                 type="submit"
-                disabled={isLoading}
-                className="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-orange-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
+                disabled={isLoading || otp.length !== OTP_LENGTH}
+                className="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-orange-500/25 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isLoading ? (
                   <Loader2 className="w-5 h-5 animate-spin" />

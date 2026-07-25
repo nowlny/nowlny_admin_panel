@@ -1,16 +1,14 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import {
   Store,
-  Search,
   Star,
   MapPin,
   Calendar,
   DollarSign,
   ShoppingBag,
-  AlertTriangle,
   ArrowLeft,
   Loader2,
   Clock,
@@ -31,9 +29,29 @@ import EditRestaurantModal from "./EditRestaurantModal";
 import RestaurantMenuSection from "./RestaurantMenuSection";
 import OrdersSection from "./OrdersSection";
 import StoriesViewerModal from "./StoriesViewerModal";
+import StatusPill from "./ui/StatusPill";
+import { useConfirm } from "./ui/ConfirmDialog";
+import {
+  CardSkeletonGrid,
+  EmptyState,
+  ErrorBanner,
+  ErrorState,
+  Skeleton,
+} from "./ui/States";
+import {
+  formatAddress,
+  formatDate,
+  formatMoney,
+  formatRating,
+  orDash,
+  searchable,
+} from "../../lib/format";
 
 const DeliveryZoneMap = dynamic(() => import("./DeliveryZoneMapClient"), {
   ssr: false,
+  // Without this the 400px map slot is a blank grey box until the leaflet
+  // chunk lands, which reads as a broken panel rather than a loading one.
+  loading: () => <Skeleton className="h-full w-full rounded-xl" />,
 });
 
 interface RestaurantsSectionProps {
@@ -43,21 +61,35 @@ interface RestaurantsSectionProps {
   currentRole?: any;
 }
 
+/** Which single mutation is in flight — one shared flag spun every button. */
+type PendingAction =
+  | null
+  | "status"
+  | "delete"
+  | "feature"
+  | "approve"
+  | "reject";
+
 export default function RestaurantsSection({
   searchQuery,
   currentRole,
 }: RestaurantsSectionProps) {
+  const confirm = useConfirm();
+
   const [restaurants, setRestaurants] = useState<RestaurantResponse[]>([]);
   const [submissions, setSubmissions] = useState<RestaurantSubmission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const isBusy = pendingAction !== null;
 
   const [selectedRestId, setSelectedRestId] = useState<string | null>(
     currentRole?.type === "restaurant" ? currentRole.restaurantId : null,
   );
   const [fullSelectedRest, setFullSelectedRest] =
     useState<RestaurantFullResponse | null>(null);
+  const [isFullLoading, setIsFullLoading] = useState(false);
+  const [fullError, setFullError] = useState<string | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<
     string | null
   >(null);
@@ -85,15 +117,16 @@ export default function RestaurantsSection({
   const [viewingStoriesFor, setViewingStoriesFor] =
     useState<RestaurantResponse | null>(null);
 
+  /*
+   * Both fetchers used to swallow the API failure in an inner catch, log it,
+   * and then fall through to `setError(null)` — so a 500 rendered the "no
+   * merchants match criteria" empty state and the admin concluded there were
+   * zero merchants. The error must reach the outer catch.
+   */
   const fetchMerchants = async () => {
     try {
       setIsLoading(true);
-      let restsData: RestaurantResponse[] = [];
-      try {
-        restsData = await restaurantsService.getRestaurants();
-      } catch (err) {
-        console.error("Failed to fetch restaurants via API:", err);
-      }
+      const restsData = await restaurantsService.getRestaurants();
       const finalRests = Array.isArray(restsData)
         ? restsData
         : restsData && (restsData as any).data
@@ -102,8 +135,8 @@ export default function RestaurantsSection({
       setRestaurants(finalRests);
       setError(null);
     } catch (err: any) {
-      console.error("General error in fetchMerchants:", err);
-      setError("An unexpected error occurred while loading data.");
+      console.error("Failed to fetch restaurants:", err);
+      setError(err?.message || "Couldn't load merchants.");
     } finally {
       setIsLoading(false);
     }
@@ -112,16 +145,11 @@ export default function RestaurantsSection({
   const fetchSubmissions = async () => {
     try {
       setIsLoading(true);
-      let subsData: any = null;
-      try {
-        subsData = await restaurantsService.getSubmissions({
-          status: appStatus,
-          page: appPage,
-          limit: 20,
-        });
-      } catch (err) {
-        console.error("Failed to fetch submissions via API:", err);
-      }
+      const subsData: any = await restaurantsService.getSubmissions({
+        status: appStatus,
+        page: appPage,
+        limit: 20,
+      });
 
       if (subsData && subsData.data) {
         setSubmissions(subsData.data);
@@ -140,11 +168,16 @@ export default function RestaurantsSection({
       }
       setError(null);
     } catch (err: any) {
-      console.error("General error in fetchSubmissions:", err);
-      setError("An unexpected error occurred while loading data.");
+      console.error("Failed to fetch submissions:", err);
+      setError(err?.message || "Couldn't load applications.");
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const refetchList = () => {
+    if (viewMode === "merchants") fetchMerchants();
+    else fetchSubmissions();
   };
 
   useEffect(() => {
@@ -155,32 +188,58 @@ export default function RestaurantsSection({
     }
   }, [viewMode, appStatus, appPage]);
 
-  useEffect(() => {
-    if (selectedRestId && viewMode === "merchants") {
-      restaurantsService
-        .getRestaurantFull(selectedRestId)
-        .then((data) => setFullSelectedRest(data))
-        .catch((err) =>
-          console.error("Failed to fetch full restaurant details:", err),
-        );
-    } else {
-      setFullSelectedRest(null);
+  /**
+   * Pulls the detail payload (menu + delivery zones + fresh status). Every
+   * mutation on the detail screen has to call this too, otherwise the header
+   * keeps rendering the pre-mutation status and still offers "Suspend" on an
+   * already-suspended merchant.
+   */
+  const refreshSelected = useCallback(async () => {
+    if (!selectedRestId || viewMode !== "merchants") return;
+    try {
+      setIsFullLoading(true);
+      const data = await restaurantsService.getRestaurantFull(selectedRestId);
+      setFullSelectedRest(data);
+      setFullError(null);
+    } catch (err: any) {
+      console.error("Failed to fetch full restaurant details:", err);
+      setFullError(err?.message || "Couldn't load this merchant's details.");
+    } finally {
+      setIsFullLoading(false);
     }
   }, [selectedRestId, viewMode]);
 
+  useEffect(() => {
+    if (selectedRestId && viewMode === "merchants") {
+      refreshSelected();
+    } else {
+      setFullSelectedRest(null);
+      setFullError(null);
+    }
+  }, [selectedRestId, viewMode, refreshSelected]);
+
+  // Ignore the detail payload while it still belongs to the previously opened
+  // merchant, otherwise the new detail view renders the old merchant's data.
+  const fullDetail =
+    fullSelectedRest?.restaurant?.id === selectedRestId
+      ? fullSelectedRest
+      : null;
   const selectedRest =
-    fullSelectedRest?.restaurant ||
-    restaurants.find((r) => r.id === selectedRestId);
+    fullDetail?.restaurant || restaurants.find((r) => r.id === selectedRestId);
   const selectedSubmission = submissions.find(
     (s) => s.id === selectedSubmissionId,
   );
 
+  const query = searchQuery.toLowerCase();
+
   // Filter restaurants locally (if you want local search/status for merchants)
   const filteredRestaurants = restaurants.filter((r) => {
+    // `address` comes back as an object on some endpoints; `.toLowerCase()`
+    // on it threw and blanked the whole list mid-keystroke.
     const matchesSearch =
-      r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (r.cuisineType || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (r.address || "").toLowerCase().includes(searchQuery.toLowerCase());
+      searchable(r.name).includes(query) ||
+      searchable(r.cuisineType).includes(query) ||
+      searchable(r.address).includes(query);
 
     const matchesStatus =
       merchantStatus === "all" ||
@@ -192,12 +251,10 @@ export default function RestaurantsSection({
   // Filter submissions (search locally since backend doesn't have search query param yet, or assume it does)
   const filteredSubmissions = submissions.filter((s) => {
     const matchesSearch =
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.cuisineType || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.address?.street || "")
-        .toLowerCase()
-        .includes(searchQuery.toLowerCase()) ||
-      (s.address?.city || "").toLowerCase().includes(searchQuery.toLowerCase());
+      searchable(s.name).includes(query) ||
+      searchable(s.cuisineType).includes(query) ||
+      searchable(s.address?.street).includes(query) ||
+      searchable(s.address?.city).includes(query);
 
     return matchesSearch;
   });
@@ -205,38 +262,61 @@ export default function RestaurantsSection({
   const isPendingTab = viewMode === "applications";
   const displayList = isPendingTab ? filteredSubmissions : filteredRestaurants;
 
-  const handleStatusChange = async (restId: string, newStatus: string) => {
+  const handleStatusChange = async (
+    restId: string,
+    newStatus: string,
+    restName?: string,
+  ) => {
+    const label = restName ? `“${restName}”` : "this merchant";
+    if (
+      newStatus === "suspended" &&
+      !(await confirm({
+        title: `Suspend ${label}?`,
+        description:
+          "The merchant is hidden from customers and stops receiving orders until you make it available again.",
+        confirmLabel: "Suspend merchant",
+        variant: "danger",
+      }))
+    ) {
+      return;
+    }
+
     try {
-      setIsSubmitting(true);
+      setPendingAction("status");
       await restaurantsService.updateRestaurant(restId, { status: newStatus });
       toast.success(`Status updated successfully!`);
-      if (viewMode === "merchants") fetchMerchants();
-      else fetchSubmissions();
+      refetchList();
+      // Without this the header still shows the old status and keeps
+      // offering "Suspend" on a merchant that was just suspended.
+      await refreshSelected();
     } catch (err: any) {
       toast.error(`Failed to update status: ${err.message}`);
     } finally {
-      setIsSubmitting(false);
+      setPendingAction(null);
     }
   };
 
-  const handleDeleteRestaurant = async (restId: string) => {
-    if (
-      !confirm(
-        "Are you sure you want to delete this restaurant? This cannot be undone.",
-      )
-    )
-      return;
+  const handleDeleteRestaurant = async (restId: string, restName?: string) => {
+    const confirmed = await confirm({
+      title: `Delete ${restName ? `“${restName}”` : "this merchant"}?`,
+      description:
+        "This permanently removes the merchant along with its menu, stories and delivery zones. It cannot be undone.",
+      confirmLabel: "Delete merchant",
+      variant: "danger",
+      confirmPhrase: restName,
+    });
+    if (!confirmed) return;
+
     try {
-      setIsSubmitting(true);
+      setPendingAction("delete");
       await restaurantsService.deleteRestaurant(restId);
       toast.success(`Restaurant deleted successfully!`);
       setSelectedRestId(null);
-      if (viewMode === "merchants") fetchMerchants();
-      else fetchSubmissions();
+      refetchList();
     } catch (err: any) {
       toast.error(`Failed to delete restaurant: ${err.message}`);
     } finally {
-      setIsSubmitting(false);
+      setPendingAction(null);
     }
   };
 
@@ -245,7 +325,7 @@ export default function RestaurantsSection({
     isCurrentlyFeatured: boolean,
   ) => {
     try {
-      setIsSubmitting(true);
+      setPendingAction("feature");
       if (isCurrentlyFeatured) {
         await restaurantsService.removeFeatured(restId);
         toast.success(`Restaurant unfeatured successfully!`);
@@ -265,11 +345,12 @@ export default function RestaurantsSection({
         });
       }
 
-      if (viewMode === "merchants") fetchMerchants();
+      refetchList();
+      await refreshSelected();
     } catch (err: any) {
       toast.error(`Failed to toggle featured status: ${err.message}`);
     } finally {
-      setIsSubmitting(false);
+      setPendingAction(null);
     }
   };
 
@@ -281,7 +362,7 @@ export default function RestaurantsSection({
     }
 
     try {
-      setIsSubmitting(true);
+      setPendingAction(decision);
       await restaurantsService.reviewSubmission(selectedSubmission.id, {
         decision,
         rejectionReason: decision === "reject" ? rejectionReason : undefined,
@@ -290,24 +371,51 @@ export default function RestaurantsSection({
       setIsReviewing(false);
       setRejectionReason("");
       setSelectedSubmissionId(null);
-      if (viewMode === "merchants") fetchMerchants();
-      else fetchSubmissions();
+      refetchList();
     } catch (err: any) {
       toast.error(`Failed to review application: ${err.message}`);
     } finally {
-      setIsSubmitting(false);
+      setPendingAction(null);
     }
   };
 
-  if (isLoading && restaurants.length === 0 && submissions.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center p-24 text-zinc-500">
-        <Loader2 className="w-8 h-8 animate-spin mb-4 text-orange-500" />
-        <p className="text-sm font-semibold">
-          Loading merchants and submissions...
-        </p>
-      </div>
-    );
+  /** Revoking an approval takes a live merchant offline — always ask first. */
+  const startRejection = async () => {
+    if (selectedSubmission?.status === "approved") {
+      const confirmed = await confirm({
+        title: `Revoke approval for “${selectedSubmission.name}”?`,
+        description:
+          "The application goes back to rejected and the merchant loses access. You'll be asked for a reason next.",
+        confirmLabel: "Revoke approval",
+        variant: "danger",
+      });
+      if (!confirmed) return;
+    }
+    setIsReviewing(true);
+  };
+
+  // A merchant landing straight on its own detail view (owner role) has no
+  // list to fall back on, so gate that view on its own fetch.
+  if (!isPendingTab && selectedRestId && !selectedRest) {
+    if (isLoading || isFullLoading) {
+      return (
+        <CardSkeletonGrid
+          count={3}
+          className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+        />
+      );
+    }
+    if (fullError || error) {
+      return (
+        <ErrorState
+          message={fullError || error}
+          onRetry={() => {
+            fetchMerchants();
+            refreshSelected();
+          }}
+        />
+      );
+    }
   }
 
   // Render detail view if a submission is selected
@@ -339,21 +447,10 @@ export default function RestaurantsSection({
               className="w-full h-full object-cover opacity-40"
             />
             <div className="absolute top-4 right-4 flex gap-2">
-              <span
-                className={`text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider ${
-                  selectedSubmission.status === "approved"
-                    ? "bg-emerald-500/90 text-white border-emerald-400"
-                    : selectedSubmission.status === "pending"
-                      ? "bg-amber-500/90 text-black border-amber-400 animate-pulse"
-                      : selectedSubmission.status === "rejected"
-                        ? "bg-red-500/90 text-white border-red-400"
-                        : "bg-zinc-500/90 text-white border-zinc-400"
-                }`}
-              >
-                {selectedSubmission.status === "pending"
-                  ? "Pending Review"
-                  : selectedSubmission.status}
-              </span>
+              <StatusPill
+                status={selectedSubmission.status}
+                className="px-3 py-1.5 text-xs shadow-lg backdrop-blur-sm"
+              />
             </div>
           </div>
 
@@ -363,7 +460,7 @@ export default function RestaurantsSection({
                 selectedSubmission.logo.length > 5 ? (
                   <img
                     src={selectedSubmission.logo}
-                    alt="logo"
+                    alt={`${selectedSubmission.name} logo`}
                     className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl object-cover"
                   />
                 ) : (
@@ -386,21 +483,12 @@ export default function RestaurantsSection({
                 <div className="flex items-center gap-4 mt-2 text-[11px] text-zinc-400">
                   <span className="flex items-center gap-1">
                     <MapPin className="w-3.5 h-3.5" />{" "}
-                    {[
-                      selectedSubmission.address?.street,
-                      selectedSubmission.address?.building,
-                      selectedSubmission.address?.city,
-                    ]
-                      .filter(Boolean)
-                      .join(", ") || "No address provided"}
+                    {formatAddress(selectedSubmission.address) ||
+                      "No address provided"}
                   </span>
                   <span className="flex items-center gap-1">
                     <Calendar className="w-3.5 h-3.5" /> Submitted{" "}
-                    {selectedSubmission.createdAt
-                      ? new Date(
-                          selectedSubmission.createdAt,
-                        ).toLocaleDateString()
-                      : "N/A"}
+                    {formatDate(selectedSubmission.createdAt)}
                   </span>
                 </div>
               </div>
@@ -413,10 +501,10 @@ export default function RestaurantsSection({
                   {selectedSubmission.status === "pending" && (
                     <button
                       onClick={() => handleReview("approve")}
-                      disabled={isSubmitting}
+                      disabled={isBusy}
                       className="flex items-center bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isSubmitting && (
+                      {pendingAction === "approve" && (
                         <Loader2 className="w-4 h-4 animate-spin mr-2" />
                       )}
                       Approve Application
@@ -425,8 +513,9 @@ export default function RestaurantsSection({
                   {(selectedSubmission.status === "pending" ||
                     selectedSubmission.status === "approved") && (
                     <button
-                      onClick={() => setIsReviewing(true)}
-                      className="bg-zinc-800 hover:bg-red-500 hover:text-white text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+                      onClick={startRejection}
+                      disabled={isBusy}
+                      className="bg-zinc-800 hover:bg-red-500 hover:text-white text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {selectedSubmission.status === "approved"
                         ? "Revoke / Reject"
@@ -445,11 +534,15 @@ export default function RestaurantsSection({
             <h4 className="text-sm font-bold text-red-500 mb-2">
               Reject Merchant Application
             </h4>
-            <p className="text-xs text-zinc-400 mb-4">
+            <label
+              htmlFor="rejection-reason"
+              className="block text-xs text-zinc-500 dark:text-zinc-400 mb-2"
+            >
               Please provide a reason for rejecting this restaurant. This will
               be sent to the merchant's dashboard.
-            </p>
+            </label>
             <textarea
+              id="rejection-reason"
               value={rejectionReason}
               onChange={(e) => setRejectionReason(e.target.value)}
               placeholder="e.g. Logo image URL is invalid, or cuisine selection is unsupported."
@@ -464,10 +557,10 @@ export default function RestaurantsSection({
               </button>
               <button
                 onClick={() => handleReview("reject")}
-                disabled={isSubmitting}
+                disabled={isBusy}
                 className="flex items-center bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting && (
+                {pendingAction === "reject" && (
                   <Loader2 className="w-4 h-4 animate-spin mr-2" />
                 )}
                 Confirm Rejection
@@ -483,11 +576,11 @@ export default function RestaurantsSection({
               <Clock className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+              <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                 Est. Delivery Time
               </p>
               <p className="text-lg font-black text-zinc-900 dark:text-white">
-                {selectedSubmission.estimatedDeliveryMinutes ?? "N/A"} Minutes
+                {orDash(selectedSubmission.estimatedDeliveryMinutes, " Minutes")}
               </p>
             </div>
           </div>
@@ -497,11 +590,11 @@ export default function RestaurantsSection({
               <DollarSign className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+              <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                 Delivery Fee
               </p>
               <p className="text-lg font-black text-zinc-900 dark:text-white">
-                ${(selectedSubmission.deliveryFee ?? 0).toFixed(2)}
+                {formatMoney(selectedSubmission.deliveryFee, "USD")}
               </p>
             </div>
           </div>
@@ -511,11 +604,11 @@ export default function RestaurantsSection({
               <Store className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+              <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                 Cuisine Type
               </p>
               <p className="text-lg font-black text-zinc-900 dark:text-white">
-                {selectedSubmission.cuisineType}
+                {orDash(selectedSubmission.cuisineType)}
               </p>
             </div>
           </div>
@@ -529,9 +622,9 @@ export default function RestaurantsSection({
             </h4>
             <div className="space-y-3 text-xs">
               <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
-                <Mail className="w-4 h-4 text-zinc-400" />
+                <Mail className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
                 <div>
-                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">
+                  <p className="font-semibold text-zinc-500 dark:text-zinc-400 text-[10px] uppercase">
                     Email Address
                   </p>
                   <p className="font-bold">
@@ -540,9 +633,9 @@ export default function RestaurantsSection({
                 </div>
               </div>
               <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
-                <Phone className="w-4 h-4 text-zinc-400" />
+                <Phone className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
                 <div>
-                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">
+                  <p className="font-semibold text-zinc-500 dark:text-zinc-400 text-[10px] uppercase">
                     Phone Number
                   </p>
                   <p className="font-bold">
@@ -552,9 +645,9 @@ export default function RestaurantsSection({
               </div>
               {selectedSubmission.website && (
                 <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
-                  <FileText className="w-4 h-4 text-zinc-400" />
+                  <FileText className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
                   <div>
-                    <p className="font-semibold text-zinc-400 text-[10px] uppercase">
+                    <p className="font-semibold text-zinc-500 dark:text-zinc-400 text-[10px] uppercase">
                       Website URL
                     </p>
                     <p className="font-bold">{selectedSubmission.website}</p>
@@ -562,23 +655,17 @@ export default function RestaurantsSection({
                 </div>
               )}
               <div className="flex items-start gap-3 text-zinc-600 dark:text-zinc-300 pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
-                <MapPin className="w-4 h-4 text-zinc-400 mt-1" />
+                <MapPin className="w-4 h-4 text-zinc-500 dark:text-zinc-400 mt-1" />
                 <div>
-                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">
+                  <p className="font-semibold text-zinc-500 dark:text-zinc-400 text-[10px] uppercase">
                     Address & Coordinates
                   </p>
                   <p className="font-bold">
-                    {[
-                      selectedSubmission.address?.street,
-                      selectedSubmission.address?.building,
-                      selectedSubmission.address?.city,
-                    ]
-                      .filter(Boolean)
-                      .join(", ") || "No address"}
+                    {formatAddress(selectedSubmission.address) || "No address"}
                   </p>
                   <p className="font-bold">
-                    Lat: {selectedSubmission.address?.latitude ?? "N/A"}, Lng:{" "}
-                    {selectedSubmission.address?.longitude ?? "N/A"}
+                    Lat: {orDash(selectedSubmission.address?.latitude)}, Lng:{" "}
+                    {orDash(selectedSubmission.address?.longitude)}
                   </p>
                 </div>
               </div>
@@ -614,7 +701,7 @@ export default function RestaurantsSection({
                   </div>
                 ))
               ) : (
-                <p className="text-xs text-zinc-400">
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
                   No custom opening hours submitted. Standard settings apply.
                 </p>
               )}
@@ -643,6 +730,11 @@ export default function RestaurantsSection({
           </button>
         )}
 
+        {/* The detail payload failed but the list copy is still on screen. */}
+        {fullError && (
+          <ErrorBanner message={fullError} onRetry={() => refreshSelected()} />
+        )}
+
         {/* Restaurant Header Jumbotron */}
         <div className="relative bg-zinc-900 rounded-2xl overflow-hidden border border-zinc-800 shadow-lg">
           <div className="h-40 relative">
@@ -656,17 +748,12 @@ export default function RestaurantsSection({
               className="w-full h-full object-cover opacity-40"
             />
             <div className="absolute top-4 right-4 flex gap-2">
-              <span
-                className={`text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider ${
-                  selectedRest.status === "active"
-                    ? "bg-emerald-500/90 text-white border-emerald-400"
-                    : selectedRest.status === "pending"
-                      ? "bg-amber-500/90 text-black border-amber-400 animate-pulse"
-                      : "bg-red-500/90 text-white border-red-400"
-                }`}
-              >
-                {selectedRest.status}
-              </span>
+              {/* Shared mapping — the local one had no `approved` branch, so
+                  approved merchants rendered with the red "error" pill. */}
+              <StatusPill
+                status={selectedRest.status}
+                className="px-3 py-1.5 text-xs shadow-lg backdrop-blur-sm"
+              />
               {selectedRest.isFeatured && (
                 <span className="text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider bg-purple-500/90 text-white border-purple-400 flex items-center gap-1">
                   <Star className="w-3 h-3 fill-white" /> Featured
@@ -679,28 +766,30 @@ export default function RestaurantsSection({
             <div className="flex gap-4 items-end">
               {selectedRest.logo ? (
                 selectedRest.logo.length > 5 ? (
-                  <button
-                    onClick={(e) => {
-                      if (
-                        selectedRest.stories &&
-                        selectedRest.stories.length > 0
-                      ) {
-                        e.stopPropagation();
-                        setViewingStoriesFor(selectedRest);
-                      }
-                    }}
-                    className={`relative w-16 h-16 rounded-2xl shadow-xl overflow-hidden bg-zinc-900 border-2 transition-transform ${
-                      selectedRest.stories && selectedRest.stories.length > 0
-                        ? "border-orange-500 hover:scale-105 cursor-pointer p-[2px]"
-                        : "border-zinc-800"
-                    }`}
-                  >
-                    <img
-                      src={selectedRest.logo}
-                      alt="logo"
-                      className="w-full h-full object-cover rounded-xl"
-                    />
-                  </button>
+                  selectedRest.stories && selectedRest.stories.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setViewingStoriesFor(selectedRest)}
+                      aria-label={`View ${selectedRest.name} stories`}
+                      className="relative w-16 h-16 rounded-2xl shadow-xl overflow-hidden bg-zinc-900 border-2 border-orange-500 hover:scale-105 cursor-pointer p-[2px] transition-transform"
+                    >
+                      <img
+                        src={selectedRest.logo}
+                        alt=""
+                        className="w-full h-full object-cover rounded-xl"
+                      />
+                    </button>
+                  ) : (
+                    // Was a button that did nothing when the merchant had no
+                    // stories — a focus stop with no action.
+                    <span className="relative block w-16 h-16 rounded-2xl shadow-xl overflow-hidden bg-zinc-900 border-2 border-zinc-800">
+                      <img
+                        src={selectedRest.logo}
+                        alt={`${selectedRest.name} logo`}
+                        className="w-full h-full object-cover rounded-xl"
+                      />
+                    </span>
+                  )
                 ) : (
                   <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">
                     {selectedRest.logo}
@@ -721,18 +810,17 @@ export default function RestaurantsSection({
                 <div className="flex items-center gap-4 mt-2 text-[11px] text-zinc-400">
                   <span className="flex items-center gap-1">
                     <MapPin className="w-3.5 h-3.5" />{" "}
-                    {[selectedRest.address, selectedRest.city]
+                    {/* `address` is an object on some endpoints — joining it
+                        raw printed "[object Object], Amman". */}
+                    {[formatAddress(selectedRest.address), selectedRest.city]
                       .filter(Boolean)
                       .join(", ") || "No address provided"}
                   </span>
                   <span className="flex items-center gap-1">
                     <Calendar className="w-3.5 h-3.5" /> Joined{" "}
-                    {selectedRest.joinedDate || selectedRest.createdAt
-                      ? new Date(
-                          (selectedRest.joinedDate ||
-                            selectedRest.createdAt) as string,
-                        ).toLocaleDateString()
-                      : "N/A"}
+                    {formatDate(
+                      selectedRest.joinedDate || selectedRest.createdAt,
+                    )}
                   </span>
                 </div>
               </div>
@@ -742,17 +830,19 @@ export default function RestaurantsSection({
             <div className="flex gap-2 shrink-0 flex-wrap justify-end">
               <button
                 onClick={() => setIsEditModalOpen(true)}
-                disabled={isSubmitting}
+                disabled={isBusy}
                 className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Edit Merchant
               </button>
               <button
-                onClick={() => handleDeleteRestaurant(selectedRest.id)}
-                disabled={isSubmitting}
+                onClick={() =>
+                  handleDeleteRestaurant(selectedRest.id, selectedRest.name)
+                }
+                disabled={isBusy}
                 className="flex items-center bg-zinc-800 hover:bg-red-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting && (
+                {pendingAction === "delete" && (
                   <Loader2 className="w-4 h-4 animate-spin mr-2" />
                 )}
                 Delete
@@ -760,12 +850,16 @@ export default function RestaurantsSection({
               {selectedRest.status === "active" && (
                 <button
                   onClick={() =>
-                    handleStatusChange(selectedRest.id, "suspended")
+                    handleStatusChange(
+                      selectedRest.id,
+                      "suspended",
+                      selectedRest.name,
+                    )
                   }
-                  disabled={isSubmitting}
+                  disabled={isBusy}
                   className="flex items-center bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting && (
+                  {pendingAction === "status" && (
                     <Loader2 className="w-4 h-4 animate-spin mr-2" />
                   )}
                   Suspend Merchant
@@ -773,11 +867,17 @@ export default function RestaurantsSection({
               )}
               {selectedRest.status === "suspended" && (
                 <button
-                  onClick={() => handleStatusChange(selectedRest.id, "active")}
-                  disabled={isSubmitting}
+                  onClick={() =>
+                    handleStatusChange(
+                      selectedRest.id,
+                      "active",
+                      selectedRest.name,
+                    )
+                  }
+                  disabled={isBusy}
                   className="flex items-center bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting && (
+                  {pendingAction === "status" && (
                     <Loader2 className="w-4 h-4 animate-spin mr-2" />
                   )}
                   Make Available
@@ -791,14 +891,14 @@ export default function RestaurantsSection({
                       !!selectedRest.isFeatured,
                     )
                   }
-                  disabled={isSubmitting}
+                  disabled={isBusy}
                   className={`flex items-center active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                     selectedRest.isFeatured
                       ? "bg-zinc-700 hover:bg-zinc-800"
                       : "bg-purple-600 hover:bg-purple-700 shadow-lg shadow-purple-500/20"
                   }`}
                 >
-                  {isSubmitting && (
+                  {pendingAction === "feature" && (
                     <Loader2 className="w-4 h-4 animate-spin mr-2" />
                   )}
                   <Star
@@ -811,64 +911,46 @@ export default function RestaurantsSection({
           </div>
         </div>
 
-        {/* Internal Tabs */}
-        <div className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-4">
-          <button
-            onClick={() => setInnerTab("overview")}
-            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-              innerTab === "overview"
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
-            }`}
-          >
-            Overview
-          </button>
-          <button
-            onClick={() => setInnerTab("profile")}
-            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-              innerTab === "profile"
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
-            }`}
-          >
-            Profile
-          </button>
-          <button
-            onClick={() => setInnerTab("menu")}
-            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-              innerTab === "menu"
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
-            }`}
-          >
-            Menu Editor
-          </button>
-          <button
-            onClick={() => setInnerTab("orders")}
-            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-              innerTab === "orders"
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
-            }`}
-          >
-            Live Orders
-          </button>
-          <button
-            onClick={() => setInnerTab("delivery")}
-            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-              innerTab === "delivery"
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
-            }`}
-          >
-            Delivery Zone
-          </button>
+        {/* Internal Tabs — scrollable so the last tabs stay reachable at 375px */}
+        <div className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-4 overflow-x-auto scrollbar-none">
+          {(
+            [
+              ["overview", "Overview"],
+              ["profile", "Profile"],
+              ["menu", "Menu Editor"],
+              ["orders", "Live Orders"],
+              ["delivery", "Delivery Zone"],
+            ] as const
+          ).map(([tab, label]) => (
+            <button
+              key={tab}
+              onClick={() => setInnerTab(tab)}
+              aria-current={innerTab === tab ? "page" : undefined}
+              className={`shrink-0 px-4 py-2 text-sm font-bold rounded-lg transition-all ${
+                innerTab === tab
+                  ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
-        {innerTab === "delivery" && fullSelectedRest?.deliveryZones && (
+        {innerTab === "delivery" && (
           <div className="space-y-6 animate-in fade-in duration-200">
-            {fullSelectedRest.deliveryZones.length > 0 ? (
-              fullSelectedRest.deliveryZones.map((zone) => (
+            {/* This tab used to be gated on `fullSelectedRest?.deliveryZones`
+                alone, so it rendered nothing at all while loading or on error. */}
+            {isFullLoading && !fullDetail ? (
+              <CardSkeletonGrid count={1} className="grid grid-cols-1" />
+            ) : fullError ? (
+              <ErrorState
+                message={fullError}
+                title="Couldn't load delivery zones"
+                onRetry={() => refreshSelected()}
+              />
+            ) : fullDetail?.deliveryZones?.length ? (
+              fullDetail.deliveryZones.map((zone) => (
                 <div
                   key={zone.id}
                   className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm"
@@ -882,14 +964,12 @@ export default function RestaurantsSection({
                 </div>
               ))
             ) : (
-              <div className="text-center py-12 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl">
-                <MapPin className="w-12 h-12 text-zinc-300 mx-auto mb-3" />
-                <h3 className="text-lg font-bold text-zinc-900 dark:text-white">
-                  No Delivery Zones Setup
-                </h3>
-                <p className="text-zinc-500 text-sm">
-                  This restaurant hasn't configured any delivery zones yet.
-                </p>
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl">
+                <EmptyState
+                  icon={MapPin}
+                  title="No delivery zones set up"
+                  hint="This restaurant hasn't configured any delivery zones yet."
+                />
               </div>
             )}
           </div>
@@ -904,14 +984,11 @@ export default function RestaurantsSection({
                   <DollarSign className="w-5 h-5" />
                 </div>
                 <div>
-                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                  <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                     Gross Income
                   </p>
                   <p className="text-lg font-black text-zinc-900 dark:text-white">
-                    $
-                    {(selectedRest.revenue || 0).toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {formatMoney(selectedRest.revenue, "USD")}
                   </p>
                 </div>
               </div>
@@ -921,11 +998,11 @@ export default function RestaurantsSection({
                   <ShoppingBag className="w-5 h-5" />
                 </div>
                 <div>
-                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                  <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                     Total Sales Orders
                   </p>
                   <p className="text-lg font-black text-zinc-900 dark:text-white">
-                    {selectedRest.ordersCount || 0} Orders
+                    {orDash(selectedRest.ordersCount ?? 0, " Orders")}
                   </p>
                 </div>
               </div>
@@ -935,15 +1012,15 @@ export default function RestaurantsSection({
                   <Star className="w-5 h-5 fill-amber-500" />
                 </div>
                 <div>
-                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                  <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                     Review Rating
                   </p>
                   <p className="text-lg font-black text-zinc-900 dark:text-white">
-                    {selectedRest.rating || 0} ★{" "}
-                    <span className="text-xs font-normal text-zinc-400">
+                    {formatRating(selectedRest.rating)} ★{" "}
+                    <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">
                       (
-                      {selectedRest.reviewsCount ||
-                        (selectedRest as any).totalRatings ||
+                      {selectedRest.reviewsCount ??
+                        (selectedRest as any).totalRatings ??
                         0}{" "}
                       votes)
                     </span>
@@ -965,24 +1042,24 @@ export default function RestaurantsSection({
                 </h4>
                 <div className="space-y-3 text-sm">
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                       Email
                     </span>
                     <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      {selectedRest.email}
+                      {orDash(selectedRest.email)}
                     </span>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                       Phone
                     </span>
                     <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      {selectedRest.phone}
+                      {orDash(selectedRest.phone)}
                     </span>
                   </div>
                   {selectedRest.website && (
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                      <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                         Website
                       </span>
                       <a
@@ -997,7 +1074,7 @@ export default function RestaurantsSection({
                   )}
                   {selectedRest.description && (
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                      <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                         Description
                       </span>
                       <span className="text-zinc-600 dark:text-zinc-400 text-xs leading-relaxed">
@@ -1016,37 +1093,35 @@ export default function RestaurantsSection({
                 </h4>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                       Cuisine Type
                     </span>
                     <span className="font-semibold text-zinc-800 dark:text-zinc-200 capitalize">
-                      {selectedRest.cuisineType}
+                      {orDash(selectedRest.cuisineType)}
                     </span>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                       Delivery Fee
                     </span>
                     <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      ${selectedRest.deliveryFee?.toFixed(2)}
+                      {formatMoney(selectedRest.deliveryFee, "USD")}
                     </span>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                       Est. Delivery
                     </span>
                     <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      {selectedRest.estimatedDeliveryMinutes} mins
+                      {orDash(selectedRest.estimatedDeliveryMinutes, " mins")}
                     </span>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                    <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                       Joined Date
                     </span>
                     <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      {selectedRest.joinedDate
-                        ? new Date(selectedRest.joinedDate).toLocaleDateString()
-                        : "—"}
+                      {formatDate(selectedRest.joinedDate)}
                     </span>
                   </div>
                 </div>
@@ -1054,7 +1129,7 @@ export default function RestaurantsSection({
                 {/* Opening Hours */}
                 {selectedRest.openingHours?.entries && (
                   <div className="mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-800">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide block mb-2">
+                    <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide block mb-2">
                       Opening Hours
                     </span>
                     <div className="space-y-1.5 text-xs">
@@ -1089,25 +1164,26 @@ export default function RestaurantsSection({
                 <div className="flex flex-col md:flex-row gap-6">
                   <div className="flex-1 space-y-3 text-sm">
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                      <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                         City
                       </span>
                       <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                        {selectedRest.city}
+                        {orDash(selectedRest.city)}
                       </span>
                     </div>
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
+                      <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
                         Address
                       </span>
                       <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                        {selectedRest.address}
+                        {formatAddress(selectedRest.address) || "—"}
                       </span>
                     </div>
                   </div>
                   {selectedRest.latitude && selectedRest.longitude && (
                     <div className="w-full md:w-2/3 h-64 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-700 shadow-inner relative">
                       <iframe
+                        title={`Map showing the location of ${selectedRest.name}`}
                         width="100%"
                         height="100%"
                         style={{ border: 0 }}
@@ -1151,7 +1227,16 @@ export default function RestaurantsSection({
           onSuccess={() => {
             setIsEditModalOpen(false);
             fetchMerchants();
+            // Header/profile read from the detail payload, so refresh it too.
+            refreshSelected();
           }}
+        />
+
+        {/* Stories Viewer Modal */}
+        <StoriesViewerModal
+          isOpen={!!viewingStoriesFor}
+          onClose={() => setViewingStoriesFor(null)}
+          restaurant={viewingStoriesFor}
         />
       </div>
     );
@@ -1160,11 +1245,9 @@ export default function RestaurantsSection({
   // Registry Listing Grid
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold p-4 rounded-xl flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4" />
-          {error}
-        </div>
+      {/* Content is already on screen — don't replace it, just flag the failure. */}
+      {error && displayList.length > 0 && (
+        <ErrorBanner message={error} onRetry={refetchList} />
       )}
 
       {/* Search & Tabs Filter Row */}
@@ -1265,36 +1348,47 @@ export default function RestaurantsSection({
         </div>
       </div>
 
-      {/* Grid of Restaurant / Submission Cards */}
-      {displayList.length === 0 ? (
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-12 text-center rounded-2xl flex flex-col items-center justify-center">
-          <Store className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mb-3" />
-          <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-            {isPendingTab
-              ? "No pending submissions to review"
-              : "No restaurants match criteria"}
-          </p>
-          <p className="text-xs text-zinc-400 mt-1">
-            Try relaxing filters or updating search terms
-          </p>
+      {/* Grid of Restaurant / Submission Cards.
+          Loading, failed and genuinely-empty are three different states: the
+          old code showed "No restaurants match criteria" for all three. */}
+      {isLoading ? (
+        <CardSkeletonGrid
+          count={6}
+          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+        />
+      ) : error ? (
+        <ErrorState
+          message={error}
+          title={
+            isPendingTab
+              ? "Couldn't load applications"
+              : "Couldn't load merchants"
+          }
+          onRetry={refetchList}
+        />
+      ) : displayList.length === 0 ? (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
+          <EmptyState
+            icon={Store}
+            title={
+              isPendingTab
+                ? "No pending submissions to review"
+                : "No restaurants match criteria"
+            }
+            hint="Try relaxing filters or updating search terms"
+          />
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {displayList.map((item) => {
             const isSub = "status" in item && isPendingTab;
+            const hasStories =
+              !isSub && ((item as any).stories?.length ?? 0) > 0;
 
             return (
               <div
                 key={item.id}
-                className="bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800/80 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 group flex flex-col cursor-pointer"
-                onClick={() => {
-                  if (isPendingTab) {
-                    setSelectedSubmissionId(item.id);
-                  } else {
-                    setSelectedRestId(item.id);
-                    setInnerTab("overview");
-                  }
-                }}
+                className="relative bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800/80 rounded-2xl overflow-hidden shadow-sm hover:shadow-md focus-within:ring-2 focus-within:ring-orange-500 transition-all duration-200 group flex flex-col"
               >
                 {/* Banner Area */}
                 <div className="h-32 relative">
@@ -1304,21 +1398,11 @@ export default function RestaurantsSection({
                       item.coverImage ||
                       "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
                     }
-                    alt={item.name}
+                    alt=""
                     className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300 opacity-80"
                   />
                   <div className="absolute top-3 right-3 flex flex-col gap-2 items-end">
-                    <span
-                      className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full shadow border ${
-                        item.status === "active" || item.status === "approved"
-                          ? "bg-emerald-500/90 text-white border-emerald-400"
-                          : item.status === "pending"
-                            ? "bg-amber-500/95 text-black border-amber-400 animate-pulse"
-                            : "bg-red-500/90 text-white border-red-400"
-                      }`}
-                    >
-                      {item.status}
-                    </span>
+                    <StatusPill status={item.status} className="shadow" />
                     {(item as any).isFeatured && (
                       <span className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full shadow border bg-purple-500/90 text-white border-purple-400 flex items-center gap-1">
                         <Star className="w-2.5 h-2.5 fill-white" /> Featured
@@ -1330,63 +1414,73 @@ export default function RestaurantsSection({
                 {/* Body */}
                 <div className="p-5 space-y-4 flex-1 flex flex-col justify-between">
                   <div>
-                    <div className="flex gap-3 items-start relative z-10">
+                    <div className="flex gap-3 items-start">
                       {item.logo &&
                       typeof item.logo === "string" &&
                       item.logo.length > 5 ? (
-                        <button
-                          onClick={(e) => {
-                            if (
-                              !isSub &&
-                              (item as any).stories &&
-                              (item as any).stories.length > 0
-                            ) {
-                              e.stopPropagation();
-                              setViewingStoriesFor(item as any);
-                            }
-                          }}
-                          className={`w-11 h-11 rounded-xl shadow-sm overflow-hidden bg-zinc-50 dark:bg-zinc-800 border-2 shrink-0 transition-transform ${
-                            !isSub &&
-                            (item as any).stories &&
-                            (item as any).stories.length > 0
-                              ? "border-orange-500 hover:scale-110 cursor-pointer p-[1.5px]"
-                              : "border-zinc-200 dark:border-zinc-700"
-                          }`}
-                        >
-                          <img
-                            src={item.logo}
-                            alt="logo"
-                            className="w-full h-full object-cover rounded-lg"
-                          />
-                        </button>
+                        hasStories ? (
+                          <button
+                            type="button"
+                            aria-label={`View ${item.name} stories`}
+                            onClick={() => setViewingStoriesFor(item as any)}
+                            className="relative z-10 w-11 h-11 rounded-xl shadow-sm overflow-hidden bg-zinc-50 dark:bg-zinc-800 border-2 shrink-0 transition-transform border-orange-500 hover:scale-110 cursor-pointer p-[1.5px]"
+                          >
+                            <img
+                              src={item.logo}
+                              alt=""
+                              className="w-full h-full object-cover rounded-lg"
+                            />
+                          </button>
+                        ) : (
+                          // Not a button: with no stories it had no action, and
+                          // it would nest inside the card's own control.
+                          <span className="block w-11 h-11 rounded-xl shadow-sm overflow-hidden bg-zinc-50 dark:bg-zinc-800 border-2 border-zinc-200 dark:border-zinc-700 shrink-0">
+                            <img
+                              src={item.logo}
+                              alt={`${item.name} logo`}
+                              className="w-full h-full object-cover rounded-lg"
+                            />
+                          </span>
+                        )
                       ) : (
                         <span className="text-2xl p-1.5 bg-zinc-50 dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-700 shrink-0">
                           {item.logo || "🍽️"}
                         </span>
                       )}
                       <div className="min-w-0">
+                        {/* The card used to be a `<div onClick>`: unreachable by
+                            keyboard. The button's ::after stretches over the
+                            whole card so the click target is unchanged. */}
                         <h4 className="text-sm font-bold text-zinc-950 dark:text-white truncate group-hover:text-orange-500 transition-colors">
-                          {item.name}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isPendingTab) {
+                                setSelectedSubmissionId(item.id);
+                              } else {
+                                setSelectedRestId(item.id);
+                                setInnerTab("overview");
+                              }
+                            }}
+                            className="block max-w-full truncate text-left cursor-pointer after:absolute after:inset-0 after:rounded-2xl focus:outline-none"
+                          >
+                            {item.name}
+                          </button>
                         </h4>
-                        <p className="text-[10px] text-zinc-400 font-medium truncate mt-0.5">
+                        <p className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium truncate mt-0.5">
                           {item.cuisineType || "No cuisine set"}
                         </p>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 text-[10px] text-zinc-400 mt-3.5">
-                      <MapPin className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                    <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 dark:text-zinc-400 mt-3.5">
+                      <MapPin className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">
-                        {isSub
-                          ? [
-                              (item as any).address?.street,
-                              (item as any).address?.city,
-                            ]
+                        {(isSub
+                          ? formatAddress((item as any).address)
+                          : [formatAddress(item.address), (item as any).city]
                               .filter(Boolean)
-                              .join(", ") || "No address provided"
-                          : [item.address, (item as any).city]
-                              .filter(Boolean)
-                              .join(", ") || "No address provided"}
+                              .join(", ")) || "No address provided"}
                       </span>
                     </div>
                   </div>
@@ -1400,36 +1494,34 @@ export default function RestaurantsSection({
                             Apply Date
                           </p>
                           <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">
-                            {item.createdAt
-                              ? new Date(item.createdAt).toLocaleDateString()
-                              : "Today"}
+                            {formatDate(item.createdAt)}
                           </p>
                         </div>
                         <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
-                          <p className="text-[9px] font-bold text-zinc-400 uppercase">
+                          <p className="text-[9px] font-bold text-zinc-500 dark:text-zinc-400 uppercase">
                             Est. Delivery
                           </p>
                           <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">
-                            {item.estimatedDeliveryMinutes ?? "N/A"} min
+                            {orDash(item.estimatedDeliveryMinutes, " min")}
                           </p>
                         </div>
                       </>
                     ) : (
                       <>
                         <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
-                          <p className="text-[9px] font-bold text-zinc-400 uppercase">
+                          <p className="text-[9px] font-bold text-zinc-500 dark:text-zinc-400 uppercase">
                             GMV Sales
                           </p>
                           <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">
-                            ${((item as any).revenue || 0).toFixed(0)}
+                            {formatMoney((item as any).revenue, "USD")}
                           </p>
                         </div>
                         <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
-                          <p className="text-[9px] font-bold text-zinc-400 uppercase">
+                          <p className="text-[9px] font-bold text-zinc-500 dark:text-zinc-400 uppercase">
                             Rating
                           </p>
                           <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5 inline-flex items-center justify-center gap-0.5">
-                            {(item as any).rating || 0}{" "}
+                            {formatRating((item as any).rating)}{" "}
                             <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
                           </p>
                         </div>
@@ -1485,6 +1577,7 @@ export default function RestaurantsSection({
         onSuccess={() => {
           setIsEditModalOpen(false);
           fetchMerchants();
+          refreshSelected();
         }}
       />
       {/* Stories Viewer Modal */}

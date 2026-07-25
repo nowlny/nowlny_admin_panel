@@ -1,22 +1,20 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { 
-  Search, 
-  Bell, 
-  Settings, 
-  Globe, 
-  CheckCircle,
+import {
+  Search,
+  Bell,
   Menu,
   Clock,
-  Sparkles,
   Inbox,
   Sun,
   Moon,
-  Loader2
+  Loader2,
 } from "lucide-react";
 import { notificationsService, AppNotification } from "../../services/notifications";
 import { FCMToast } from "../../hooks/useNotifications";
+import { tabLabel } from "./Sidebar";
+import { formatTime } from "../../lib/format";
 
 interface HeaderProps {
   title: string;
@@ -26,6 +24,11 @@ interface HeaderProps {
   isDarkMode: boolean;
   onToggleTheme: () => void;
   notificationToast?: FCMToast | null;
+  /** Sections that don't filter by the global query hide the search box. */
+  searchEnabled?: boolean;
+  pushPermission?: "unsupported" | NotificationPermission;
+  onEnablePush?: () => void;
+  isRequestingPush?: boolean;
 }
 
 export default function Header({
@@ -35,15 +38,28 @@ export default function Header({
   onOpenSidebar,
   isDarkMode,
   onToggleTheme,
-  notificationToast
+  notificationToast,
+  searchEnabled = true,
+  pushPermission = "default",
+  onEnablePush,
+  isRequestingPush = false,
 }: HeaderProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  
+
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoadingNotifs, setIsLoadingNotifs] = useState(false);
-  
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+
+  // The clock was rendered once from `new Date()` during render, so it froze at
+  // page-load time while being labelled "Local Time". Tick it every 30s.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -119,7 +135,7 @@ export default function Header({
   };
 
   return (
-    <header className="h-16 bg-white border-b border-zinc-200 flex items-center justify-between px-4 sm:px-8 shrink-0 dark:bg-zinc-900 dark:border-zinc-800 transition-colors duration-200">
+    <header className="relative h-16 bg-white border-b border-zinc-200 flex items-center justify-between px-4 sm:px-8 shrink-0 dark:bg-zinc-900 dark:border-zinc-800 transition-colors duration-200">
       {/* Title & Stats */}
       <div className="flex items-center gap-3 sm:gap-6">
         {/* Hamburger Menu Toggle on Mobile */}
@@ -131,10 +147,10 @@ export default function Header({
           <Menu className="w-5 h-5" />
         </button>
 
-        <h2 className="text-sm sm:text-xl font-bold text-zinc-900 dark:text-white capitalize truncate max-w-[120px] sm:max-w-none">
-          {title === "overview" ? "Dashboard Overview" : title.replace("_", " ")}
+        <h2 className="text-sm sm:text-xl font-bold text-zinc-900 dark:text-white truncate max-w-[120px] sm:max-w-none">
+          {tabLabel(title)}
         </h2>
-        
+
         {/* Quick System Badge */}
         <div className="hidden md:flex items-center gap-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2.5 py-1 rounded-full text-xs font-semibold border border-emerald-500/20">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -145,21 +161,40 @@ export default function Header({
       {/* Right Controls */}
       <div className="flex items-center gap-4">
         {/* Search Bar */}
-        <div className="relative w-64 hidden sm:block">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-          <input
-            type="text"
-            placeholder="Search records..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 placeholder-zinc-400 rounded-lg pl-9 pr-4 py-1.5 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 focus:border-orange-500 dark:bg-zinc-800/50 dark:border-zinc-700/80 dark:text-zinc-200"
-          />
-        </div>
+        {searchEnabled && (
+          <>
+            <div className="relative w-64 hidden sm:block">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+              <label htmlFor="global-search" className="sr-only">
+                Search records
+              </label>
+              <input
+                id="global-search"
+                type="search"
+                placeholder="Search records..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 placeholder-zinc-400 rounded-lg pl-9 pr-4 py-1.5 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 focus:border-orange-500 dark:bg-zinc-800/50 dark:border-zinc-700/80 dark:text-zinc-200"
+              />
+            </div>
+
+            {/* Mobile users previously had no search at all — the box was
+                `hidden sm:block`. This exposes it behind a toggle. */}
+            <button
+              onClick={() => setMobileSearchOpen((v) => !v)}
+              className="sm:hidden p-2 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-all border border-zinc-200 dark:border-zinc-700"
+              aria-label="Search records"
+              aria-expanded={mobileSearchOpen}
+            >
+              <Search className="w-4 h-4" />
+            </button>
+          </>
+        )}
 
         {/* System Time */}
         <div className="hidden lg:flex items-center gap-1.5 text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800/40 px-2.5 py-1.5 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50">
           <Clock className="w-3.5 h-3.5 text-zinc-400" />
-          <span>Local Time: {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}</span>
+          <span suppressHydrationWarning>Beirut: {formatTime(now)}</span>
         </div>
 
         {/* Theme Toggle Button */}
@@ -191,6 +226,44 @@ export default function Header({
 
           {isOpen && (
             <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xl overflow-hidden z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+              {/* Push-permission state is surfaced here instead of prompting
+                  unannounced the moment the operator signs in. */}
+              {pushPermission === "default" && onEnablePush && (
+                <div className="p-3.5 bg-orange-500/[0.06] border-b border-orange-500/20 flex items-start gap-2.5">
+                  <Bell className="w-4 h-4 text-orange-500 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-zinc-900 dark:text-white">
+                      Turn on order alerts
+                    </p>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">
+                      Get notified the moment a new order or merchant
+                      application arrives.
+                    </p>
+                    <button
+                      onClick={onEnablePush}
+                      disabled={isRequestingPush}
+                      className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-bold text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 px-2.5 py-1.5 rounded-lg transition-colors"
+                    >
+                      {isRequestingPush && (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      )}
+                      Enable alerts
+                    </button>
+                  </div>
+                </div>
+              )}
+              {pushPermission === "denied" && (
+                <div className="p-3.5 bg-zinc-500/[0.06] border-b border-zinc-200 dark:border-zinc-800">
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                    <span className="font-bold text-zinc-700 dark:text-zinc-300">
+                      Alerts are blocked.
+                    </span>{" "}
+                    Re-enable notifications for this site in your browser&apos;s
+                    site settings to receive order alerts.
+                  </p>
+                </div>
+              )}
+
               <div className="p-4 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-900/40">
                 <div className="flex items-center gap-1.5">
                   <span className="font-bold text-sm text-zinc-900 dark:text-white">System Logs</span>
@@ -269,6 +342,27 @@ export default function Header({
           )}
         </div>
       </div>
+
+      {/* Mobile search drawer */}
+      {searchEnabled && mobileSearchOpen && (
+        <div className="sm:hidden absolute top-full left-0 right-0 z-40 p-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 shadow-lg animate-in fade-in slide-in-from-top-2 duration-150">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+            <label htmlFor="global-search-mobile" className="sr-only">
+              Search records
+            </label>
+            <input
+              id="global-search-mobile"
+              type="search"
+              autoFocus
+              placeholder="Search records..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-zinc-50 border border-zinc-200 text-zinc-800 placeholder-zinc-400 rounded-lg pl-9 pr-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 focus:border-orange-500 dark:bg-zinc-800/50 dark:border-zinc-700/80 dark:text-zinc-200"
+            />
+          </div>
+        </div>
+      )}
     </header>
   );
 }

@@ -3,29 +3,43 @@
 import React, { useState, useEffect } from "react";
 import {
   Users,
-  Search,
   Phone,
   Calendar,
   Shield,
   Trash2,
   Plus,
   Edit,
-  AlertCircle,
-  X,
   ShieldAlert,
   Loader2,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import {
-  usersService,
-  SystemUser,
-  SystemUserCreate,
-  SystemUserUpdate,
-} from "../../services/users";
+import { usersService, SystemUser } from "../../services/users";
+import Modal from "./ui/Modal";
+import { useConfirm } from "./ui/ConfirmDialog";
+import { EmptyState, ErrorState, CardSkeletonGrid } from "./ui/States";
+import StatusPill, { statusLabel } from "./ui/StatusPill";
+import { formatDate, shortId } from "../../lib/format";
+
+const inputClass =
+  "w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm text-zinc-900 dark:text-white rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500";
+const labelClass =
+  "block text-[10px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1.5";
+
+function RequiredMark() {
+  return (
+    <span aria-hidden="true" className="text-orange-500">
+      {" "}
+      *
+    </span>
+  );
+}
 
 export default function SystemUsersSection() {
+  const confirm = useConfirm();
+
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -41,6 +55,7 @@ export default function SystemUsersSection() {
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fetchUsers = async () => {
     try {
@@ -52,9 +67,14 @@ export default function SystemUsersSection() {
           ? (data as any).data
           : [];
       setUsers(finalUsers);
+      setLoadError(null);
     } catch (err: any) {
       console.error("Failed to fetch users:", err);
-      toast.error("Could not connect to API to fetch system users.");
+      // A failed fetch used to render the "No system users found" empty state,
+      // which is indistinguishable from an account list that is genuinely empty.
+      setLoadError(
+        err?.message || "Could not connect to the API to fetch system users.",
+      );
       setUsers([]);
     } finally {
       setIsLoading(false);
@@ -65,6 +85,11 @@ export default function SystemUsersSection() {
     fetchUsers();
   }, []);
 
+  const closeModal = () => {
+    setIsCreateModalOpen(false);
+    setEditingUser(null);
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -74,12 +99,12 @@ export default function SystemUsersSection() {
         phoneNumber: formData.phoneNumber,
         userType: formData.userType,
       });
-      setIsCreateModalOpen(false);
+      closeModal();
       resetForm();
       toast.success("User created successfully!");
       fetchUsers();
     } catch (err: any) {
-      toast.error(`Failed to create user: ${err.message}`);
+      toast.error(err?.message || "Failed to create user.");
     } finally {
       setIsSubmitting(false);
     }
@@ -97,30 +122,40 @@ export default function SystemUsersSection() {
         status: formData.status,
         isActive: formData.status === "active",
       });
-      setEditingUser(null);
+      closeModal();
       resetForm();
       toast.success("User updated successfully!");
       fetchUsers();
     } catch (err: any) {
-      toast.error(`Failed to update user: ${err.message}`);
+      toast.error(err?.message || "Failed to update user.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (
-      !confirm(
-        `Are you sure you want to delete ${name}? This action cannot be undone.`,
-      )
-    )
-      return;
+  const handleDelete = async (user: SystemUser) => {
+    // The card falls back to "Unnamed User", so the prompt must too — it used
+    // to read "delete undefined?" for any user without a full name.
+    const label = user.fullName?.trim() || user.phoneNumber || "this user";
+    const confirmed = await confirm({
+      title: `Delete ${label}?`,
+      description: `This permanently removes the ${statusLabel(
+        user.userType,
+      ).toLowerCase()} account and revokes its access to the admin panel.`,
+      confirmLabel: "Delete user",
+      variant: "danger",
+    });
+    if (!confirmed) return;
+
     try {
-      await usersService.deleteSystemUser(id);
+      setDeletingId(user.id);
+      await usersService.deleteSystemUser(user.id);
       toast.success("User deleted successfully!");
       fetchUsers();
     } catch (err: any) {
-      toast.error(`Failed to delete user: ${err.message}`);
+      toast.error(err?.message || "Failed to delete user.");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -145,14 +180,24 @@ export default function SystemUsersSection() {
     });
   };
 
-  if (isLoading && users.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center p-24 text-zinc-500">
-        <Loader2 className="w-8 h-8 animate-spin mb-4 text-orange-500" />
-        <p className="text-sm font-semibold">Loading system users...</p>
-      </div>
-    );
-  }
+  const isDirty = editingUser
+    ? formData.fullName !== editingUser.fullName ||
+      formData.phoneNumber !== editingUser.phoneNumber ||
+      formData.userType !== editingUser.userType ||
+      formData.status !== editingUser.status
+    : !!(formData.fullName || formData.phoneNumber);
+
+  const addButton = (
+    <button
+      onClick={() => {
+        resetForm();
+        setIsCreateModalOpen(true);
+      }}
+      className="bg-zinc-900 hover:bg-orange-500 text-white dark:bg-zinc-800 text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-2"
+    >
+      <Plus className="w-4 h-4" /> Add User
+    </button>
+  );
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -163,29 +208,29 @@ export default function SystemUsersSection() {
             <ShieldAlert className="w-5 h-5 text-orange-500" /> System Users
             Control
           </h2>
-          <p className="text-[11px] text-zinc-500 font-semibold mt-1">
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-semibold mt-1">
             Manage administrators, support staff, and system access.
           </p>
         </div>
 
-        <button
-          onClick={() => {
-            resetForm();
-            setIsCreateModalOpen(true);
-          }}
-          className="bg-zinc-900 hover:bg-orange-500 text-white dark:bg-zinc-800 text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-2"
-        >
-          <Plus className="w-4 h-4" /> Add User
-        </button>
+        {addButton}
       </div>
 
       {/* Users List */}
-      {users.length === 0 ? (
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-12 text-center rounded-2xl flex flex-col items-center justify-center">
-          <Shield className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mb-3" />
-          <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-            No system users found
-          </p>
+      {isLoading ? (
+        <CardSkeletonGrid count={6} />
+      ) : loadError ? (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
+          <ErrorState message={loadError} onRetry={fetchUsers} />
+        </div>
+      ) : users.length === 0 ? (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
+          <EmptyState
+            icon={Shield}
+            title="No system users found"
+            hint="Add an administrator, support agent or super admin to give them access to this panel."
+            action={addButton}
+          />
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -206,24 +251,16 @@ export default function SystemUsersSection() {
                       <h4 className="text-sm font-bold text-zinc-950 dark:text-white truncate group-hover:text-orange-500 transition-colors">
                         {user.fullName || "Unnamed User"}
                       </h4>
-                      <p className="text-[10px] text-zinc-400 font-semibold truncate mt-0.5">
-                        Role: {user.userType}
+                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold truncate mt-0.5">
+                        Role: {statusLabel(user.userType)}
                       </p>
                     </div>
                   </div>
 
-                  <span
-                    className={`shrink-0 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full border ${
-                      user.status === "active"
-                        ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                        : "bg-red-500/10 text-red-500 border-red-500/20"
-                    }`}
-                  >
-                    {user.status}
-                  </span>
+                  <StatusPill status={user.status} className="shrink-0" />
                 </div>
 
-                <div className="mt-4 space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3 text-[11px] text-zinc-500 dark:text-zinc-400">
+                <div className="mt-4 space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3 text-[11px] text-zinc-600 dark:text-zinc-400">
                   <div className="flex items-center gap-2">
                     <Phone className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
                     <span>{user.phoneNumber}</span>
@@ -237,31 +274,44 @@ export default function SystemUsersSection() {
                   {user.dateOfBirth && (
                     <div className="flex items-center gap-2">
                       <Calendar className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                      <span>DOB: {user.dateOfBirth}</span>
+                      <span>DOB: {formatDate(user.dateOfBirth)}</span>
                     </div>
                   )}
                 </div>
               </div>
 
               <div className="mt-5 pt-3.5 border-t border-zinc-100 dark:border-zinc-800 flex justify-between items-center gap-3">
-                <span className="text-[9px] font-bold text-zinc-400 uppercase">
-                  ID: {user.id.substring(0, 8)}...
+                <span
+                  className="text-[9px] font-bold text-zinc-500 dark:text-zinc-400 uppercase"
+                  title={user.id}
+                >
+                  ID: {shortId(user.id)}
                 </span>
 
                 <div className="flex gap-2">
                   <button
                     onClick={() => openEditModal(user)}
-                    className="p-1.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors"
+                    disabled={deletingId === user.id}
+                    className="p-2.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors disabled:opacity-50"
                     title="Edit User"
+                    aria-label={`Edit ${user.fullName || user.phoneNumber}`}
                   >
                     <Edit className="w-4 h-4" />
                   </button>
+                  {/* `deletingId` also guards against a double-click firing two
+                      DELETEs for the same record. */}
                   <button
-                    onClick={() => handleDelete(user.id, user.fullName)}
-                    className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"
+                    onClick={() => handleDelete(user)}
+                    disabled={deletingId === user.id}
+                    className="p-2.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50"
                     title="Delete User"
+                    aria-label={`Delete ${user.fullName || user.phoneNumber}`}
                   >
-                    <Trash2 className="w-4 h-4" />
+                    {deletingId === user.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-red-500" />
+                    ) : (
+                      <Trash2 className="w-4 h-4" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -271,123 +321,122 @@ export default function SystemUsersSection() {
       )}
 
       {/* Create / Edit Modal */}
-      {(isCreateModalOpen || editingUser) && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 duration-150">
-            <div className="p-5 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-900/40">
-              <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-                <Shield className="w-4 h-4 text-orange-500" />
-                {editingUser ? "Edit System User" : "Create System User"}
-              </h3>
-              <button
-                onClick={() => {
-                  setIsCreateModalOpen(false);
-                  setEditingUser(null);
-                }}
-                className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={editingUser ? handleUpdate : handleCreate}
-              className="p-6 space-y-4"
-            >
-              <div>
-                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
-                  Full Name
-                </label>
-                <input
-                  required
-                  type="text"
-                  value={formData.fullName}
-                  onChange={(e) =>
-                    setFormData({ ...formData, fullName: e.target.value })
-                  }
-                  className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  placeholder="e.g. John Doe"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
-                  Phone Number
-                </label>
-                <input
-                  required
-                  type="text"
-                  value={formData.phoneNumber}
-                  onChange={(e) =>
-                    setFormData({ ...formData, phoneNumber: e.target.value })
-                  }
-                  className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  placeholder="e.g. +966501234567"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
-                  User Type
-                </label>
-                <select
-                  value={formData.userType}
-                  onChange={(e) =>
-                    setFormData({ ...formData, userType: e.target.value })
-                  }
-                  className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                >
-                  <option value="admin">Admin</option>
-                  <option value="super_admin">Super Admin</option>
-                  <option value="support">Support</option>
-                </select>
-              </div>
-
-              {editingUser && (
-                <div>
-                  <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
-                    Account Status
-                  </label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) =>
-                      setFormData({ ...formData, status: e.target.value })
-                    }
-                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  >
-                    <option value="active">Active</option>
-                    <option value="suspended">Suspended</option>
-                  </select>
-                </div>
-              )}
-
-              <div className="pt-4 flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCreateModalOpen(false);
-                    setEditingUser(null);
-                  }}
-                  className="flex-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-white text-xs font-bold py-2.5 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold py-2.5 rounded-lg transition-colors disabled:opacity-50"
-                >
-                  {isSubmitting
-                    ? "Saving..."
-                    : editingUser
-                      ? "Save Changes"
-                      : "Create User"}
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={isCreateModalOpen || !!editingUser}
+        onClose={closeModal}
+        title={editingUser ? "Edit System User" : "Create System User"}
+        description={
+          editingUser
+            ? "Changes take effect the next time this user signs in."
+            : "The user signs in with this phone number."
+        }
+        maxWidth="max-w-md"
+        dismissable={!isSubmitting && !isDirty}
+        icon={
+          <div className="w-9 h-9 rounded-xl bg-orange-500/10 text-orange-500 flex items-center justify-center shrink-0">
+            <Shield className="w-4 h-4" />
           </div>
-        </div>
-      )}
+        }
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeModal}
+              className="flex-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-white text-xs font-bold py-2.5 rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="system-user-form"
+              disabled={isSubmitting}
+              className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold py-2.5 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {editingUser ? "Save Changes" : "Create User"}
+            </button>
+          </>
+        }
+      >
+        <form
+          id="system-user-form"
+          onSubmit={editingUser ? handleUpdate : handleCreate}
+          className="space-y-4"
+        >
+          <div>
+            <label htmlFor="system-user-fullName" className={labelClass}>
+              Full Name
+              <RequiredMark />
+            </label>
+            <input
+              id="system-user-fullName"
+              required
+              type="text"
+              value={formData.fullName}
+              onChange={(e) =>
+                setFormData({ ...formData, fullName: e.target.value })
+              }
+              className={inputClass}
+              placeholder="e.g. John Doe"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="system-user-phoneNumber" className={labelClass}>
+              Phone Number
+              <RequiredMark />
+            </label>
+            <input
+              id="system-user-phoneNumber"
+              required
+              type="tel"
+              value={formData.phoneNumber}
+              onChange={(e) =>
+                setFormData({ ...formData, phoneNumber: e.target.value })
+              }
+              className={inputClass}
+              placeholder="e.g. +966501234567"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="system-user-type" className={labelClass}>
+              User Type
+            </label>
+            <select
+              id="system-user-type"
+              value={formData.userType}
+              onChange={(e) =>
+                setFormData({ ...formData, userType: e.target.value })
+              }
+              className={inputClass}
+            >
+              <option value="admin">Admin</option>
+              <option value="super_admin">Super Admin</option>
+              <option value="support">Support</option>
+            </select>
+          </div>
+
+          {editingUser && (
+            <div>
+              <label htmlFor="system-user-status" className={labelClass}>
+                Account Status
+              </label>
+              <select
+                id="system-user-status"
+                value={formData.status}
+                onChange={(e) =>
+                  setFormData({ ...formData, status: e.target.value })
+                }
+                className={inputClass}
+              >
+                <option value="active">Active</option>
+                <option value="suspended">Suspended</option>
+              </select>
+            </div>
+          )}
+        </form>
+      </Modal>
     </div>
   );
 }

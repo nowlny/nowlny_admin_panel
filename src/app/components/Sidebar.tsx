@@ -15,6 +15,10 @@ import {
   Truck,
 } from "lucide-react";
 import { Restaurant } from "../data/mockData";
+import { SystemUser } from "../../services/users";
+import { authService } from "../../services/auth";
+import { useConfirm } from "./ui/ConfirmDialog";
+import { statusLabel } from "./ui/StatusPill";
 
 export interface Role {
   type: "admin" | "restaurant" | "restaurant_owner";
@@ -31,6 +35,52 @@ interface SidebarProps {
   currentRole: Role;
   onChangeRole: (role: Role) => void;
   restaurants: Restaurant[];
+  currentUser: SystemUser | null;
+}
+
+/**
+ * Single source of truth for tab titles.
+ *
+ * The header previously derived its title with `tab.replace("_", " ")`, which
+ * replaces only the first underscore and produced lowercase text that didn't
+ * match the sidebar — the nav said "Store Categories" while the header said
+ * "restaurant categories".
+ */
+export const TAB_LABELS: Record<string, string> = {
+  overview: "Dashboard Overview",
+  orders: "Live Orders",
+  restaurants: "Restaurants",
+  restaurant_categories: "Store Categories",
+  delivery_companies: "Delivery Companies",
+  reels: "Reels Management",
+  customers: "Customers",
+  currencies: "Currencies & Rates",
+  system_users: "System Users",
+  notifications: "Notifications",
+  app_version: "App Version Control",
+  restaurant_application: "Apply & Status",
+  restaurant_reels: "My Reels",
+  restaurant_overview: "My Dashboard",
+};
+
+export function tabLabel(tab: string): string {
+  return (
+    TAB_LABELS[tab] ??
+    tab
+      .split("_")
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ")
+  );
+}
+
+/** Initials for the avatar, e.g. "Hassan Al-Sabeh" -> "HA". */
+function initialsOf(name?: string | null): string {
+  if (!name) return "··";
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "··";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 export default function Sidebar({
@@ -43,7 +93,9 @@ export default function Sidebar({
   currentRole,
   onChangeRole,
   restaurants,
+  currentUser,
 }: SidebarProps) {
+  const confirm = useConfirm();
   // Decide menu items based on role
   const getMenuItems = () => {
     if (currentRole.type === "admin") {
@@ -204,42 +256,46 @@ export default function Sidebar({
         <div className="p-4 border-t border-zinc-800 bg-zinc-900/30">
           <div className="flex items-center gap-3 px-2 py-1.5">
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-zinc-950 font-bold shadow text-xs uppercase shrink-0">
-              {currentRole.type === "admin"
-                ? "HA"
-                : currentRole.type === "restaurant_owner"
-                  ? "OW"
-                  : activeRestaurant?.logo || "ST"}
+              {currentRole.type === "restaurant"
+                ? activeRestaurant?.logo || "ST"
+                : initialsOf(currentUser?.fullName)}
             </div>
 
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-white truncate">
-                {currentRole.type === "admin"
-                  ? "Hassan Al-Sabeh"
-                  : currentRole.type === "restaurant_owner"
-                    ? "Store Applicant"
-                    : activeRestaurant?.name}
+                {currentRole.type === "restaurant"
+                  ? (activeRestaurant?.name ?? "Store")
+                  : (currentUser?.fullName ??
+                    currentUser?.phoneNumber ??
+                    "Signed in")}
               </p>
               <p className="text-[10px] text-zinc-500 truncate font-semibold">
-                {currentRole.type === "admin"
-                  ? "Root Administrator"
-                  : currentRole.type === "restaurant_owner"
-                    ? "Pending Registration"
-                    : `${activeRestaurant?.cuisine.split(",")[0]} Partner`}
+                {currentRole.type === "restaurant"
+                  ? "Merchant Partner"
+                  : currentUser?.userType
+                    ? statusLabel(currentUser.userType)
+                    : currentRole.type === "restaurant_owner"
+                      ? "Pending registration"
+                      : "Administrator"}
               </p>
             </div>
 
             <button
-              className="text-zinc-500 hover:text-red-400 transition-colors p-1.5 hover:bg-zinc-800 rounded-lg shrink-0"
-              title="Logout"
-              onClick={() => {
-                if (
-                  confirm(
-                    "Are you sure you want to log out of the admin panel?",
-                  )
-                ) {
-                  localStorage.removeItem("token");
-                  window.location.reload();
-                }
+              className="text-zinc-500 hover:text-red-400 transition-colors p-2 hover:bg-zinc-800 rounded-lg shrink-0"
+              title="Log out"
+              aria-label="Log out"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: "Log out?",
+                  description:
+                    "You'll need to sign in again with a one-time code sent to your phone.",
+                  confirmLabel: "Log out",
+                  variant: "danger",
+                });
+                // authService.logout() also tells the server and clears the
+                // refresh token — the old inline handler dropped only `token`,
+                // leaving `refreshToken` behind in localStorage.
+                if (ok) await authService.logout();
               }}
             >
               <LogOut className="w-4 h-4" />

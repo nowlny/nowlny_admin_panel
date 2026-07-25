@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { X, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
+import Modal from "./ui/Modal";
 import {
   restaurantsService,
   RestaurantCreate,
@@ -12,34 +13,48 @@ interface AddRestaurantModalProps {
   onSuccess: () => void;
 }
 
+const EMPTY_FORM = {
+  name: "",
+  description: "",
+  email: "",
+  phone: "",
+  cuisineType: "",
+  city: "",
+  address: "",
+  deliveryFee: "",
+  estimatedDeliveryMinutes: "",
+  latitude: "",
+  longitude: "",
+  logo: "",
+  coverImage: "",
+};
+
+const FIELD_CLASS =
+  "w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors";
+const LABEL_CLASS = "text-xs font-semibold text-zinc-700 dark:text-zinc-300";
+
+/** Red asterisk that isn't announced twice — the input already has `required`. */
+function Req() {
+  return (
+    <span aria-hidden="true" className="text-red-500 ml-0.5">
+      *
+    </span>
+  );
+}
+
 export default function AddRestaurantModal({
   isOpen,
   onClose,
   onSuccess,
 }: AddRestaurantModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const [formData, setFormData] = useState({
-    name: "",
-    description: "",
-    email: "",
-    phone: "",
-    cuisineType: "",
-    city: "",
-    address: "",
-    deliveryFee: "",
-    estimatedDeliveryMinutes: "",
-    latitude: "",
-    longitude: "",
-    logo: "",
-    coverImage: "",
-  });
-
-  if (!isOpen) return null;
+  const [isDirty, setIsDirty] = useState(false);
+  const [formData, setFormData] = useState(EMPTY_FORM);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) => {
+    setIsDirty(true);
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
@@ -114,6 +129,10 @@ export default function AddRestaurantModal({
     try {
       await restaurantsService.createRestaurant(payload);
       toast.success("Restaurant created successfully!");
+      // Without this the next "Add Restaurant" reopens on the previous
+      // merchant's data and quietly creates a near-duplicate.
+      setFormData(EMPTY_FORM);
+      setIsDirty(false);
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -127,200 +146,16 @@ export default function AddRestaurantModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
-        <div className="p-5 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-900/40">
-          <h3 className="text-lg font-bold text-zinc-900 dark:text-white">
-            Add New Restaurant
-          </h3>
-          <button
-            onClick={onClose}
-            className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="p-6 overflow-y-auto flex-1">
-          <form
-            id="add-restaurant-form"
-            onSubmit={handleSubmit}
-            className="space-y-4"
-          >
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Name
-                </label>
-                <input
-                  required
-                  name="name"
-                  value={formData.name}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Cuisine Type
-                </label>
-                <input
-                  required
-                  name="cuisineType"
-                  value={formData.cuisineType}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5 md:col-span-2">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Description
-                </label>
-                <textarea
-                  required
-                  name="description"
-                  value={formData.description}
-                  onChange={handleChange}
-                  rows={2}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Email
-                </label>
-                <input
-                  required
-                  type="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Phone
-                </label>
-                <input
-                  required
-                  name="phone"
-                  value={formData.phone}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  City
-                </label>
-                <input
-                  required
-                  name="city"
-                  value={formData.city}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Street Address
-                </label>
-                <input
-                  required
-                  name="address"
-                  value={formData.address}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Latitude
-                </label>
-                <input
-                  required
-                  type="number"
-                  step="any"
-                  name="latitude"
-                  value={formData.latitude}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Longitude
-                </label>
-                <input
-                  required
-                  type="number"
-                  step="any"
-                  name="longitude"
-                  value={formData.longitude}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Delivery Fee ($)
-                </label>
-                <input
-                  required
-                  type="number"
-                  step="0.01"
-                  name="deliveryFee"
-                  value={formData.deliveryFee}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Estimated Delivery (Mins)
-                </label>
-                <input
-                  required
-                  type="number"
-                  name="estimatedDeliveryMinutes"
-                  value={formData.estimatedDeliveryMinutes}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5 md:col-span-2">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Logo URL
-                </label>
-                <input
-                  name="logo"
-                  value={formData.logo}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5 md:col-span-2">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Cover Image URL
-                </label>
-                <input
-                  name="coverImage"
-                  value={formData.coverImage}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-            </div>
-          </form>
-        </div>
-
-        <div className="p-5 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/40 flex justify-end gap-3">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Add New Restaurant"
+      description="Creates an active merchant with default 08:00–23:00 opening hours."
+      maxWidth="max-w-2xl"
+      // Escape / backdrop stay live until there is typing to lose.
+      dismissable={!isDirty && !isSubmitting}
+      footer={
+        <>
           <button
             type="button"
             onClick={onClose}
@@ -343,8 +178,211 @@ export default function AddRestaurantModal({
               "Create Restaurant"
             )}
           </button>
+        </>
+      }
+    >
+      <form id="add-restaurant-form" onSubmit={handleSubmit} className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-name" className={LABEL_CLASS}>
+              Name
+              <Req />
+            </label>
+            <input
+              required
+              id="add-rest-name"
+              name="name"
+              value={formData.name}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-cuisine" className={LABEL_CLASS}>
+              Cuisine Type
+              <Req />
+            </label>
+            <input
+              required
+              id="add-rest-cuisine"
+              name="cuisineType"
+              value={formData.cuisineType}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5 md:col-span-2">
+            <label htmlFor="add-rest-description" className={LABEL_CLASS}>
+              Description
+              <Req />
+            </label>
+            <textarea
+              required
+              id="add-rest-description"
+              name="description"
+              value={formData.description}
+              onChange={handleChange}
+              rows={2}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-email" className={LABEL_CLASS}>
+              Email
+              <Req />
+            </label>
+            <input
+              required
+              type="email"
+              id="add-rest-email"
+              name="email"
+              value={formData.email}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-phone" className={LABEL_CLASS}>
+              Phone
+              <Req />
+            </label>
+            <input
+              required
+              id="add-rest-phone"
+              name="phone"
+              value={formData.phone}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-city" className={LABEL_CLASS}>
+              City
+              <Req />
+            </label>
+            <input
+              required
+              id="add-rest-city"
+              name="city"
+              value={formData.city}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-address" className={LABEL_CLASS}>
+              Street Address
+              <Req />
+            </label>
+            <input
+              required
+              id="add-rest-address"
+              name="address"
+              value={formData.address}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-latitude" className={LABEL_CLASS}>
+              Latitude
+              <Req />
+            </label>
+            <input
+              required
+              type="number"
+              step="any"
+              min={-90}
+              max={90}
+              id="add-rest-latitude"
+              name="latitude"
+              value={formData.latitude}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-longitude" className={LABEL_CLASS}>
+              Longitude
+              <Req />
+            </label>
+            <input
+              required
+              type="number"
+              step="any"
+              min={-180}
+              max={180}
+              id="add-rest-longitude"
+              name="longitude"
+              value={formData.longitude}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-fee" className={LABEL_CLASS}>
+              Delivery Fee ($)
+              <Req />
+            </label>
+            <input
+              required
+              type="number"
+              step="0.01"
+              min={0}
+              id="add-rest-fee"
+              name="deliveryFee"
+              value={formData.deliveryFee}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-eta" className={LABEL_CLASS}>
+              Estimated Delivery (Mins)
+              <Req />
+            </label>
+            <input
+              required
+              type="number"
+              min={0}
+              id="add-rest-eta"
+              name="estimatedDeliveryMinutes"
+              value={formData.estimatedDeliveryMinutes}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5 md:col-span-2">
+            <label htmlFor="add-rest-logo" className={LABEL_CLASS}>
+              Logo URL
+            </label>
+            <input
+              id="add-rest-logo"
+              name="logo"
+              value={formData.logo}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5 md:col-span-2">
+            <label htmlFor="add-rest-cover" className={LABEL_CLASS}>
+              Cover Image URL
+            </label>
+            <input
+              id="add-rest-cover"
+              name="coverImage"
+              value={formData.coverImage}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
         </div>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 }

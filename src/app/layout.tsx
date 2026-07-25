@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "react-hot-toast";
+import { ConfirmProvider } from "./components/ui/ConfirmDialog";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,9 +15,38 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Nowlny Admin",
-  description: "Nowlny Admin Panel",
+  title: {
+    default: "Nowlny Admin",
+    template: "%s · Nowlny Admin",
+  },
+  description: "Operations portal for the Nowlny delivery platform.",
 };
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#000000" },
+  ],
+};
+
+/**
+ * Applies the stored theme before first paint.
+ *
+ * The theme was previously applied in a `useEffect`, so every dark-mode user
+ * saw a white flash on each load and every light-mode user saw a dark boot
+ * screen. This runs synchronously in `<head>`, before the browser paints.
+ */
+const themeScript = `
+(function () {
+  try {
+    var stored = window.localStorage.getItem("nowlny_theme");
+    var dark = stored
+      ? stored === "dark"
+      : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    if (dark) document.documentElement.classList.add("dark");
+  } catch (e) {}
+})();
+`;
 
 export default function RootLayout({
   children,
@@ -26,10 +56,14 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className="min-h-full flex flex-col">
-        {children}
+        <ConfirmProvider>{children}</ConfirmProvider>
         <Toaster 
           position="top-center" 
           toastOptions={{

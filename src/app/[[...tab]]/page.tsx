@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import Sidebar, { Role } from "../components/Sidebar";
+import Sidebar, { Role, tabLabel } from "../components/Sidebar";
 import Header from "../components/Header";
 import OverviewSection from "../components/OverviewSection";
 import RestaurantsSection from "../components/RestaurantsSection";
@@ -23,6 +23,8 @@ import {
   restaurantsService,
   RestaurantSubmission,
 } from "../../services/restaurants";
+import { usersService, SystemUser } from "../../services/users";
+import { ordersService } from "../../services/orders";
 
 import {
   loadDb,
@@ -37,6 +39,18 @@ import {
 } from "../data/mockData";
 import RestaurantReelsSection from "../components/RestaurantReelsSection";
 import ReelsSection from "../components/ReelsSection";
+
+/**
+ * Sections that actually consume the global `searchQuery` prop. On every other
+ * tab the header's search box was a dead control that silently did nothing.
+ */
+const SEARCHABLE_TABS = new Set([
+  "restaurants",
+  "delivery_companies",
+  "customers",
+  "orders",
+  "currencies",
+]);
 
 export default function Home() {
   const router = useRouter();
@@ -54,17 +68,28 @@ export default function Home() {
 
   // Stats for the sidebar
   const [pendingRestaurantsCount, setPendingRestaurantsCount] = useState(0);
+  const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
 
   // Access control role state
   const [currentRole, setCurrentRole] = useState<Role>({ type: "admin" });
+
+  // The signed-in operator. The sidebar used to hardcode "Hassan Al-Sabeh /
+  // Root Administrator" for every admin, so nobody could tell which account
+  // they were acting as.
+  const [currentUser, setCurrentUser] = useState<SystemUser | null>(null);
 
   // Merchant submission state (for restaurant_owner JWT type)
   const [merchantSubmission, setMerchantSubmission] =
     useState<RestaurantSubmission | null>(null);
 
   // Initialize FCM notifications if authenticated
-  const { fcmToken, notificationToast, setNotificationToast } =
-    useNotifications(!!authToken);
+  const {
+    notificationToast,
+    setNotificationToast,
+    permission: pushPermission,
+    requestPermission: requestPushPermission,
+    isRequesting: isRequestingPush,
+  } = useNotifications(!!authToken);
 
   // Initialize theme from localStorage/system preferences on mount
   useEffect(() => {
@@ -178,6 +203,33 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
 
+  // Load the signed-in operator's profile for the sidebar identity block.
+  useEffect(() => {
+    if (!authToken) {
+      setCurrentUser(null);
+      return;
+    }
+    let cancelled = false;
+    usersService
+      .getMe()
+      .then((user) => {
+        if (!cancelled) setCurrentUser(user);
+      })
+      .catch((err) => {
+        // Non-fatal: the sidebar falls back to a neutral label.
+        console.warn("Could not load current user:", err?.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken]);
+
+  // Keep the browser tab title in sync with the active section.
+  useEffect(() => {
+    if (!activeTab) return;
+    document.title = `${tabLabel(activeTab)} · Nowlny Admin`;
+  }, [activeTab]);
+
   // Fetch pending count from API for the sidebar
   useEffect(() => {
     // Only verify admin if there's a token and role is admin
@@ -214,6 +266,34 @@ export default function Home() {
     }
   }, [currentRole.type, activeTab, authToken]);
 
+  // Keep the sidebar's "Live Orders" badge honest. It was previously
+  // hardcoded to 0, so the badge never appeared no matter how many orders
+  // were waiting — the one number an operator most needs at a glance.
+  useEffect(() => {
+    if (!authToken || currentRole.type !== "admin") return;
+
+    let cancelled = false;
+    const loadPendingOrders = () => {
+      ordersService
+        .getOrders({ status: "pending", limit: 1 })
+        .then((res) => {
+          if (!cancelled && typeof res?.total === "number") {
+            setPendingOrdersCount(res.total);
+          }
+        })
+        .catch((err) =>
+          console.warn("Pending order count unavailable:", err?.message),
+        );
+    };
+
+    loadPendingOrders();
+    const id = setInterval(loadPendingOrders, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [authToken, currentRole.type]);
+
   // Sync tab state with URL path to support browser back button
   useEffect(() => {
     const tab = pathname === "/" ? "" : pathname.replace("/", "");
@@ -243,15 +323,17 @@ export default function Home() {
 
   if (!isHydrated || !db) {
     return (
-      <div className="fixed inset-0 bg-zinc-950 flex flex-col items-center justify-center space-y-4">
+      // The boot screen was hardcoded to `bg-zinc-950`, so every light-mode
+      // user got a full-screen dark flash on each load.
+      <div className="fixed inset-0 bg-white dark:bg-zinc-950 flex flex-col items-center justify-center space-y-4">
         <div className="h-12 w-12 rounded-2xl bg-gradient-to-tr from-orange-500 to-red-600 flex items-center justify-center animate-pulse shadow-lg shadow-orange-500/20">
           <span className="text-white font-black text-xl">N</span>
         </div>
         <div className="text-center space-y-1">
-          <h2 className="text-xs font-bold text-white uppercase tracking-widest">
+          <h2 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-widest">
             NOWLNY DELIVERIES
           </h2>
-          <p className="text-[10px] text-zinc-500 font-semibold uppercase tracking-widest">
+          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold uppercase tracking-widest">
             Booting administrative interface...
           </p>
         </div>
@@ -262,9 +344,6 @@ export default function Home() {
   if (!authToken) {
     return <LoginScreen onLoginSuccess={setAuthToken} />;
   }
-
-  // Orders badge: live count is managed inside OrdersSection via the API
-  const pendingOrdersCount = 0;
 
   // Stats for the sidebar are now updated via useEffect at the top level
   // Global Actions handlers
@@ -404,6 +483,7 @@ export default function Home() {
         currentRole={currentRole}
         onChangeRole={handleRoleChange}
         restaurants={db.restaurants}
+        currentUser={currentUser}
       />
 
       {/* Main Workspace Frame */}
@@ -417,6 +497,10 @@ export default function Home() {
           isDarkMode={isDarkMode}
           onToggleTheme={() => setIsDarkMode(!isDarkMode)}
           notificationToast={notificationToast}
+          searchEnabled={SEARCHABLE_TABS.has(activeTab)}
+          pushPermission={pushPermission}
+          onEnablePush={requestPushPermission}
+          isRequestingPush={isRequestingPush}
         />
 
         {/* Scrollable Section Space */}

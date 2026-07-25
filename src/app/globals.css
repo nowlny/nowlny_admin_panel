@@ -5,6 +5,10 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Duration used by the enter-animation utilities below when no
+     Tailwind `duration-*` utility is present on the element. */
+  --nowlny-enter-duration: 200ms;
 }
 
 @theme inline {
@@ -12,6 +16,28 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+}
+
+/* ---------------------------------------------------------------------------
+   Half-step neutral shades
+   ---------------------------------------------------------------------------
+   The components lean on `zinc-850` (37 uses), `zinc-150` (8), `zinc-650`,
+   `zinc-250` and `red-650` — none of which exist in Tailwind's default
+   palette. Every one of those 49 utilities compiled to nothing, which is why
+   card borders such as `border-zinc-150 dark:border-zinc-850` rendered as no
+   border at all and cards read as undifferentiated slabs.
+
+   Defining the shades (rather than rewriting 49 call sites) preserves the
+   intent: these half-steps are genuinely useful for dark surfaces, where the
+   gap between zinc-800 and zinc-900 is the difference between a visible edge
+   and none. Values are the midpoints of the neighbouring official stops.
+--------------------------------------------------------------------------- */
+@theme {
+  --color-zinc-150: oklch(94.4% 0.002 286.35);
+  --color-zinc-250: oklch(89.6% 0.005 286.3);
+  --color-zinc-650: oklch(40.6% 0.015 285.795);
+  --color-zinc-850: oklch(24.2% 0.006 285.96);
+  --color-red-650: oklch(54.1% 0.229 27.42);
 }
 
 .dark {
@@ -22,8 +48,14 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-  transition: background-color 200ms ease, color 200ms ease;
+  /* Use the Geist face loaded by next/font in layout.tsx. Previously this was
+     hardcoded to Arial, which meant the login screen, the boot screen and all
+     toasts (which render outside the `font-sans` app shell) fell back to Arial
+     while the rest of the app rendered in Geist. */
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  transition:
+    background-color 200ms ease,
+    color 200ms ease;
 }
 
 /* Custom styling for native select dropdowns */
@@ -39,4 +71,163 @@ select {
 
 .dark select {
   background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+}
+
+/* ---------------------------------------------------------------------------
+   Enter animations
+   ---------------------------------------------------------------------------
+   The codebase uses the `animate-in` / `fade-in` / `zoom-in-95` /
+   `slide-in-from-*` class vocabulary popularised by `tailwindcss-animate`.
+   That plugin is NOT a dependency and Tailwind v4 core does not ship these
+   utilities, so all 61 usages across the app compiled to nothing and every
+   modal, dropdown and card appeared instantly with no transition.
+
+   These definitions restore the intended behaviour with no new dependency.
+   Duration is driven by `--tw-duration`, which Tailwind v4's `duration-*`
+   utilities already set — so the `duration-150` / `duration-300` classes
+   already present in the JSX work as their authors expected.
+--------------------------------------------------------------------------- */
+
+@keyframes nowlny-enter {
+  from {
+    opacity: var(--nowlny-enter-opacity, 1);
+    transform: translate3d(
+        var(--nowlny-enter-translate-x, 0),
+        var(--nowlny-enter-translate-y, 0),
+        0
+      )
+      scale3d(
+        var(--nowlny-enter-scale, 1),
+        var(--nowlny-enter-scale, 1),
+        1
+      );
+  }
+}
+
+@utility animate-in {
+  animation-name: nowlny-enter;
+  animation-duration: var(--tw-duration, var(--nowlny-enter-duration));
+  animation-timing-function: var(--tw-ease, cubic-bezier(0.16, 1, 0.3, 1));
+  animation-fill-mode: both;
+}
+
+@utility fade-in {
+  --nowlny-enter-opacity: 0;
+}
+
+@utility zoom-in-95 {
+  --nowlny-enter-scale: 0.95;
+}
+
+@utility slide-in-from-top-2 {
+  --nowlny-enter-translate-y: -0.5rem;
+}
+
+@utility slide-in-from-top-4 {
+  --nowlny-enter-translate-y: -1rem;
+}
+
+@utility slide-in-from-bottom-5 {
+  --nowlny-enter-translate-y: 1.25rem;
+}
+
+@utility slide-in-from-right-4 {
+  --nowlny-enter-translate-x: 1rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Keyboard focus
+   ---------------------------------------------------------------------------
+   Nothing in the app defined a focus ring, so keyboard users had no visible
+   indication of position. `:focus-visible` only fires for keyboard focus, so
+   mouse users see no change. */
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid #f97316;
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Loading skeletons
+--------------------------------------------------------------------------- */
+
+@keyframes nowlny-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--color-zinc-200);
+  border-radius: 0.5rem;
+}
+
+.dark .skeleton {
+  background-color: var(--color-zinc-800);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgb(255 255 255 / 0.45),
+    transparent
+  );
+  animation: nowlny-shimmer 1.6s infinite;
+}
+
+.dark .skeleton::after {
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgb(255 255 255 / 0.06),
+    transparent
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Scrollbars — the default light scrollbar on the near-black sidebar and
+   modal bodies was a visible seam in dark mode.
+--------------------------------------------------------------------------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-zinc-300) transparent;
+}
+
+.dark * {
+  scrollbar-color: var(--color-zinc-700) transparent;
+}
+
+/* Utility for horizontally scrollable tab strips where a visible bar is noise */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Respect the OS "reduce motion" setting. The app uses `animate-pulse` and
+   `animate-ping` on always-on status indicators, which is a known trigger for
+   motion-sensitive users.
+--------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

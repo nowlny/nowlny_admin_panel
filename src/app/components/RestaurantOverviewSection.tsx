@@ -1,15 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
-import { 
-  DollarSign, 
-  ShoppingBag, 
-  Star, 
-  TrendingUp, 
-  Clock, 
-  Check, 
-  Play, 
-  AlertTriangle,
+import React, { useMemo } from "react";
+import {
+  DollarSign,
+  ShoppingBag,
+  Star,
+  TrendingUp,
+  Clock,
+  Check,
+  Play,
   ChevronRight,
   TrendingDown,
   Percent,
@@ -18,6 +17,8 @@ import {
   ChefHat
 } from "lucide-react";
 import { Restaurant, Order, loadDb } from "../data/mockData";
+import { formatMoney, formatRating, formatTime } from "../../lib/format";
+import StatusPill from "./ui/StatusPill";
 
 interface RestaurantOverviewProps {
   restaurant: Restaurant;
@@ -25,6 +26,29 @@ interface RestaurantOverviewProps {
   setActiveTab: (tab: string) => void;
   onUpdateOrder: (updatedOrder: Order) => void;
 }
+
+/* Sales chart geometry, in the SVG's own 700x200 user space. */
+const CHART_WIDTH = 700;
+const CHART_TOP = 20;
+const CHART_BOTTOM = 180;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Locale and timezone are pinned exactly as in src/lib/format.ts so the server
+ * and the client bucket orders into the same days — otherwise the chart would
+ * differ between the two renders and React would report a hydration mismatch.
+ */
+const dayKeyFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Beirut",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const dayLabelFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Beirut",
+  day: "2-digit",
+  month: "short",
+});
 
 export default function RestaurantOverviewSection({
   restaurant,
@@ -72,6 +96,75 @@ export default function RestaurantOverviewSection({
     .sort((a, b) => b.count - a.count)
     .slice(0, 3);
 
+  /**
+   * Real 7-day sales trend. This chart used to be a hardcoded SVG path with
+   * fixed axis labels sitting next to genuinely computed figures, so a merchant
+   * had no way to tell which numbers were real. Everything below is derived
+   * from the store's own order timestamps.
+   */
+  const salesTrend = useMemo(() => {
+    const now = Date.now();
+    const weekStart = now - 7 * DAY_MS;
+    const priorWeekStart = now - 14 * DAY_MS;
+
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const date = new Date(now - (6 - i) * DAY_MS);
+      return {
+        key: dayKeyFormatter.format(date),
+        label: i === 6 ? "Today" : dayLabelFormatter.format(date),
+        value: 0,
+      };
+    });
+    const byKey = new Map(days.map((d) => [d.key, d]));
+
+    let priorWeekTotal = 0;
+
+    orders.forEach((order) => {
+      if (order.restaurantId !== restaurant.id || order.status === "Cancelled") return;
+      const timestamp = new Date(order.createdAt).getTime();
+      if (!Number.isFinite(timestamp)) return;
+
+      const bucket = byKey.get(dayKeyFormatter.format(timestamp));
+      if (bucket) {
+        bucket.value += order.subtotal;
+      } else if (timestamp >= priorWeekStart && timestamp < weekStart) {
+        priorWeekTotal += order.subtotal;
+      }
+    });
+
+    const weekTotal = days.reduce((sum, d) => sum + d.value, 0);
+    const peak = days.reduce((max, d) => Math.max(max, d.value), 0);
+
+    const points = days.map((day, i) => ({
+      ...day,
+      x: (i * CHART_WIDTH) / (days.length - 1),
+      y:
+        peak > 0
+          ? CHART_BOTTOM - (day.value / peak) * (CHART_BOTTOM - CHART_TOP)
+          : CHART_BOTTOM,
+    }));
+
+    const linePath = points
+      .map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+      .join(" ");
+
+    return {
+      points,
+      peak,
+      weekTotal,
+      priorWeekTotal,
+      linePath,
+      areaPath: `${linePath} L${CHART_WIDTH},${CHART_BOTTOM} L0,${CHART_BOTTOM} Z`,
+      // Only a real prior week gives a meaningful delta; otherwise show nothing.
+      deltaPct:
+        priorWeekTotal > 0
+          ? ((weekTotal - priorWeekTotal) / priorWeekTotal) * 100
+          : null,
+    };
+  }, [orders, restaurant.id]);
+
+  const trendUp = (salesTrend.deltaPct ?? 0) >= 0;
+
   // Action methods to progress order state
   const handleProgressOrder = (order: Order, nextStatus: Order['status']) => {
     const timestamp = new Date().toISOString();
@@ -107,14 +200,11 @@ export default function RestaurantOverviewSection({
           <h1 className="text-xl sm:text-2xl font-black text-zinc-900 dark:text-white tracking-tight flex items-center gap-2">
             Welcome Back, {restaurant.name}! {restaurant.logo}
           </h1>
-          <p className="text-xs text-zinc-400">Monitor store orders, tweak your gourmet menu, and view payouts analytics.</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">Monitor store orders, tweak your gourmet menu, and view payouts analytics.</p>
         </div>
 
-        {/* Live Status indicator */}
-        <div className="flex items-center gap-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-3.5 py-1.5 rounded-xl text-xs font-semibold border border-emerald-500/20">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>Store Open & Live</span>
-        </div>
+        {/* Real platform status — this used to hardcode "Store Open & Live". */}
+        <StatusPill status={restaurant.status} className="px-3 py-1.5 text-xs" />
       </div>
 
       {/* METRICS CARDS GRID */}
@@ -126,17 +216,27 @@ export default function RestaurantOverviewSection({
             <span className="p-3 bg-orange-500/10 text-orange-500 rounded-2xl">
               <DollarSign className="w-5 h-5" />
             </span>
-            <span className="text-[9px] font-black text-emerald-500 bg-emerald-500/10 border border-emerald-500/15 px-2 py-0.5 rounded">
-              +14% vs last week
-            </span>
+            {/* Rendered only when a prior 7-day window actually has sales. */}
+            {salesTrend.deltaPct !== null && (
+              <span
+                className={`text-[9px] font-black px-2 py-0.5 rounded border inline-flex items-center gap-1 ${
+                  trendUp
+                    ? "text-emerald-500 bg-emerald-500/10 border-emerald-500/15"
+                    : "text-red-500 bg-red-500/10 border-red-500/15"
+                }`}
+              >
+                {trendUp ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                {trendUp ? "+" : ""}{salesTrend.deltaPct.toFixed(0)}% vs prior 7 days
+              </span>
+            )}
           </div>
           <div>
-            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Gross Sales Revenue</p>
-            <h3 className="text-xl sm:text-2xl font-black text-zinc-900 dark:text-white mt-1">${grossRevenue.toFixed(2)}</h3>
-            <div className="flex items-center gap-1.5 mt-2 text-[10px] text-zinc-500 font-semibold border-t border-zinc-100 dark:border-zinc-850 pt-2">
+            <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Gross Sales Revenue</p>
+            <h3 className="text-xl sm:text-2xl font-black text-zinc-900 dark:text-white mt-1">${formatMoney(grossRevenue)}</h3>
+            <div className="flex items-center gap-1.5 mt-2 text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold border-t border-zinc-100 dark:border-zinc-850 pt-2">
               <Percent className="w-3.5 h-3.5 text-zinc-400" />
               <span>Net payout: </span>
-              <span className="text-orange-500 font-extrabold">${netEarnings.toFixed(2)}</span>
+              <span className="text-orange-500 font-extrabold">${formatMoney(netEarnings)}</span>
             </div>
           </div>
         </div>
@@ -152,12 +252,12 @@ export default function RestaurantOverviewSection({
             </span>
           </div>
           <div>
-            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Total Sales Volume</p>
+            <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Total Sales Volume</p>
             <h3 className="text-xl sm:text-2xl font-black text-zinc-900 dark:text-white mt-1">{storeOrders.length} Orders</h3>
-            <div className="flex items-center gap-1.5 mt-2 text-[10px] text-zinc-500 font-semibold border-t border-zinc-100 dark:border-zinc-850 pt-2">
+            <div className="flex items-center gap-1.5 mt-2 text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold border-t border-zinc-100 dark:border-zinc-850 pt-2">
               <Clock className="w-3.5 h-3.5 text-zinc-400" />
               <span>Avg ticket: </span>
-              <span className="text-zinc-800 dark:text-zinc-300 font-extrabold">${averageOrderValue.toFixed(2)}</span>
+              <span className="text-zinc-800 dark:text-zinc-300 font-extrabold">${formatMoney(averageOrderValue)}</span>
             </div>
           </div>
         </div>
@@ -169,16 +269,18 @@ export default function RestaurantOverviewSection({
               <Star className="w-5 h-5 fill-orange-500/20" />
             </span>
             <div className="flex items-center gap-0.5 text-orange-500 font-black text-xs">
-              <span>{restaurant.rating}</span>
+              <span>{formatRating(restaurant.rating)}</span>
               <Star className="w-3.5 h-3.5 fill-orange-500 text-orange-500" />
             </div>
           </div>
           <div>
-            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Customer Experience</p>
+            <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Customer Experience</p>
             <h3 className="text-xl sm:text-2xl font-black text-zinc-900 dark:text-white mt-1">{restaurant.reviewsCount} Reviews</h3>
-            <div className="flex items-center gap-1.5 mt-2 text-[10px] text-zinc-500 font-semibold border-t border-zinc-100 dark:border-zinc-850 pt-2">
-              <TrendingUp className="w-3.5 h-3.5 text-emerald-500" />
-              <span>98% Positive Feedback</span>
+            {/* Was "98% Positive Feedback" — invented. This is the stored rating. */}
+            <div className="flex items-center gap-1.5 mt-2 text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold border-t border-zinc-100 dark:border-zinc-850 pt-2">
+              <Star className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Average rating: </span>
+              <span className="text-zinc-800 dark:text-zinc-300 font-extrabold">{formatRating(restaurant.rating)} / 5</span>
             </div>
           </div>
         </div>
@@ -189,17 +291,15 @@ export default function RestaurantOverviewSection({
             <span className="p-3 bg-orange-500/10 text-orange-500 rounded-2xl">
               <Layers className="w-5 h-5" />
             </span>
-            <span className="text-[9px] font-black text-purple-500 bg-purple-500/10 border border-purple-500/15 px-2 py-0.5 rounded">
-              Next Payout: May 20
-            </span>
+            {/* "Next Payout: May 20" removed — no payout schedule exists in the data. */}
           </div>
           <div>
-            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Platform Commission</p>
+            <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Platform Commission</p>
             <h3 className="text-xl sm:text-2xl font-black text-zinc-900 dark:text-white mt-1">{platformCommissionRate}% Rate</h3>
-            <div className="flex items-center gap-1.5 mt-2 text-[10px] text-zinc-500 font-semibold border-t border-zinc-100 dark:border-zinc-850 pt-2">
+            <div className="flex items-center gap-1.5 mt-2 text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold border-t border-zinc-100 dark:border-zinc-850 pt-2">
               <DollarSign className="w-3.5 h-3.5 text-zinc-400" />
               <span>Commission paid: </span>
-              <span className="text-red-500 font-extrabold">-${platformCommission.toFixed(2)}</span>
+              <span className="text-red-500 font-extrabold">-${formatMoney(platformCommission)}</span>
             </div>
           </div>
         </div>
@@ -214,74 +314,102 @@ export default function RestaurantOverviewSection({
           <div className="flex justify-between items-center">
             <div>
               <h3 className="text-sm font-bold text-zinc-900 dark:text-white">Store Sales Progression</h3>
-              <p className="text-[10px] text-zinc-400">Total volume of card and cash receipts over the last 7 days.</p>
+              <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                Sales of non-cancelled orders over the last 7 days — ${formatMoney(salesTrend.weekTotal)} total.
+              </p>
             </div>
-            
-            <div className="flex items-center gap-4 text-[10px] font-bold text-zinc-500">
+
+            <div className="flex items-center gap-4 text-[10px] font-bold text-zinc-500 dark:text-zinc-400">
               <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded bg-gradient-to-r from-orange-500 to-red-500" />
+                <span className="w-2.5 h-2.5 rounded bg-orange-500" />
                 <span>Sales</span>
               </div>
             </div>
           </div>
 
-          {/* Premium Glowing SVG Chart */}
+          {/* SVG chart, plotted from the buckets computed above */}
           <div className="relative h-64 w-full bg-zinc-50/50 dark:bg-zinc-950/20 rounded-2xl p-4 flex flex-col justify-between border border-zinc-100 dark:border-zinc-850/80">
-            {/* Custom SVG line curve */}
-            <svg viewBox="0 0 700 200" className="w-full h-full absolute inset-0 pr-6 pl-4 pt-8 pb-8 overflow-visible">
-              <defs>
-                <linearGradient id="gradientStoreSales" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#f97316" stopOpacity="0.3" />
-                  <stop offset="100%" stopColor="#f97316" stopOpacity="0.0" />
-                </linearGradient>
-              </defs>
-              {/* Grid Lines */}
-              <line x1="0" y1="30" x2="700" y2="30" stroke="rgba(128,128,128,0.06)" strokeWidth="1" />
-              <line x1="0" y1="80" x2="700" y2="80" stroke="rgba(128,128,128,0.06)" strokeWidth="1" />
-              <line x1="0" y1="130" x2="700" y2="130" stroke="rgba(128,128,128,0.06)" strokeWidth="1" />
-              <line x1="0" y1="180" x2="700" y2="180" stroke="rgba(128,128,128,0.06)" strokeWidth="1" />
+            {salesTrend.peak === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-center">
+                <TrendingUp className="w-8 h-8 text-zinc-300 dark:text-zinc-700 mb-2" />
+                <p className="text-xs font-bold text-zinc-800 dark:text-zinc-200">No sales in the last 7 days</p>
+                <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1">
+                  The curve appears as soon as this store records its first order.
+                </p>
+              </div>
+            ) : (
+              <>
+                <svg
+                  viewBox={`0 0 ${CHART_WIDTH} 200`}
+                  className="w-full h-full absolute inset-0 pr-16 pl-4 pt-8 pb-10 overflow-visible"
+                  role="img"
+                  aria-label={`Daily sales for the last 7 days, peaking at $${formatMoney(salesTrend.peak)}`}
+                >
+                  <defs>
+                    <linearGradient id="gradientStoreSales" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#f97316" stopOpacity="0.3" />
+                      <stop offset="100%" stopColor="#f97316" stopOpacity="0.0" />
+                    </linearGradient>
+                  </defs>
 
-              {/* Area fill */}
-              <path 
-                d="M0,180 Q100,120 200,150 T400,90 T600,60 T700,40 L700,180 L0,180 Z" 
-                fill="url(#gradientStoreSales)" 
-              />
-              
-              {/* Line path */}
-              <path 
-                d="M0,180 Q100,120 200,150 T400,90 T600,60 T700,40" 
-                fill="none" 
-                stroke="url(#gradientStoreSales)" 
-                strokeWidth="4" 
-                className="stroke-orange-500"
-              />
+                  {/* Grid lines, aligned with the Y axis ticks below */}
+                  {[0, 0.25, 0.5, 0.75, 1].map((fraction) => {
+                    const y = CHART_BOTTOM - fraction * (CHART_BOTTOM - CHART_TOP);
+                    return (
+                      <line
+                        key={fraction}
+                        x1="0"
+                        y1={y}
+                        x2={CHART_WIDTH}
+                        y2={y}
+                        stroke="rgba(128,128,128,0.12)"
+                        strokeWidth="1"
+                      />
+                    );
+                  })}
 
-              {/* Glowing circles */}
-              <circle cx="200" cy="150" r="5" fill="#f97316" stroke="#ffffff" strokeWidth="2" className="drop-shadow-lg" />
-              <circle cx="400" cy="90" r="5" fill="#f97316" stroke="#ffffff" strokeWidth="2" className="drop-shadow-lg" />
-              <circle cx="600" cy="60" r="5" fill="#f97316" stroke="#ffffff" strokeWidth="2" className="drop-shadow-lg" />
-              <circle cx="700" cy="40" r="6" fill="#ef4444" stroke="#ffffff" strokeWidth="2" className="drop-shadow-lg animate-pulse" />
-            </svg>
+                  <path d={salesTrend.areaPath} fill="url(#gradientStoreSales)" />
 
-            {/* Y axis metrics (right side overlay) */}
-            <div className="absolute right-3 top-4 bottom-4 flex flex-col justify-between text-[8px] font-black text-zinc-400 text-right pointer-events-none select-none">
-              <span>$2,500</span>
-              <span>$1,800</span>
-              <span>$1,000</span>
-              <span>$500</span>
-              <span>$0</span>
-            </div>
+                  <path
+                    d={salesTrend.linePath}
+                    fill="none"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="stroke-orange-500"
+                  />
 
-            {/* X axis labels */}
-            <div className="flex justify-between items-center mt-auto text-[8px] font-bold text-zinc-400 pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
-              <span>May 12</span>
-              <span>May 13</span>
-              <span>May 14</span>
-              <span>May 15</span>
-              <span>May 16</span>
-              <span>May 17</span>
-              <span>Today</span>
-            </div>
+                  {salesTrend.points.map((point) => (
+                    <circle
+                      key={point.key}
+                      cx={point.x}
+                      cy={point.y}
+                      r="5"
+                      fill="#f97316"
+                      stroke="#ffffff"
+                      strokeWidth="2"
+                      className="drop-shadow-lg"
+                    >
+                      <title>{`${point.label}: $${formatMoney(point.value)}`}</title>
+                    </circle>
+                  ))}
+                </svg>
+
+                {/* Y axis metrics (right side overlay), scaled to the real peak */}
+                <div className="absolute right-3 top-4 bottom-10 flex flex-col justify-between text-[8px] font-black text-zinc-500 dark:text-zinc-400 text-right pointer-events-none select-none">
+                  {[1, 0.75, 0.5, 0.25, 0].map((fraction) => (
+                    <span key={fraction}>${formatMoney(salesTrend.peak * fraction)}</span>
+                  ))}
+                </div>
+
+                {/* X axis labels */}
+                <div className="flex justify-between items-center mt-auto text-[8px] font-bold text-zinc-500 dark:text-zinc-400 pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
+                  {salesTrend.points.map((point) => (
+                    <span key={point.key}>{point.label}</span>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -290,7 +418,7 @@ export default function RestaurantOverviewSection({
           <div className="space-y-4">
             <div>
               <h3 className="text-sm font-bold text-zinc-900 dark:text-white">Popular Dishes</h3>
-              <p className="text-[10px] text-zinc-400">Best performing menu dishes in last 30 days.</p>
+              <p className="text-[10px] text-zinc-500 dark:text-zinc-400">Best performing menu dishes in last 30 days.</p>
             </div>
 
             <div className="space-y-4">
@@ -316,9 +444,9 @@ export default function RestaurantOverviewSection({
                         style={{ width: `${Math.min(100, (item.count / bestSellers[0].count) * 100)}%` }}
                       />
                     </div>
-                    <div className="flex justify-between text-[9px] text-zinc-400 font-semibold">
+                    <div className="flex justify-between text-[9px] text-zinc-500 dark:text-zinc-400 font-semibold">
                       <span>Revenue Generated</span>
-                      <span>${item.sales.toFixed(2)}</span>
+                      <span>${formatMoney(item.sales)}</span>
                     </div>
                   </div>
                 ))
@@ -333,9 +461,11 @@ export default function RestaurantOverviewSection({
               <p className="text-[10px] text-zinc-400 mt-0.5">Use AI OCR to upload menus instantly.</p>
             </div>
             <button
+              type="button"
               onClick={() => setActiveTab("restaurant_menu")}
-              className="p-2 bg-orange-500 text-white rounded-xl hover:bg-orange-600 transition-colors shrink-0 shadow shadow-orange-500/15"
+              className="p-2.5 bg-orange-500 text-white rounded-xl hover:bg-orange-600 transition-colors shrink-0 shadow shadow-orange-500/15"
               title="Add menu items"
+              aria-label="Go to the menu editor to add items"
             >
               <ArrowRight className="w-4 h-4" />
             </button>
@@ -350,7 +480,7 @@ export default function RestaurantOverviewSection({
         <div className="flex justify-between items-center">
           <div>
             <h3 className="text-sm font-bold text-zinc-900 dark:text-white">Active Store Orders Desk</h3>
-            <p className="text-[10px] text-zinc-400">Accept incoming tickets, start cooking, and ready meals for pickup.</p>
+            <p className="text-[10px] text-zinc-500 dark:text-zinc-400">Accept incoming tickets, start cooking, and ready meals for pickup.</p>
           </div>
 
           <button
@@ -384,9 +514,11 @@ export default function RestaurantOverviewSection({
                         <span className="text-[9px] font-black text-zinc-900 dark:text-white bg-zinc-200 dark:bg-zinc-800 px-2 py-0.5 rounded">
                           {order.id}
                         </span>
-                        <p className="text-[10px] text-zinc-400 mt-1">{new Date(order.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                        {/* formatTime pins locale + timezone; a bare toLocaleTimeString() here
+                            rendered differently on the server and caused a hydration mismatch. */}
+                        <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1">{formatTime(order.createdAt)}</p>
                       </div>
-                      <span className="font-extrabold text-orange-500 text-xs">${order.total.toFixed(2)}</span>
+                      <span className="font-extrabold text-orange-500 text-xs">${formatMoney(order.total)}</span>
                     </div>
 
                     {/* Customer & Basket items */}

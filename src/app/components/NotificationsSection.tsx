@@ -1,13 +1,38 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Bell, CheckCircle, Loader2, Inbox } from "lucide-react";
+import { Bell, CheckCircle, Inbox, Loader2 } from "lucide-react";
+import toast from "react-hot-toast";
 import { notificationsService, AppNotification } from "../../services/notifications";
+import { EmptyState, ErrorState, Skeleton } from "./ui/States";
+import { formatDateTime } from "../../lib/format";
+
+/**
+ * Renders `first … current-2 … current+2 … last` instead of one button per
+ * page. With 4,000 notifications the old `Array.from({length: totalPages})`
+ * emitted 200 buttons into an unscrollable flex row and pushed Previous/Next
+ * off the screen.
+ */
+function pageWindow(current: number, total: number): (number | "gap")[] {
+  const wanted = new Set<number>([1, total, current - 2, current - 1, current, current + 1, current + 2]);
+  const pages = Array.from(wanted)
+    .filter((p) => p >= 1 && p <= total)
+    .sort((a, b) => a - b);
+
+  const out: (number | "gap")[] = [];
+  pages.forEach((page, i) => {
+    if (i > 0 && page - pages[i - 1] > 1) out.push("gap");
+    out.push(page);
+  });
+  return out;
+}
 
 export default function NotificationsSection() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [totalItems, setTotalItems] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isMarkingAll, setIsMarkingAll] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
 
@@ -17,8 +42,13 @@ export default function NotificationsSection() {
       const data = await notificationsService.getNotifications(currentPage, itemsPerPage);
       setNotifications(data.data || []);
       setTotalItems(data.total || 0);
-    } catch (error) {
-      console.error("Failed to fetch notifications:", error);
+      setError(null);
+    } catch (err: any) {
+      // A failed fetch used to fall through to the "No notifications found"
+      // empty state, making an outage look like an empty inbox.
+      console.error("Failed to fetch notifications:", err);
+      setError(err?.message || "Couldn't load notifications.");
+      setNotifications([]);
     } finally {
       setLoading(false);
     }
@@ -34,38 +64,32 @@ export default function NotificationsSection() {
     );
     try {
       await notificationsService.markAsRead(id);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to mark as read", err);
+      toast.error(err?.message || "Couldn't mark that notification as read.");
       fetchNotifications();
     }
   };
 
   const handleMarkAllAsRead = async () => {
+    const snapshot = notifications;
+    setIsMarkingAll(true);
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     try {
       await notificationsService.markAllAsRead();
-    } catch (err) {
+      toast.success("All notifications marked as read.");
+    } catch (err: any) {
       console.error("Failed to mark all as read", err);
+      setNotifications(snapshot);
+      toast.error(err?.message || "Couldn't mark all notifications as read.");
       fetchNotifications();
-    }
-  };
-
-  const formatTimestamp = (dateStr: string) => {
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleString([], {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch {
-      return dateStr;
+    } finally {
+      setIsMarkingAll(false);
     }
   };
 
   const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
+  const hasUnread = notifications.some((n) => !n.read);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -74,28 +98,49 @@ export default function NotificationsSection() {
           <h2 className="text-xl font-bold text-zinc-900 dark:text-white tracking-tight">
             Notifications
           </h2>
-          <p className="text-xs text-zinc-500 font-medium">
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">
             View and manage all your system alerts and notifications.
           </p>
         </div>
         <button
           onClick={handleMarkAllAsRead}
-          className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all self-stretch sm:self-auto justify-center"
+          disabled={isMarkingAll || !hasUnread}
+          className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all self-stretch sm:self-auto justify-center disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <CheckCircle className="w-4 h-4 text-emerald-500" /> Mark All as Read
+          {isMarkingAll ? (
+            <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
+          ) : (
+            <CheckCircle className="w-4 h-4 text-emerald-500" />
+          )}
+          Mark All as Read
         </button>
       </div>
 
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm">
         {loading ? (
-          <div className="flex justify-center items-center py-20">
-            <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
+          <div className="space-y-3">
+            {Array.from({ length: 6 }, (_, i) => (
+              <div
+                key={i}
+                className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 flex gap-4"
+              >
+                <Skeleton className="w-10 h-10 rounded-full shrink-0" />
+                <div className="flex-1 space-y-2.5 pt-1">
+                  <Skeleton className="h-3 w-1/3" />
+                  <Skeleton className="h-2.5 w-full" />
+                  <Skeleton className="h-2.5 w-2/3" />
+                </div>
+              </div>
+            ))}
           </div>
+        ) : error ? (
+          <ErrorState message={error} onRetry={fetchNotifications} />
         ) : notifications.length === 0 ? (
-          <div className="text-center py-20 text-zinc-500 flex flex-col items-center">
-            <Inbox className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mb-4" />
-            <p className="text-sm font-semibold">No notifications found.</p>
-          </div>
+          <EmptyState
+            icon={Inbox}
+            title="No notifications found"
+            hint="System alerts and order updates will appear here as they arrive."
+          />
         ) : (
           <div className="space-y-3">
             {notifications.map((notif) => (
@@ -112,7 +157,7 @@ export default function NotificationsSection() {
                     className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
                       !notif.read
                         ? "bg-orange-500/10 text-orange-500"
-                        : "bg-zinc-200 dark:bg-zinc-800 text-zinc-500"
+                        : "bg-zinc-200 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400"
                     }`}
                   >
                     <Bell className="w-5 h-5" />
@@ -129,11 +174,14 @@ export default function NotificationsSection() {
                     >
                       {notif.title}
                     </p>
-                    <span className="text-xs text-zinc-400 font-medium whitespace-nowrap">
-                      {formatTimestamp(notif.timestamp)}
+                    {/* formatDateTime pins locale + timezone (no hydration
+                        mismatch) and returns an em dash for unparseable dates
+                        instead of the literal string "Invalid Date". */}
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400 font-medium whitespace-nowrap">
+                      {formatDateTime(notif.timestamp)}
                     </span>
                   </div>
-                  <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1 leading-relaxed">
                     {notif.body}
                   </p>
                   <div className="flex items-center gap-3 mt-3">
@@ -158,9 +206,12 @@ export default function NotificationsSection() {
         )}
 
         {/* Pagination */}
-        {!loading && totalPages > 1 && (
-          <div className="flex items-center justify-between mt-6 pt-6 border-t border-zinc-100 dark:border-zinc-800">
-            <p className="text-xs text-zinc-500 font-medium">
+        {!loading && !error && totalPages > 1 && (
+          <nav
+            aria-label="Notifications pagination"
+            className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mt-6 pt-6 border-t border-zinc-100 dark:border-zinc-800"
+          >
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">
               Showing {(currentPage - 1) * itemsPerPage + 1} to{" "}
               {Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems}
             </p>
@@ -173,19 +224,31 @@ export default function NotificationsSection() {
                 Previous
               </button>
               <div className="flex items-center gap-1">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                  <button
-                    key={page}
-                    onClick={() => setCurrentPage(page)}
-                    className={`w-7 h-7 flex items-center justify-center text-xs font-bold rounded-lg transition-all ${
-                      currentPage === page
-                        ? "bg-orange-500 text-white shadow-sm shadow-orange-500/20"
-                        : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                    }`}
-                  >
-                    {page}
-                  </button>
-                ))}
+                {pageWindow(currentPage, totalPages).map((page, i) =>
+                  page === "gap" ? (
+                    <span
+                      key={`gap-${i}`}
+                      aria-hidden="true"
+                      className="w-5 text-center text-xs font-bold text-zinc-400 dark:text-zinc-600"
+                    >
+                      …
+                    </span>
+                  ) : (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      aria-label={`Go to page ${page}`}
+                      aria-current={currentPage === page ? "page" : undefined}
+                      className={`w-7 h-7 flex items-center justify-center text-xs font-bold rounded-lg transition-all ${
+                        currentPage === page
+                          ? "bg-orange-500 text-white shadow-sm shadow-orange-500/20"
+                          : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                      }`}
+                    >
+                      {page}
+                    </button>
+                  ),
+                )}
               </div>
               <button
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
@@ -195,7 +258,7 @@ export default function NotificationsSection() {
                 Next
               </button>
             </div>
-          </div>
+          </nav>
         )}
       </div>
     </div>
