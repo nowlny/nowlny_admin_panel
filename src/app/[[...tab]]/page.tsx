@@ -78,6 +78,11 @@ export default function Home() {
   // they were acting as.
   const [currentUser, setCurrentUser] = useState<SystemUser | null>(null);
 
+  // `currentRole` starts at `admin`, so anything keyed only on it would fire
+  // admin-only requests before the token has been decoded — 403s for every
+  // non-admin. Admin-scoped fetches wait for this flag instead.
+  const [isRoleResolved, setIsRoleResolved] = useState(false);
+
   // Merchant submission state (for restaurant_owner JWT type)
   const [merchantSubmission, setMerchantSubmission] =
     useState<RestaurantSubmission | null>(null);
@@ -138,13 +143,30 @@ export default function Home() {
     setIsHydrated(true);
   }, []);
 
-  // JWT token decoder (zero-dependency, client-side only)
+  // JWT token decoder (zero-dependency, client-side only).
+  //
+  // JWTs are base64URL-encoded: the alphabet uses `-` and `_` where standard
+  // base64 uses `+` and `/`. `window.atob` rejects those two characters, so
+  // the previous version threw for any token whose payload happened to contain
+  // one — intermittently, depending on the bytes. A null result then made the
+  // role-resolution effect bail out early while `currentRole` was still at its
+  // default of `admin`, so the panel issued admin-only requests for whoever
+  // was signed in and the API answered 403.
   const decodeToken = (token: string): Record<string, any> | null => {
     try {
-      const payload = token.split(".")[1];
-      // Pad base64 string to multiple of 4
-      const padded = payload + "=".repeat((4 - (payload.length % 4)) % 4);
-      return JSON.parse(window.atob(padded));
+      const segment = token.split(".")[1];
+      if (!segment) return null;
+      const base64 = segment.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+      // Decode as UTF-8 so non-ASCII names in the payload survive.
+      const json = decodeURIComponent(
+        window
+          .atob(padded)
+          .split("")
+          .map((c) => `%${`00${c.charCodeAt(0).toString(16)}`.slice(-2)}`)
+          .join(""),
+      );
+      return JSON.parse(json);
     } catch {
       return null;
     }
@@ -169,35 +191,49 @@ export default function Home() {
     }
   };
 
+  const rejectSession = (message: string) => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("refreshToken");
+    setAuthToken(null);
+    setIsRoleResolved(false);
+    import("react-hot-toast").then((toast) => toast.default.error(message));
+  };
+
   // Decode JWT and determine role / initial tab whenever the token changes
   useEffect(() => {
     if (!authToken) return;
 
     const decoded = decodeToken(authToken);
-    if (!decoded) return;
+    if (!decoded) {
+      // Previously this returned early, leaving `currentRole` at its default
+      // of `admin` with the token still stored — the panel then rendered the
+      // admin UI and every admin-only request 403'd, with nothing explaining
+      // why. An undecodable token is a dead session; say so and sign out.
+      rejectSession("Your session is invalid. Please sign in again.");
+      return;
+    }
 
     const currentHash = pathname === "/" ? "" : pathname.replace("/", "");
+    const userType = decoded.userType;
 
-    if (decoded.userType === "restaurant_owner") {
+    if (userType === "restaurant_owner") {
       // Keep role as restaurant_owner and fetch their submission
       setCurrentRole({ type: "restaurant_owner" });
+      setIsRoleResolved(true);
       handleTabChange(currentHash || "restaurant_application");
       refetchSubmissionStatus();
-    } else if (
-      decoded.userType === "admin" ||
-      decoded.userType === "super_admin"
-    ) {
+    } else if (userType === "admin" || userType === "super_admin") {
       // Default: treat as admin
       setCurrentRole({ type: "admin" });
+      setIsRoleResolved(true);
       handleTabChange(currentHash || "overview");
     } else {
-      // Reject unauthorized users (e.g. customers, drivers)
-      localStorage.removeItem("token");
-      setAuthToken(null);
-      import("react-hot-toast").then((toast) =>
-        toast.default.error(
-          "Unauthorized. Admin or Restaurant Owner access required.",
-        ),
+      // Reject unauthorized users (e.g. customers, drivers). Naming the actual
+      // role turns "why am I locked out?" into a one-line answer.
+      rejectSession(
+        userType
+          ? `This account is registered as "${userType}". Admin or Restaurant Owner access is required for the admin panel.`
+          : "This account has no role assigned. Admin or Restaurant Owner access is required.",
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -233,7 +269,7 @@ export default function Home() {
   // Fetch pending count from API for the sidebar
   useEffect(() => {
     // Only verify admin if there's a token and role is admin
-    if (authToken && currentRole.type === "admin") {
+    if (authToken && isRoleResolved && currentRole.type === "admin") {
       restaurantsService
         .getSubmissions({ status: "pending", limit: 1 })
         .then((subs: any) => {
@@ -264,13 +300,13 @@ export default function Home() {
           setPendingRestaurantsCount(0);
         });
     }
-  }, [currentRole.type, activeTab, authToken]);
+  }, [currentRole.type, activeTab, authToken, isRoleResolved]);
 
   // Keep the sidebar's "Live Orders" badge honest. It was previously
   // hardcoded to 0, so the badge never appeared no matter how many orders
   // were waiting — the one number an operator most needs at a glance.
   useEffect(() => {
-    if (!authToken || currentRole.type !== "admin") return;
+    if (!authToken || !isRoleResolved || currentRole.type !== "admin") return;
 
     let cancelled = false;
     const loadPendingOrders = () => {
@@ -292,7 +328,7 @@ export default function Home() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [authToken, currentRole.type]);
+  }, [authToken, currentRole.type, isRoleResolved]);
 
   // Sync tab state with URL path to support browser back button
   useEffect(() => {
