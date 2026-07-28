@@ -1,16 +1,19 @@
-import { apiClient } from './apiClient';
+import { apiClient, buildQuery, Paginated, toPaginated } from "./apiClient";
 
 // ─── Enums / literals ────────────────────────────────────────────────────────
 
 export type OrderStatus =
-  | 'pending'
-  | 'confirmed'
-  | 'out_for_delivery'
-  | 'delivered'
-  | 'cancelled'
-  | 'rejected';
+  | "pending"
+  | "confirmed"
+  | "out_for_delivery"
+  | "delivered"
+  | "cancelled"
+  | "rejected";
 
-export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
+/** `FindOrdersQueryDto.paymentStatus` — the API has no `refunded` state. */
+export type PaymentStatus = "pending" | "paid" | "failed";
+
+export type StatisticsPeriod = "today" | "week" | "month" | "year" | "all";
 
 // ─── Request shapes ───────────────────────────────────────────────────────────
 
@@ -25,8 +28,9 @@ export interface CreateOrderPayload {
   restaurantId: string;
   addressId: string;
   items: OrderItemPayload[];
-  paymentMethod: 'cash' | 'card';
+  paymentMethod: "cash" | "card" | "wallet";
   customerNotes?: string;
+  changeFor?: number;
 }
 
 export interface UpdateOrderPayload {
@@ -36,8 +40,8 @@ export interface UpdateOrderPayload {
 }
 
 export interface ListOrdersParams {
-  status?: OrderStatus | '';
-  paymentStatus?: PaymentStatus | '';
+  status?: OrderStatus | "";
+  paymentStatus?: PaymentStatus | "";
   restaurantId?: string;
   page?: number;
   limit?: number;
@@ -56,9 +60,15 @@ export interface OrderItemResponse {
 
 export interface OrderResponse {
   id: string;
+  orderNumber?: string;
   customerId: string;
   customerName?: string;
-  customer?: any;
+  customer?: {
+    name?: string;
+    firstName?: string;
+    fullName?: string;
+    phoneNumber?: string;
+  };
   deliveryAddress?: {
     city?: string;
     street?: string;
@@ -71,7 +81,12 @@ export interface OrderResponse {
   };
   restaurantId: string;
   restaurantName?: string;
-  restaurant?: any;
+  restaurant?: {
+    id?: string;
+    name?: string;
+    phone?: string;
+    logo?: string | null;
+  };
   addressId?: string;
   driverId?: string;
   driverName?: string;
@@ -81,6 +96,9 @@ export interface OrderResponse {
   serviceFee?: number;
   discount?: number;
   total?: number;
+  /** Orders carry the merchant's currency; totals are not dollars by default. */
+  currency?: { code?: string; symbol?: string } | null;
+  currencyCode?: string;
   status: OrderStatus;
   paymentMethod?: string;
   paymentStatus: PaymentStatus;
@@ -91,173 +109,134 @@ export interface OrderResponse {
   [key: string]: unknown;
 }
 
-export interface PaginatedOrdersResponse {
-  data: OrderResponse[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages?: number;
+export type PaginatedOrdersResponse = Paginated<OrderResponse>;
+
+export interface RestaurantStatistics {
+  period: StatisticsPeriod;
+  totalOrders: number;
+  totalRevenue: number;
+  currency?: { code?: string; symbol?: string };
+  newCustomers?: number;
+  avgRating?: number;
+  totalRatings?: number;
+  weeklyPerformance?: {
+    date: string;
+    day: string;
+    orders: number;
+    revenue: number;
+  }[];
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
+const list = async (
+  path: string,
+  params?: Omit<ListOrdersParams, "restaurantId">,
+): Promise<PaginatedOrdersResponse> => {
+  const payload = await apiClient<unknown>(`${path}${buildQuery({ ...params })}`);
+  return toPaginated<OrderResponse>(payload, params?.limit ?? 20);
+};
+
 export const ordersService = {
   /**
-   * List all orders with optional filters and pagination (admin)
-   * GET /api/v1/orders
+   * `GET /api/v1/orders` (admin), or the per-restaurant list when scoped.
+   * Both accept `status`, `paymentStatus`, `page` and `limit`.
    */
-  getOrders: (params?: ListOrdersParams): Promise<PaginatedOrdersResponse> => {
-    const searchParams = new URLSearchParams();
-    if (params?.status) searchParams.append('status', params.status);
-    if (params?.paymentStatus) searchParams.append('paymentStatus', params.paymentStatus);
-    if (params?.page) searchParams.append('page', params.page.toString());
-    if (params?.limit) searchParams.append('limit', params.limit.toString());
-    const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    
-    const baseUrl = params?.restaurantId 
-      ? `/api/v1/orders/restaurant/${params.restaurantId}`
-      : `/api/v1/orders`;
-      
-    return apiClient<PaginatedOrdersResponse>(`${baseUrl}${query}`);
-  },
+  getOrders: ({ restaurantId, ...params }: ListOrdersParams = {}) =>
+    list(
+      restaurantId
+        ? `/api/v1/orders/restaurant/${restaurantId}`
+        : "/api/v1/orders",
+      params,
+    ),
 
-  /**
-   * Get a single order by ID
-   * GET /api/v1/orders/{id}
-   */
-  getOrderById: (id: string): Promise<OrderResponse> => {
-    return apiClient<OrderResponse>(`/api/v1/orders/${id}`);
-  },
+  getOrderById: (id: string) => apiClient<OrderResponse>(`/api/v1/orders/${id}`),
 
-  /**
-   * Update order status / payment (admin)
-   * PATCH /api/v1/orders/{id}
-   */
-  updateOrder: (id: string, data: UpdateOrderPayload): Promise<OrderResponse> => {
-    return apiClient<OrderResponse>(`/api/v1/orders/${id}`, {
-      method: 'PATCH',
+  /** `PATCH /api/v1/orders/{id}` (admin) — status and payment status. */
+  updateOrder: (id: string, data: UpdateOrderPayload) =>
+    apiClient<OrderResponse>(`/api/v1/orders/${id}`, {
+      method: "PATCH",
       body: JSON.stringify(data),
-    });
-  },
+    }),
 
-  /**
-   * Place a new order (admin)
-   * POST /api/v1/orders
-   */
-  createOrder: (data: CreateOrderPayload): Promise<OrderResponse> => {
-    return apiClient<OrderResponse>('/api/v1/orders', {
-      method: 'POST',
+  createOrder: (data: CreateOrderPayload) =>
+    apiClient<OrderResponse>("/api/v1/orders", {
+      method: "POST",
       body: JSON.stringify(data),
-    });
-  },
+    }),
+
+  getOrdersByCustomer: (customerId: string, params?: ListOrdersParams) =>
+    list(`/api/v1/orders/customer/${customerId}`, params),
+
+  getOrdersByRestaurant: (restaurantId: string, params?: ListOrdersParams) =>
+    list(`/api/v1/orders/restaurant/${restaurantId}`, params),
+
+  // ─── Restaurant owner ──────────────────────────────────────────────────────
+
+  getMyRestaurantOrders: (params?: ListOrdersParams) =>
+    list("/api/v1/orders/restaurant/me", params),
+
+  getMyRestaurantOrderById: (id: string) =>
+    apiClient<OrderResponse>(`/api/v1/orders/restaurant/me/${id}`),
+
+  /** `GET /api/v1/orders/restaurant/me/statistics` */
+  getMyRestaurantStatistics: (period: StatisticsPeriod = "week") =>
+    apiClient<RestaurantStatistics>(
+      `/api/v1/orders/restaurant/me/statistics${buildQuery({ period })}`,
+    ),
 
   /**
-   * List orders for a customer (admin)
+   * The owner order actions live under `/orders/me/{id}/…`, not
+   * `/orders/restaurant/me/{id}/…`. Every Accept and Reject button in the
+   * merchant view was firing at a path that does not exist.
    */
-  getOrdersByCustomer: (customerId: string, params?: ListOrdersParams): Promise<PaginatedOrdersResponse> => {
-    const searchParams = new URLSearchParams();
-    if (params?.status) searchParams.append('status', params.status);
-    if (params?.page) searchParams.append('page', params.page.toString());
-    if (params?.limit) searchParams.append('limit', params.limit.toString());
-    const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    return apiClient<PaginatedOrdersResponse>(`/api/v1/orders/customer/${customerId}${query}`);
-  },
+  acceptMyOrder: (id: string) =>
+    apiClient<OrderResponse>(`/api/v1/orders/me/${id}/accept`, {
+      method: "PATCH",
+    }),
+
+  rejectMyOrder: (id: string, reason?: string) =>
+    apiClient<OrderResponse>(`/api/v1/orders/me/${id}/reject`, {
+      method: "PATCH",
+      body: JSON.stringify({ ...(reason ? { reason } : {}) }),
+    }),
 
   /**
-   * List own restaurant orders (restaurant owner)
+   * Replaces the invented `PATCH /orders/restaurant/me/{id}/status`. A
+   * confirmed order with a driver assigned moves out for delivery through its
+   * own endpoint; there is no free-form status setter for owners.
    */
-  getMyRestaurantOrders: (params?: ListOrdersParams): Promise<PaginatedOrdersResponse> => {
-    const searchParams = new URLSearchParams();
-    if (params?.status) searchParams.append('status', params.status);
-    if (params?.page) searchParams.append('page', params.page.toString());
-    if (params?.limit) searchParams.append('limit', params.limit.toString());
-    const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    return apiClient<PaginatedOrdersResponse>(`/api/v1/orders/restaurant/me${query}`);
-  },
+  sendMyOrderOutForDelivery: (id: string) =>
+    apiClient<OrderResponse>(`/api/v1/orders/me/${id}/out-for-delivery`, {
+      method: "PATCH",
+    }),
 
-  /**
-   * Get own restaurant order by ID (restaurant owner)
-   */
-  getMyRestaurantOrderById: (id: string): Promise<OrderResponse> => {
-    return apiClient<OrderResponse>(`/api/v1/orders/restaurant/me/${id}`);
-  },
+  assignDriverToMyOrder: (id: string, driverId: string) =>
+    apiClient<OrderResponse>(`/api/v1/orders/me/${id}/assign-driver`, {
+      method: "PATCH",
+      body: JSON.stringify({ driverId }),
+    }),
 
-  /**
-   * List orders for a restaurant (admin)
-   */
-  getOrdersByRestaurant: (restaurantId: string, params?: ListOrdersParams): Promise<PaginatedOrdersResponse> => {
-    const searchParams = new URLSearchParams();
-    if (params?.status) searchParams.append('status', params.status);
-    if (params?.page) searchParams.append('page', params.page.toString());
-    if (params?.limit) searchParams.append('limit', params.limit.toString());
-    const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    return apiClient<PaginatedOrdersResponse>(`/api/v1/orders/restaurant/${restaurantId}${query}`);
-  },
+  // ─── Customer-side (used for read-only history views) ──────────────────────
 
-  /**
-   * List own orders (customer)
-   */
-  getMyOrders: (params?: ListOrdersParams): Promise<PaginatedOrdersResponse> => {
-    const searchParams = new URLSearchParams();
-    if (params?.status) searchParams.append('status', params.status);
-    if (params?.page) searchParams.append('page', params.page.toString());
-    if (params?.limit) searchParams.append('limit', params.limit.toString());
-    const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
-    return apiClient<PaginatedOrdersResponse>(`/api/v1/orders/me${query}`);
-  },
+  getMyOrders: (params?: ListOrdersParams) => list("/api/v1/orders/me", params),
 
-  /**
-   * Get own order by ID (customer)
-   */
-  getMyOrderById: (id: string): Promise<OrderResponse> => {
-    return apiClient<OrderResponse>(`/api/v1/orders/me/${id}`);
-  },
+  getMyOrderById: (id: string) =>
+    apiClient<OrderResponse>(`/api/v1/orders/me/${id}`),
 
-  /**
-   * Accept a pending order (restaurant owner)
-   */
-  acceptMyOrder: (id: string): Promise<void> => {
-    return apiClient<void>(`/api/v1/orders/restaurant/me/${id}/accept`, {
-      method: 'PATCH',
-    });
-  },
+  cancelMyOrder: (id: string, reason?: string) =>
+    apiClient<OrderResponse>(`/api/v1/orders/me/${id}/cancel`, {
+      method: "PATCH",
+      body: JSON.stringify({ ...(reason ? { reason } : {}) }),
+    }),
 
-  /**
-   * Reject a pending order (restaurant owner)
-   */
-  rejectMyOrder: (id: string): Promise<void> => {
-    return apiClient<void>(`/api/v1/orders/restaurant/me/${id}/reject`, {
-      method: 'PATCH',
-    });
-  },
+  getOrderRating: (id: string) =>
+    apiClient<{ rating: number; comment?: string }>(
+      `/api/v1/orders/me/${id}/rating`,
+    ),
 
-  /**
-   * Update own order status (restaurant owner)
-   */
-  updateMyOrderStatus: (id: string, data: { status: OrderStatus }): Promise<void> => {
-    return apiClient<void>(`/api/v1/orders/restaurant/me/${id}/status`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    });
-  },
+  // ─── Delivery company ──────────────────────────────────────────────────────
 
-  /**
-   * Rate a delivered order (customer)
-
-   */
-  rateOrder: (id: string, data: { rating: number; review?: string }): Promise<void> => {
-    return apiClient<void>(`/api/v1/orders/me/${id}/rating`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  /**
-   * Get rating for own order (customer)
-   */
-  getOrderRating: (id: string): Promise<{ rating: number; review?: string }> => {
-    return apiClient<{ rating: number; review?: string }>(`/api/v1/orders/me/${id}/rating`, {
-      method: 'GET',
-    });
-  }
+  getDeliveryCompanyOrders: (params?: ListOrdersParams) =>
+    list("/api/v1/orders/delivery-company/me", params),
 };

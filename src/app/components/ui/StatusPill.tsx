@@ -2,6 +2,7 @@
 
 import React from "react";
 import { humanizeEnum } from "../../../lib/format";
+import { useI18n, type MessageKey } from "../../../lib/i18n";
 
 /**
  * One canonical status → colour + label mapping.
@@ -52,6 +53,40 @@ const STATUS_TONES: Record<string, Tone> = {
   failed: "danger",
 };
 
+/**
+ * Statuses that have a translation. Anything outside this set falls back to
+ * `humanizeEnum`, so a new backend enum still renders readably rather than
+ * printing a raw key.
+ */
+const TRANSLATED_STATUSES = new Set([
+  "active",
+  "inactive",
+  "pending",
+  "approved",
+  "accepted",
+  "rejected",
+  "suspended",
+  "cancelled",
+  "deleted",
+  "hidden",
+  "confirmed",
+  "out_for_delivery",
+  "delivered",
+  "paid",
+  "failed",
+  "queued",
+  "sent_to_device",
+  "driver_assigned",
+  "picked_up",
+  "ready_for_pickup",
+  "super_admin",
+  "admin",
+  "restaurant_owner",
+  "delivery_company",
+  "driver",
+  "customer",
+]);
+
 const STATUS_LABELS: Record<string, string> = {
   out_for_delivery: "Out for delivery",
   driver_assigned: "Driver assigned",
@@ -67,9 +102,20 @@ export function statusTone(status?: string | null): Tone {
   return STATUS_TONES[status.toLowerCase()] ?? "neutral";
 }
 
-export function statusLabel(status?: string | null): string {
-  if (!status) return "Unknown";
-  return STATUS_LABELS[status.toLowerCase()] ?? humanizeEnum(status);
+/**
+ * `t` is optional so non-component callers keep working; when supplied the
+ * label is localised.
+ */
+export function statusLabel(
+  status?: string | null,
+  t?: (key: MessageKey) => string,
+): string {
+  if (!status) return t ? t("status.unknown") : "Unknown";
+  const key = status.toLowerCase();
+  if (t && TRANSLATED_STATUSES.has(key)) {
+    return t(`status.${key}` as MessageKey);
+  }
+  return STATUS_LABELS[key] ?? humanizeEnum(status);
 }
 
 export default function StatusPill({
@@ -79,6 +125,7 @@ export default function StatusPill({
   status?: string | null;
   className?: string;
 }) {
+  const { t } = useI18n();
   const tone = statusTone(status);
   return (
     <span
@@ -98,7 +145,7 @@ export default function StatusPill({
                   : "bg-zinc-400"
         }`}
       />
-      {statusLabel(status)}
+      {statusLabel(status, t)}
     </span>
   );
 }

@@ -36,7 +36,7 @@ export function useNotifications(isAuthenticated: boolean) {
     if (!token) return null;
     setFcmToken(token);
     try {
-      await usersService.updateFCMToken(token);
+      await usersService.registerDeviceToken({ token });
     } catch (err) {
       console.warn("Could not register device token with the server:", err);
     }

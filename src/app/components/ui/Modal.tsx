@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
+import { useI18n } from "../../../lib/i18n";
 const FOCUSABLE = [
   "a[href]",
   "button:not([disabled])",
@@ -62,6 +63,7 @@ export default function Modal({
   dismissable = true,
   icon,
 }: ModalProps) {
+  const { t } = useI18n();
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const [instanceId] = useState(() => Symbol("modal"));
@@ -173,7 +175,7 @@ export default function Modal({
             type="button"
             data-modal-close="true"
             onClick={onClose}
-            aria-label="Close dialog"
+            aria-label={t("modal.close")}
             className="p-2 -m-1 rounded-lg text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors shrink-0"
           >
             <X className="w-4 h-4" />

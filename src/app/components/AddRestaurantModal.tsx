@@ -1,33 +1,54 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 import Modal from "./ui/Modal";
 import {
   restaurantsService,
   RestaurantCreate,
+  OpeningHourEntry,
+  WEEK_DAYS,
 } from "../../services/restaurants";
+import { currenciesService, Currency } from "../../services/currencies";
 
+import { useI18n } from "../../lib/i18n";
 interface AddRestaurantModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }
 
+/**
+ * The form used to collect `email`, `cuisineType`, `coverImage` and
+ * `estimatedDeliveryMinutes` — none of which exist on `CreateRestaurantDto` —
+ * while omitting `currencyId` and the min/max delivery window, which do. It
+ * also sent capitalised weekday names against an enum that only accepts
+ * lowercase. Every one of those made the request a 400.
+ */
 const EMPTY_FORM = {
   name: "",
   description: "",
-  email: "",
   phone: "",
-  cuisineType: "",
+  website: "",
+  ownerFullName: "",
+  ownerPhoneNumber: "",
   city: "",
   address: "",
   deliveryFee: "",
-  estimatedDeliveryMinutes: "",
+  deliveryTimeMinMinutes: "20",
+  deliveryTimeMaxMinutes: "45",
   latitude: "",
   longitude: "",
   logo: "",
-  coverImage: "",
+  backgroundImageUrl: "",
+  currencyId: "",
 };
+
+const DEFAULT_HOURS: OpeningHourEntry[] = WEEK_DAYS.map((day) => ({
+  day,
+  is24Hours: false,
+  openTime: "08:00",
+  closeTime: "23:00",
+}));
 
 const FIELD_CLASS =
   "w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors";
@@ -36,23 +57,58 @@ const LABEL_CLASS = "text-xs font-semibold text-zinc-700 dark:text-zinc-300";
 /** Red asterisk that isn't announced twice — the input already has `required`. */
 function Req() {
   return (
-    <span aria-hidden="true" className="text-red-500 ml-0.5">
+    <span aria-hidden="true" className="text-red-500 ms-0.5">
       *
     </span>
   );
 }
+
+/** Blank stays blank so an untouched numeric field isn't submitted as 0. */
+const numeric = (value: string): number | undefined => {
+  if (value.trim() === "") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+};
 
 export default function AddRestaurantModal({
   isOpen,
   onClose,
   onSuccess,
 }: AddRestaurantModalProps) {
+  const { t } = useI18n();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [formData, setFormData] = useState(EMPTY_FORM);
+  const [currencies, setCurrencies] = useState<Currency[]>([]);
+
+  // Merchants price in their own currency (LBP for most of the platform), so
+  // the operator has to be able to pick one at creation time.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    currenciesService
+      .getActiveCurrencies()
+      .then((list) => {
+        if (cancelled) return;
+        setCurrencies(list);
+        setFormData((prev) =>
+          prev.currencyId || list.length === 0
+            ? prev
+            : { ...prev, currencyId: list[0].code },
+        );
+      })
+      .catch((err) =>
+        console.warn("Could not load currencies:", err?.message ?? err),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+    >,
   ) => {
     setIsDirty(true);
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
@@ -60,86 +116,65 @@ export default function AddRestaurantModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const min = numeric(formData.deliveryTimeMinMinutes);
+    const max = numeric(formData.deliveryTimeMaxMinutes);
+    if (min !== undefined && max !== undefined && min > max) {
+      toast.error(t("rest.time_invalid"));
+      return;
+    }
+
     setIsSubmitting(true);
 
     const payload: RestaurantCreate = {
-      name: formData.name,
-      description: formData.description,
-      email: formData.email,
-      phone: formData.phone,
-      cuisineType: formData.cuisineType,
-      city: formData.city,
-      address: formData.address,
-      deliveryFee: parseFloat(formData.deliveryFee) || 0,
-      estimatedDeliveryMinutes:
-        parseInt(formData.estimatedDeliveryMinutes) || 0,
-      latitude: parseFloat(formData.latitude) || 0,
-      longitude: parseFloat(formData.longitude) || 0,
-      logo: formData.logo,
-      coverImage: formData.coverImage,
-      status: "active", // default to active if admin is creating
-      openingHours: {
-        entries: [
-          {
-            day: "Monday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Tuesday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Wednesday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Thursday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Friday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Saturday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Sunday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-        ],
-      },
+      name: formData.name.trim(),
+      status: "active", // an admin-created merchant goes live immediately
+      openingHours: { entries: DEFAULT_HOURS },
+      ...(formData.description.trim()
+        ? { description: formData.description.trim() }
+        : {}),
+      ...(formData.phone.trim() ? { phone: formData.phone.trim() } : {}),
+      ...(formData.website.trim() ? { website: formData.website.trim() } : {}),
+      ...(formData.ownerFullName.trim()
+        ? { ownerFullName: formData.ownerFullName.trim() }
+        : {}),
+      ...(formData.ownerPhoneNumber.trim()
+        ? { ownerPhoneNumber: formData.ownerPhoneNumber.trim() }
+        : {}),
+      ...(formData.city.trim() ? { city: formData.city.trim() } : {}),
+      ...(formData.address.trim() ? { address: formData.address.trim() } : {}),
+      ...(formData.logo.trim() ? { logo: formData.logo.trim() } : {}),
+      ...(formData.backgroundImageUrl.trim()
+        ? { backgroundImageUrl: formData.backgroundImageUrl.trim() }
+        : {}),
+      ...(formData.currencyId ? { currencyId: formData.currencyId } : {}),
     };
+
+    const latitude = numeric(formData.latitude);
+    const longitude = numeric(formData.longitude);
+    const deliveryFee = numeric(formData.deliveryFee);
+    if (latitude !== undefined) payload.latitude = latitude;
+    if (longitude !== undefined) payload.longitude = longitude;
+    if (deliveryFee !== undefined) payload.deliveryFee = deliveryFee;
+    if (min !== undefined) payload.deliveryTimeMinMinutes = min;
+    if (max !== undefined) payload.deliveryTimeMaxMinutes = max;
 
     try {
       await restaurantsService.createRestaurant(payload);
-      toast.success("Restaurant created successfully!");
+      toast.success(t("rest.created"));
       // Without this the next "Add Restaurant" reopens on the previous
       // merchant's data and quietly creates a near-duplicate.
       setFormData(EMPTY_FORM);
       setIsDirty(false);
       onSuccess();
       onClose();
-    } catch (err: any) {
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : t("rest.create_failed");
       console.error("Failed to create restaurant", err);
-      toast.error(
-        err.message || "An error occurred while creating the restaurant.",
-      );
+      toast.error(message);
     } finally {
       setIsSubmitting(false);
     }
@@ -149,8 +184,8 @@ export default function AddRestaurantModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Add New Restaurant"
-      description="Creates an active merchant with default 08:00–23:00 opening hours."
+      title={t("rest.add_title")}
+      description={t("rest.add_desc")}
       maxWidth="max-w-2xl"
       // Escape / backdrop stay live until there is typing to lose.
       dismissable={!isDirty && !isSubmitting}
@@ -161,7 +196,7 @@ export default function AddRestaurantModal({
             onClick={onClose}
             className="px-4 py-2 text-sm font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
           >
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             type="submit"
@@ -172,20 +207,24 @@ export default function AddRestaurantModal({
             {isSubmitting ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Creating...
+                {t("common.creating")}
               </>
             ) : (
-              "Create Restaurant"
+              t("rest.create_cta")
             )}
           </button>
         </>
       }
     >
-      <form id="add-restaurant-form" onSubmit={handleSubmit} className="space-y-4">
+      <form
+        id="add-restaurant-form"
+        onSubmit={handleSubmit}
+        className="space-y-4"
+      >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 md:col-span-2">
             <label htmlFor="add-rest-name" className={LABEL_CLASS}>
-              Name
+              {t("rest.name")}
               <Req />
             </label>
             <input
@@ -197,27 +236,12 @@ export default function AddRestaurantModal({
               className={FIELD_CLASS}
             />
           </div>
-          <div className="space-y-1.5">
-            <label htmlFor="add-rest-cuisine" className={LABEL_CLASS}>
-              Cuisine Type
-              <Req />
-            </label>
-            <input
-              required
-              id="add-rest-cuisine"
-              name="cuisineType"
-              value={formData.cuisineType}
-              onChange={handleChange}
-              className={FIELD_CLASS}
-            />
-          </div>
+
           <div className="space-y-1.5 md:col-span-2">
             <label htmlFor="add-rest-description" className={LABEL_CLASS}>
-              Description
-              <Req />
+              {t("common.description")}
             </label>
             <textarea
-              required
               id="add-rest-description"
               name="description"
               value={formData.description}
@@ -228,42 +252,68 @@ export default function AddRestaurantModal({
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="add-rest-email" className={LABEL_CLASS}>
-              Email
-              <Req />
+            <label htmlFor="add-rest-phone" className={LABEL_CLASS}>
+              {t("rest.phone")}
             </label>
             <input
-              required
-              type="email"
-              id="add-rest-email"
-              name="email"
-              value={formData.email}
+              id="add-rest-phone"
+              name="phone"
+              inputMode="tel"
+              placeholder="+961 71 000 000"
+              value={formData.phone}
               onChange={handleChange}
               className={FIELD_CLASS}
             />
           </div>
           <div className="space-y-1.5">
-            <label htmlFor="add-rest-phone" className={LABEL_CLASS}>
-              Phone
-              <Req />
+            <label htmlFor="add-rest-website" className={LABEL_CLASS}>
+              {t("common.website")}
             </label>
             <input
-              required
-              id="add-rest-phone"
-              name="phone"
-              value={formData.phone}
+              id="add-rest-website"
+              name="website"
+              type="url"
+              placeholder="https://"
+              value={formData.website}
               onChange={handleChange}
               className={FIELD_CLASS}
             />
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="add-rest-city" className={LABEL_CLASS}>
-              City
-              <Req />
+            <label htmlFor="add-rest-owner-name" className={LABEL_CLASS}>
+              {t("rest.owner_name")}
             </label>
             <input
-              required
+              id="add-rest-owner-name"
+              name="ownerFullName"
+              value={formData.ownerFullName}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-owner-phone" className={LABEL_CLASS}>
+              {t("rest.owner_phone")}
+            </label>
+            <input
+              id="add-rest-owner-phone"
+              name="ownerPhoneNumber"
+              inputMode="tel"
+              value={formData.ownerPhoneNumber}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+            <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+              {t("rest.owner_hint")}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-city" className={LABEL_CLASS}>
+              {t("common.city")}
+            </label>
+            <input
               id="add-rest-city"
               name="city"
               value={formData.city}
@@ -273,11 +323,9 @@ export default function AddRestaurantModal({
           </div>
           <div className="space-y-1.5">
             <label htmlFor="add-rest-address" className={LABEL_CLASS}>
-              Street Address
-              <Req />
+              {t("rest.street_address")}
             </label>
             <input
-              required
               id="add-rest-address"
               name="address"
               value={formData.address}
@@ -288,11 +336,9 @@ export default function AddRestaurantModal({
 
           <div className="space-y-1.5">
             <label htmlFor="add-rest-latitude" className={LABEL_CLASS}>
-              Latitude
-              <Req />
+              {t("common.latitude")}
             </label>
             <input
-              required
               type="number"
               step="any"
               min={-90}
@@ -306,11 +352,9 @@ export default function AddRestaurantModal({
           </div>
           <div className="space-y-1.5">
             <label htmlFor="add-rest-longitude" className={LABEL_CLASS}>
-              Longitude
-              <Req />
+              {t("common.longitude")}
             </label>
             <input
-              required
               type="number"
               step="any"
               min={-180}
@@ -324,12 +368,29 @@ export default function AddRestaurantModal({
           </div>
 
           <div className="space-y-1.5">
+            <label htmlFor="add-rest-currency" className={LABEL_CLASS}>
+              {t("rest.pricing_currency")}
+            </label>
+            <select
+              id="add-rest-currency"
+              name="currencyId"
+              value={formData.currencyId}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            >
+              <option value="">{t("rest.platform_default")}</option>
+              {currencies.map((currency) => (
+                <option key={currency.code} value={currency.code}>
+                  {currency.code} — {currency.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
             <label htmlFor="add-rest-fee" className={LABEL_CLASS}>
-              Delivery Fee ($)
-              <Req />
+              {t("common.delivery_fee")}
             </label>
             <input
-              required
               type="number"
               step="0.01"
               min={0}
@@ -339,19 +400,35 @@ export default function AddRestaurantModal({
               onChange={handleChange}
               className={FIELD_CLASS}
             />
+            <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+              {t("rest.fee_hint")}
+            </p>
           </div>
+
           <div className="space-y-1.5">
-            <label htmlFor="add-rest-eta" className={LABEL_CLASS}>
-              Estimated Delivery (Mins)
-              <Req />
+            <label htmlFor="add-rest-eta-min" className={LABEL_CLASS}>
+              {t("rest.time_min")}
             </label>
             <input
-              required
               type="number"
               min={0}
-              id="add-rest-eta"
-              name="estimatedDeliveryMinutes"
-              value={formData.estimatedDeliveryMinutes}
+              id="add-rest-eta-min"
+              name="deliveryTimeMinMinutes"
+              value={formData.deliveryTimeMinMinutes}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-eta-max" className={LABEL_CLASS}>
+              {t("rest.time_max")}
+            </label>
+            <input
+              type="number"
+              min={0}
+              id="add-rest-eta-max"
+              name="deliveryTimeMaxMinutes"
+              value={formData.deliveryTimeMaxMinutes}
               onChange={handleChange}
               className={FIELD_CLASS}
             />
@@ -359,24 +436,28 @@ export default function AddRestaurantModal({
 
           <div className="space-y-1.5 md:col-span-2">
             <label htmlFor="add-rest-logo" className={LABEL_CLASS}>
-              Logo URL
+              {t("common.logo_url")}
             </label>
             <input
               id="add-rest-logo"
               name="logo"
+              type="url"
+              placeholder="https://"
               value={formData.logo}
               onChange={handleChange}
               className={FIELD_CLASS}
             />
           </div>
           <div className="space-y-1.5 md:col-span-2">
-            <label htmlFor="add-rest-cover" className={LABEL_CLASS}>
-              Cover Image URL
+            <label htmlFor="add-rest-background" className={LABEL_CLASS}>
+              {t("common.background_url")}
             </label>
             <input
-              id="add-rest-cover"
-              name="coverImage"
-              value={formData.coverImage}
+              id="add-rest-background"
+              name="backgroundImageUrl"
+              type="url"
+              placeholder="https://"
+              value={formData.backgroundImageUrl}
               onChange={handleChange}
               className={FIELD_CLASS}
             />

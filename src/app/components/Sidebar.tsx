@@ -13,12 +13,14 @@ import {
   Bell,
   Smartphone,
   Truck,
+  Tags,
+  MessageSquare,
 } from "lucide-react";
-import { Restaurant } from "../data/mockData";
 import { SystemUser } from "../../services/users";
 import { authService } from "../../services/auth";
 import { useConfirm } from "./ui/ConfirmDialog";
 import { statusLabel } from "./ui/StatusPill";
+import { useI18n, type MessageKey } from "../../lib/i18n";
 
 export interface Role {
   type: "admin" | "restaurant" | "restaurant_owner";
@@ -33,8 +35,6 @@ interface SidebarProps {
   isOpen?: boolean;
   onClose?: () => void;
   currentRole: Role;
-  onChangeRole: (role: Role) => void;
-  restaurants: Restaurant[];
   currentUser: SystemUser | null;
 }
 
@@ -45,33 +45,47 @@ interface SidebarProps {
  * replaces only the first underscore and produced lowercase text that didn't
  * match the sidebar — the nav said "Store Categories" while the header said
  * "restaurant categories".
+ *
+ * Titles are now translation keys rather than literals, so the sidebar and the
+ * header stay in step in both languages from one table.
  */
-export const TAB_LABELS: Record<string, string> = {
-  overview: "Dashboard Overview",
-  orders: "Live Orders",
-  restaurants: "Restaurants",
-  restaurant_categories: "Store Categories",
-  delivery_companies: "Delivery Companies",
-  reels: "Reels Management",
-  customers: "Customers",
-  currencies: "Currencies & Rates",
-  system_users: "System Users",
-  notifications: "Notifications",
-  app_version: "App Version Control",
-  restaurant_application: "Apply & Status",
-  restaurant_reels: "My Reels",
-  restaurant_overview: "My Dashboard",
-};
+export const TAB_KEYS = [
+  "overview",
+  "orders",
+  "restaurants",
+  "restaurant_categories",
+  "menu_tags",
+  "delivery_companies",
+  "reels",
+  "customers",
+  "currencies",
+  "system_users",
+  "notifications",
+  "sms_gateway",
+  "app_version",
+  "restaurant_application",
+  "restaurant_reels",
+  "restaurant_overview",
+] as const;
 
-export function tabLabel(tab: string): string {
-  return (
-    TAB_LABELS[tab] ??
-    tab
-      .split("_")
-      .filter(Boolean)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ")
-  );
+const TAB_KEY_SET = new Set<string>(TAB_KEYS);
+
+/**
+ * `t` is passed in rather than pulled from context so this stays a plain
+ * function — it is called from render paths that aren't components.
+ */
+export function tabLabel(
+  tab: string,
+  t?: (key: MessageKey) => string,
+): string {
+  if (t && TAB_KEY_SET.has(tab)) {
+    return t(`nav.${tab}` as MessageKey);
+  }
+  return tab
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 /** Initials for the avatar, e.g. "Hassan Al-Sabeh" -> "HA". */
@@ -91,26 +105,30 @@ export default function Sidebar({
   isOpen,
   onClose,
   currentRole,
-  onChangeRole,
-  restaurants,
   currentUser,
 }: SidebarProps) {
   const confirm = useConfirm();
+  const { t, isRTL } = useI18n();
+
   // Decide menu items based on role
   const getMenuItems = () => {
     if (currentRole.type === "admin") {
       return [
-        { id: "overview", label: "Overview", icon: LayoutDashboard },
+        {
+          id: "overview",
+          label: t("nav.overview_short"),
+          icon: LayoutDashboard,
+        },
         {
           id: "orders",
-          label: "Live Orders",
+          label: t("nav.orders"),
           icon: ShoppingBag,
           badge: pendingOrdersCount > 0 ? pendingOrdersCount : undefined,
           badgeColor: "bg-red-500 text-white animate-pulse",
         },
         {
           id: "restaurants",
-          label: "Restaurants",
+          label: t("nav.restaurants"),
           icon: Store,
           badge:
             pendingRestaurantsCount > 0 ? pendingRestaurantsCount : undefined,
@@ -118,42 +136,64 @@ export default function Sidebar({
         },
         {
           id: "restaurant_categories",
-          label: "Store Categories",
+          label: t("nav.restaurant_categories"),
           icon: Store,
         },
+        { id: "menu_tags", label: t("nav.menu_tags"), icon: Tags },
         {
           id: "delivery_companies",
-          label: "Delivery Companies",
+          label: t("nav.delivery_companies"),
           icon: Truck,
         },
-        { id: "reels", label: "Reels Management", icon: Sparkles },
-        { id: "customers", label: "Customers", icon: Users },
-        { id: "currencies", label: "Currencies & Rates", icon: Coins },
-        { id: "system_users", label: "System Users", icon: Users2 },
-        { id: "notifications", label: "Notifications", icon: Bell },
-        { id: "app_version", label: "App Version Control", icon: Smartphone },
+        { id: "reels", label: t("nav.reels"), icon: Sparkles },
+        { id: "customers", label: t("nav.customers"), icon: Users },
+        { id: "currencies", label: t("nav.currencies"), icon: Coins },
+        { id: "system_users", label: t("nav.system_users"), icon: Users2 },
+        { id: "notifications", label: t("nav.notifications"), icon: Bell },
+        { id: "sms_gateway", label: t("nav.sms_gateway"), icon: MessageSquare },
+        { id: "app_version", label: t("nav.app_version"), icon: Smartphone },
       ];
     } else if (currentRole.type === "restaurant_owner") {
       return [
-        { id: "restaurant_application", label: "Apply & Status", icon: Store },
+        {
+          id: "restaurant_application",
+          label: t("nav.restaurant_application"),
+          icon: Store,
+        },
       ];
     } else {
       return [
         {
-          id: "restaurants",
-          label: "My Dashboard",
+          id: "restaurant_overview",
+          label: t("nav.restaurant_overview"),
           icon: LayoutDashboard,
         },
-        { id: "restaurant_reels", label: "My Reels", icon: Sparkles },
+        { id: "restaurants", label: t("nav.my_store"), icon: Store },
+        { id: "restaurant_reels", label: t("nav.restaurant_reels"), icon: Sparkles },
       ];
     }
   };
 
   const menuItems = getMenuItems();
-  const activeRestaurant =
-    currentRole.type === "restaurant"
-      ? restaurants.find((r) => r.id === currentRole.restaurantId)
-      : null;
+
+  /*
+   * Which way the closed drawer hides.
+   *
+   * This used to set a base negative translate alongside its direction-variant
+   * counterpart — two competing classes for the same property, resolved by
+   * stylesheet order rather than intent. Tailwind emits direction variants
+   * *after* the `lg` breakpoint and wraps them in `:where()` (specificity 0),
+   * so on a desktop screen in Arabic the closed-state class beat the `lg`
+   * reset and pushed the permanently-visible sidebar a full width off the
+   * trailing edge. English escaped it only because the plain negative
+   * translate happens to sort earlier than `lg`.
+   *
+   * Picking one class at runtime removes the conflict entirely, and scoping it
+   * to `max-lg` means the desktop sidebar can never be transformed at all.
+   */
+  const offCanvasClass = isRTL
+    ? "max-lg:translate-x-full"
+    : "max-lg:-translate-x-full";
 
   return (
     <>
@@ -165,11 +205,13 @@ export default function Sidebar({
         />
       )}
 
+      {/* `start-0` / `border-e` are logical, so in Arabic the drawer docks to
+          the right edge and the mobile slide-in comes from that side too. */}
       <aside
         className={`
-        fixed inset-y-0 left-0 z-50 w-64 bg-zinc-950 text-zinc-300 flex flex-col h-full border-r border-zinc-800 shrink-0
-        transition-transform duration-300 ease-out transform lg:translate-x-0 lg:static lg:h-full lg:z-auto
-        ${isOpen ? "translate-x-0" : "-translate-x-full"}
+        fixed inset-y-0 start-0 z-50 w-64 bg-zinc-950 text-zinc-300 flex flex-col h-full border-e border-zinc-800 shrink-0
+        transition-transform duration-300 ease-out transform lg:static lg:h-full lg:z-auto
+        ${isOpen ? "translate-x-0" : offCanvasClass}
       `}
       >
         {/* Brand Header */}
@@ -192,18 +234,18 @@ export default function Sidebar({
                 }`}
               >
                 {currentRole.type === "admin"
-                  ? "Admin"
+                  ? t("sidebar.role.admin")
                   : currentRole.type === "restaurant_owner"
-                    ? "Owner"
-                    : "Store"}
+                    ? t("sidebar.role.owner")
+                    : t("sidebar.role.store")}
               </span>
             </h1>
             <p className="text-[10px] text-zinc-500 font-semibold tracking-widest uppercase">
               {currentRole.type === "admin"
-                ? "Operations Portal"
+                ? t("sidebar.subtitle.admin")
                 : currentRole.type === "restaurant_owner"
-                  ? "Partner Applicant"
-                  : "Merchant Hub"}
+                  ? t("sidebar.subtitle.owner")
+                  : t("sidebar.subtitle.store")}
             </p>
           </div>
         </div>
@@ -212,7 +254,7 @@ export default function Sidebar({
         {/* Navigation */}
         <nav className="flex-1 px-4 py-5 space-y-1.5 overflow-y-auto">
           <p className="px-3 text-[10px] font-bold text-zinc-600 tracking-wider uppercase mb-2">
-            Main Menu
+            {t("nav.main_menu")}
           </p>
           {menuItems.map((item) => {
             const Icon = item.icon;
@@ -226,8 +268,8 @@ export default function Sidebar({
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${
                   isActive
-                    ? "bg-gradient-to-r from-orange-500/10 to-red-500/5 text-orange-400 border-l-2 border-orange-500 pl-2.5"
-                    : "hover:bg-zinc-900/60 hover:text-white border-l-2 border-transparent"
+                    ? "bg-gradient-to-r from-orange-500/10 to-red-500/5 text-orange-400 border-s-2 border-orange-500 ps-2.5"
+                    : "hover:bg-zinc-900/60 hover:text-white border-s-2 border-transparent"
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -255,41 +297,39 @@ export default function Sidebar({
         {/* User Identity Section */}
         <div className="p-4 border-t border-zinc-800 bg-zinc-900/30">
           <div className="flex items-center gap-3 px-2 py-1.5">
+            {/* The identity block used to look the merchant up in a
+                localStorage fixture, so a real signed-in owner rendered as
+                "Store" with no name. It reads the API profile now. */}
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-zinc-950 font-bold shadow text-xs uppercase shrink-0">
-              {currentRole.type === "restaurant"
-                ? activeRestaurant?.logo || "ST"
-                : initialsOf(currentUser?.fullName)}
+              {initialsOf(currentUser?.fullName)}
             </div>
 
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-white truncate">
-                {currentRole.type === "restaurant"
-                  ? (activeRestaurant?.name ?? "Store")
-                  : (currentUser?.fullName ??
-                    currentUser?.phoneNumber ??
-                    "Signed in")}
+                {currentUser?.fullName ??
+                  currentUser?.phoneNumber ??
+                  t("sidebar.signed_in")}
               </p>
               <p className="text-[10px] text-zinc-500 truncate font-semibold">
-                {currentRole.type === "restaurant"
-                  ? "Merchant Partner"
-                  : currentUser?.userType
-                    ? statusLabel(currentUser.userType)
+                {currentUser?.userType
+                  ? statusLabel(currentUser.userType, t)
+                  : currentRole.type === "restaurant"
+                    ? t("sidebar.merchant_partner")
                     : currentRole.type === "restaurant_owner"
-                      ? "Pending registration"
-                      : "Administrator"}
+                      ? t("sidebar.pending_registration")
+                      : t("sidebar.administrator")}
               </p>
             </div>
 
             <button
               className="text-zinc-500 hover:text-red-400 transition-colors p-2 hover:bg-zinc-800 rounded-lg shrink-0"
-              title="Log out"
-              aria-label="Log out"
+              title={t("sidebar.logout")}
+              aria-label={t("sidebar.logout")}
               onClick={async () => {
                 const ok = await confirm({
-                  title: "Log out?",
-                  description:
-                    "You'll need to sign in again with a one-time code sent to your phone.",
-                  confirmLabel: "Log out",
+                  title: t("sidebar.logout_confirm_title"),
+                  description: t("sidebar.logout_confirm_body"),
+                  confirmLabel: t("sidebar.logout"),
                   variant: "danger",
                 });
                 // authService.logout() also tells the server and clears the

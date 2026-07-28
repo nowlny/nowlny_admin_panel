@@ -10,7 +10,12 @@ import {
   Play,
   AlertTriangle,
 } from "lucide-react";
-import { RestaurantResponse } from "../../services/restaurants";
+import {
+  restaurantsService,
+  RestaurantResponse,
+  Story,
+} from "../../services/restaurants";
+import { useI18n } from "../../lib/i18n";
 
 interface StoriesViewerModalProps {
   isOpen: boolean;
@@ -31,6 +36,7 @@ export default function StoriesViewerModal({
   onClose,
   restaurant,
 }: StoriesViewerModalProps) {
+  const { t } = useI18n();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
@@ -52,9 +58,33 @@ export default function StoriesViewerModal({
   const advancedFromRef = useRef<number>(-1);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
-  const stories = restaurant?.stories || [];
+  /*
+   * The list endpoint only embeds `stories[]` for authenticated callers, and
+   * only on some routes — everywhere else it sends a bare `hasStory` flag. The
+   * viewer used to read `restaurant.stories` alone, so opening a merchant that
+   * came from one of those routes showed a story ring over an empty viewer.
+   * Fall back to `GET /api/v1/restaurants/{id}/stories`.
+   */
+  const [fetchedStories, setFetchedStories] = useState<Story[]>([]);
+  const embedded = restaurant?.stories ?? [];
+  const stories = embedded.length > 0 ? embedded : fetchedStories;
   const currentStory = stories[currentIndex];
-  const mediaUrl = currentStory?.imageUrl ?? "";
+
+  useEffect(() => {
+    if (!isOpen || !restaurant?.id || embedded.length > 0) {
+      setFetchedStories([]);
+      return;
+    }
+    let cancelled = false;
+    restaurantsService
+      .getStories(restaurant.id)
+      .then((list) => !cancelled && setFetchedStories(list))
+      .catch(() => !cancelled && setFetchedStories([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, restaurant?.id, embedded.length]);
+  const mediaUrl = currentStory?.videoUrl ?? currentStory?.imageUrl ?? "";
 
   /**
    * Signed and CDN URLs carry a query string (`…/clip.mp4?token=abc`), so the
@@ -293,8 +323,8 @@ export default function StoriesViewerModal({
       {/* Desktop Close Button */}
       <button
         onClick={onClose}
-        aria-label="Close stories"
-        className="absolute top-6 right-6 text-white/70 hover:text-white p-2 hidden md:block z-50 transition-colors"
+        aria-label={t("stories.close")}
+        className="absolute top-6 end-6 text-white/70 hover:text-white p-2 hidden md:block z-50 transition-colors"
       >
         <X className="w-8 h-8" />
       </button>
@@ -304,7 +334,7 @@ export default function StoriesViewerModal({
         <button
           onClick={() => setIsMuted(!isMuted)}
           aria-label={isMuted ? "Unmute story (M)" : "Mute story (M)"}
-          className="absolute top-6 left-6 text-white/70 hover:text-white p-2 z-50 transition-colors bg-black/40 rounded-full backdrop-blur-md"
+          className="absolute top-6 start-6 text-white/70 hover:text-white p-2 z-50 transition-colors bg-black/40 rounded-full backdrop-blur-md"
         >
           {isMuted ? (
             <VolumeX className="w-6 h-6" />
@@ -318,7 +348,7 @@ export default function StoriesViewerModal({
       <div className="relative w-full h-full md:w-[450px] md:h-[800px] md:max-h-[95vh] md:rounded-3xl bg-zinc-900 overflow-hidden flex flex-col shadow-2xl">
 
         {/* Progress Bars */}
-        <div className="absolute top-0 left-0 right-0 z-20 flex gap-1.5 px-3 pt-4 pb-2 bg-gradient-to-b from-black/80 via-black/40 to-transparent">
+        <div className="absolute top-0 start-0 end-0 z-20 flex gap-1.5 px-3 pt-4 pb-2 bg-gradient-to-b from-black/80 via-black/40 to-transparent">
           {stories.map((story, idx) => (
             <div key={story.id} className="h-1 flex-1 bg-white/20 rounded-full overflow-hidden backdrop-blur-sm">
               <div
@@ -332,7 +362,7 @@ export default function StoriesViewerModal({
         </div>
 
         {/* Header */}
-        <div className="absolute top-6 left-0 right-0 z-20 flex items-center justify-between px-4 mt-2 pointer-events-none">
+        <div className="absolute top-6 start-0 end-0 z-20 flex items-center justify-between px-4 mt-2 pointer-events-none">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-zinc-800 border border-zinc-700 overflow-hidden flex items-center justify-center shadow-lg">
               {restaurant.logo && restaurant.logo.length > 5 ? (
@@ -351,7 +381,7 @@ export default function StoriesViewerModal({
 
           <button
             onClick={onClose}
-            aria-label="Close stories"
+            aria-label={t("stories.close")}
             className="md:hidden text-white/80 p-2 drop-shadow-md pointer-events-auto"
           >
             <X className="w-6 h-6" />
@@ -374,8 +404,8 @@ export default function StoriesViewerModal({
           {mediaError ? (
             <div className="flex flex-col items-center gap-2 text-white/70 px-8 text-center">
               <AlertTriangle className="w-8 h-8 text-amber-400" />
-              <p className="text-sm font-semibold">This story couldn&apos;t be loaded.</p>
-              <p className="text-xs text-white/50">Skipping to the next one…</p>
+              <p className="text-sm font-semibold">{t("stories.load_error")}</p>
+              <p className="text-xs text-white/50">{t("stories.skipping")}</p>
             </div>
           ) : renderVideo ? (
             <video
@@ -414,7 +444,7 @@ export default function StoriesViewerModal({
                 e.stopPropagation();
                 tryPlay();
               }}
-              aria-label="Play story"
+              aria-label={t("stories.play")}
               className="absolute inset-0 z-20 flex items-center justify-center"
             >
               <span className="bg-white/90 text-zinc-900 rounded-full p-5 shadow-2xl flex items-center justify-center">
@@ -426,34 +456,34 @@ export default function StoriesViewerModal({
           {/* Tap / click zones — real buttons so they're keyboard reachable. */}
           <button
             type="button"
-            aria-label="Previous story"
-            className="absolute top-0 bottom-0 left-0 w-1/3 z-10 cursor-pointer"
+            aria-label={t("stories.previous")}
+            className="absolute top-0 bottom-0 start-0 w-1/3 z-10 cursor-pointer"
             onClick={zoneClick(handlePrev)}
           >
             {/* Optional subtle hover hints for desktop */}
-            <span className="w-full h-full opacity-0 group-hover:opacity-100 items-center pl-4 transition-opacity hidden md:flex">
+            <span className="w-full h-full opacity-0 group-hover:opacity-100 items-center ps-4 transition-opacity hidden md:flex">
               <span className="bg-black/20 backdrop-blur-sm p-2 rounded-full text-white/50 hover:text-white transition-colors">
-                <ChevronLeft className="w-8 h-8" />
+                <ChevronLeft className="w-8 h-8 rtl:rotate-180" />
               </span>
             </span>
           </button>
 
           <button
             type="button"
-            aria-label="Next story"
-            className="absolute top-0 bottom-0 right-0 w-2/3 z-10 cursor-pointer"
+            aria-label={t("stories.next")}
+            className="absolute top-0 bottom-0 end-0 w-2/3 z-10 cursor-pointer"
             onClick={zoneClick(handleNext)}
           >
-            <span className="w-full h-full opacity-0 group-hover:opacity-100 items-center justify-end pr-4 transition-opacity hidden md:flex">
+            <span className="w-full h-full opacity-0 group-hover:opacity-100 items-center justify-end pe-4 transition-opacity hidden md:flex">
               <span className="bg-black/20 backdrop-blur-sm p-2 rounded-full text-white/50 hover:text-white transition-colors">
-                <ChevronRight className="w-8 h-8" />
+                <ChevronRight className="w-8 h-8 rtl:rotate-180" />
               </span>
             </span>
           </button>
 
           {/* Caption */}
           {currentStory.caption && (
-            <div className="absolute bottom-8 left-4 right-4 z-20 text-center pointer-events-none">
+            <div className="absolute bottom-8 start-4 end-4 z-20 text-center pointer-events-none">
               <span className="bg-black/60 backdrop-blur-md text-white text-sm font-medium px-4 py-2 rounded-xl inline-block max-w-full truncate shadow-xl">
                 {currentStory.caption}
               </span>

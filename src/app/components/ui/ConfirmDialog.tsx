@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import Modal from "./Modal";
+import { useI18n } from "../../../lib/i18n";
 
 export interface ConfirmOptions {
   title: string;
@@ -51,6 +52,7 @@ export function useConfirm() {
 }
 
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
+  const { t } = useI18n();
   const [options, setOptions] = useState<ConfirmOptions | null>(null);
   const [phrase, setPhrase] = useState("");
   const resolverRef = useRef<Resolver | null>(null);
@@ -96,7 +98,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
               onClick={() => settle(false)}
               className="px-4 py-2 rounded-xl text-xs font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
             >
-              {options?.cancelLabel ?? "Cancel"}
+              {options?.cancelLabel ?? t("common.cancel")}
             </button>
             <button
               type="button"
@@ -108,7 +110,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
                   : "bg-orange-500 hover:bg-orange-600"
               }`}
             >
-              {options?.confirmLabel ?? "Confirm"}
+              {options?.confirmLabel ?? t("common.confirm")}
             </button>
           </>
         }
@@ -124,11 +126,20 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
               htmlFor="confirm-phrase"
               className="block text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5"
             >
-              Type{" "}
-              <span className="text-zinc-900 dark:text-white">
-                {options.confirmPhrase}
-              </span>{" "}
-              to confirm
+              {/* Split on the placeholder so the phrase keeps its emphasis in
+                  both languages, where the word order differs. */}
+              {t("confirm.type_to_confirm", { phrase: "\u0000" })
+                .split("\u0000")
+                .map((part, idx) => (
+                  <React.Fragment key={idx}>
+                    {part}
+                    {idx === 0 && (
+                      <span className="text-zinc-900 dark:text-white">
+                        {options.confirmPhrase}
+                      </span>
+                    )}
+                  </React.Fragment>
+                ))}
             </label>
             <input
               id="confirm-phrase"

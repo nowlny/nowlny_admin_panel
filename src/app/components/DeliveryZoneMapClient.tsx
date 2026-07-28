@@ -8,6 +8,7 @@ import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
+import { useI18n } from "../../lib/i18n";
 // Marker icons ship inside the `leaflet` package — bundling them instead of
 // hot-linking cdnjs keeps the map working offline and behind a strict CSP, and
 // stops a third party from seeing every map view.
@@ -27,16 +28,17 @@ interface DeliveryZoneMapProps {
 export default function DeliveryZoneMapClient({
   polygon,
 }: DeliveryZoneMapProps) {
+  const { t } = useI18n();
   // Returning null left a blank slot with no explanation of why.
   if (!polygon || polygon.length === 0) {
     return (
       <div className="h-full w-full flex flex-col items-center justify-center gap-2 text-center px-6 bg-zinc-50 dark:bg-zinc-900 rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800">
         <MapPinOff className="w-7 h-7 text-zinc-300 dark:text-zinc-700" />
         <p className="text-xs font-bold text-zinc-700 dark:text-zinc-300">
-          No delivery zone defined
+          {t("map.no_zone")}
         </p>
         <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xs">
-          Draw a coverage polygon for this company to see it plotted here.
+          {t("map.no_zone_hint")}
         </p>
       </div>
     );

@@ -6,6 +6,7 @@ import toast from "react-hot-toast";
 import { notificationsService, AppNotification } from "../../services/notifications";
 import { EmptyState, ErrorState, Skeleton } from "./ui/States";
 import { formatDateTime } from "../../lib/format";
+import { useI18n } from "../../lib/i18n";
 
 /**
  * Renders `first … current-2 … current+2 … last` instead of one button per
@@ -28,6 +29,7 @@ function pageWindow(current: number, total: number): (number | "gap")[] {
 }
 
 export default function NotificationsSection() {
+  const { t } = useI18n();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [totalItems, setTotalItems] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -47,7 +49,7 @@ export default function NotificationsSection() {
       // A failed fetch used to fall through to the "No notifications found"
       // empty state, making an outage look like an empty inbox.
       console.error("Failed to fetch notifications:", err);
-      setError(err?.message || "Couldn't load notifications.");
+      setError(err?.message || t("notifications.load_error"));
       setNotifications([]);
     } finally {
       setLoading(false);
@@ -66,7 +68,7 @@ export default function NotificationsSection() {
       await notificationsService.markAsRead(id);
     } catch (err: any) {
       console.error("Failed to mark as read", err);
-      toast.error(err?.message || "Couldn't mark that notification as read.");
+      toast.error(err?.message || t("notifications.mark_one_failed"));
       fetchNotifications();
     }
   };
@@ -77,11 +79,11 @@ export default function NotificationsSection() {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     try {
       await notificationsService.markAllAsRead();
-      toast.success("All notifications marked as read.");
+      toast.success(t("notifications.all_read"));
     } catch (err: any) {
       console.error("Failed to mark all as read", err);
       setNotifications(snapshot);
-      toast.error(err?.message || "Couldn't mark all notifications as read.");
+      toast.error(err?.message || t("notifications.mark_all_failed"));
       fetchNotifications();
     } finally {
       setIsMarkingAll(false);
@@ -96,10 +98,10 @@ export default function NotificationsSection() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-xl font-bold text-zinc-900 dark:text-white tracking-tight">
-            Notifications
+            {t("nav.notifications")}
           </h2>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">
-            View and manage all your system alerts and notifications.
+            {t("notifications.page_subtitle")}
           </p>
         </div>
         <button
@@ -112,7 +114,7 @@ export default function NotificationsSection() {
           ) : (
             <CheckCircle className="w-4 h-4 text-emerald-500" />
           )}
-          Mark All as Read
+          {t("notifications.mark_all_cta")}
         </button>
       </div>
 
@@ -138,8 +140,8 @@ export default function NotificationsSection() {
         ) : notifications.length === 0 ? (
           <EmptyState
             icon={Inbox}
-            title="No notifications found"
-            hint="System alerts and order updates will appear here as they arrive."
+            title={t("notifications.none_title")}
+            hint={t("notifications.none_hint")}
           />
         ) : (
           <div className="space-y-3">
@@ -195,7 +197,7 @@ export default function NotificationsSection() {
                         onClick={() => handleMarkAsRead(notif.id)}
                         className="text-[11px] font-bold text-orange-500 hover:underline"
                       >
-                        Mark as Read
+                        {t("notifications.mark_one")}
                       </button>
                     )}
                   </div>
@@ -208,12 +210,15 @@ export default function NotificationsSection() {
         {/* Pagination */}
         {!loading && !error && totalPages > 1 && (
           <nav
-            aria-label="Notifications pagination"
+            aria-label={t("notifications.pagination")}
             className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mt-6 pt-6 border-t border-zinc-100 dark:border-zinc-800"
           >
             <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">
-              Showing {(currentPage - 1) * itemsPerPage + 1} to{" "}
-              {Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems}
+              {t("notifications.showing_range", {
+                from: (currentPage - 1) * itemsPerPage + 1,
+                to: Math.min(currentPage * itemsPerPage, totalItems),
+                total: totalItems,
+              })}
             </p>
             <div className="flex items-center gap-2">
               <button
@@ -221,7 +226,7 @@ export default function NotificationsSection() {
                 disabled={currentPage === 1}
                 className="px-3 py-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
-                Previous
+                {t("common.previous")}
               </button>
               <div className="flex items-center gap-1">
                 {pageWindow(currentPage, totalPages).map((page, i) =>
@@ -255,7 +260,7 @@ export default function NotificationsSection() {
                 disabled={currentPage === totalPages}
                 className="px-3 py-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
-                Next
+                {t("common.next")}
               </button>
             </div>
           </nav>

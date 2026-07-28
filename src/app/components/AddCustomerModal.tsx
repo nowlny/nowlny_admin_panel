@@ -3,8 +3,13 @@
 import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
-import { customersService, CustomerCreateData } from "../../services/customers";
+import {
+  customersService,
+  CustomerCreateData,
+  CustomerStatus,
+} from "../../services/customers";
 import Modal from "./ui/Modal";
+import { useI18n } from "../../lib/i18n";
 
 interface AddCustomerModalProps {
   isOpen: boolean;
@@ -24,6 +29,7 @@ export default function AddCustomerModal({
   onClose,
   onSuccess,
 }: AddCustomerModalProps) {
+  const { t } = useI18n();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState(EMPTY_FORM);
 
@@ -54,18 +60,18 @@ export default function AddCustomerModal({
       fullName: formData.fullName,
       phoneNumber: formData.phoneNumber,
       nickname: formData.nickname || undefined,
-      status: formData.status,
+      status: formData.status as CustomerStatus,
     };
 
     try {
       await customersService.createCustomer(payload);
-      toast.success("Customer created successfully!");
+      toast.success(t("customers.created"));
       onSuccess();
       onClose();
     } catch (err: any) {
       console.error("Failed to create customer", err);
       toast.error(
-        err.message || "An error occurred while creating the customer.",
+        err.message || t("customers.create_failed"),
       );
     } finally {
       setIsSubmitting(false);
@@ -81,8 +87,8 @@ export default function AddCustomerModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Add New Customer"
-      description="Creates a customer account that can place orders."
+      title={t("customers.add_title")}
+      description={t("customers.add_desc")}
       // A stray backdrop click or Escape must not discard typing.
       dismissable={!isDirty && !isSubmitting}
       footer={
@@ -92,7 +98,7 @@ export default function AddCustomerModal({
             onClick={onClose}
             className="px-4 py-2 text-sm font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
           >
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             type="submit"
@@ -103,10 +109,10 @@ export default function AddCustomerModal({
             {isSubmitting ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Creating...
+                {t("customers.creating")}
               </>
             ) : (
-              "Create Customer"
+              t("customers.create")
             )}
           </button>
         </>
@@ -115,7 +121,7 @@ export default function AddCustomerModal({
       <form id="add-customer-form" onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-1.5">
           <label htmlFor="add-customer-fullName" className={labelClass}>
-            Full Name
+            {t("customers.full_name")}
           </label>
           <input
             id="add-customer-fullName"
@@ -123,14 +129,14 @@ export default function AddCustomerModal({
             name="fullName"
             value={formData.fullName}
             onChange={handleChange}
-            placeholder="e.g. Johnny Doe"
+            placeholder={t("customers.name_placeholder")}
             className={inputClass}
           />
         </div>
 
         <div className="space-y-1.5">
           <label htmlFor="add-customer-phoneNumber" className={labelClass}>
-            Phone Number
+            {t("customers.phone")}
           </label>
           <input
             id="add-customer-phoneNumber"
@@ -146,21 +152,21 @@ export default function AddCustomerModal({
 
         <div className="space-y-1.5">
           <label htmlFor="add-customer-nickname" className={labelClass}>
-            Nickname (Optional)
+            {t("customers.nickname")}
           </label>
           <input
             id="add-customer-nickname"
             name="nickname"
             value={formData.nickname}
             onChange={handleChange}
-            placeholder="e.g. Johnny"
+            placeholder={t("customers.nickname_placeholder")}
             className={inputClass}
           />
         </div>
 
         <div className="space-y-1.5">
           <label htmlFor="add-customer-status" className={labelClass}>
-            Status
+            {t("customers.status")}
           </label>
           {/* Only the two states the customer list can actually render — an
               `inactive` customer showed up as a red "Suspended" pill. */}
@@ -169,10 +175,10 @@ export default function AddCustomerModal({
             name="status"
             value={formData.status}
             onChange={handleChange}
-            className={`${inputClass} pr-8`}
+            className={`${inputClass} pe-8`}
           >
-            <option value="active">Active</option>
-            <option value="suspended">Suspended</option>
+            <option value="active">{t("status.active")}</option>
+            <option value="suspended">{t("status.suspended")}</option>
           </select>
         </div>
       </form>

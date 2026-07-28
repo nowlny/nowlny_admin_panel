@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import React, { useState, useEffect, useCallback } from "react";
+import { usePathname } from "next/navigation";
 import Sidebar, { Role, tabLabel } from "../components/Sidebar";
 import Header from "../components/Header";
 import OverviewSection from "../components/OverviewSection";
@@ -10,8 +10,10 @@ import CustomersSection from "../components/CustomersSection";
 import OrdersSection from "../components/OrdersSection";
 import SystemUsersSection from "../components/SystemUsersSection";
 import RestaurantCategoriesSection from "../components/RestaurantCategoriesSection";
+import MenuTagsPanel from "../components/MenuTagsPanel";
 import CurrenciesSection from "../components/CurrenciesSection";
 import NotificationsSection from "../components/NotificationsSection";
+import SmsGatewaySection from "../components/SmsGatewaySection";
 import LoginScreen from "../components/LoginScreen";
 import DeliveryCompaniesSection from "../components/DeliveryCompaniesSection";
 import { useNotifications } from "../../hooks/useNotifications";
@@ -25,20 +27,13 @@ import {
 } from "../../services/restaurants";
 import { usersService, SystemUser } from "../../services/users";
 import { ordersService } from "../../services/orders";
-
-import {
-  loadDb,
-  saveDb,
-  Restaurant,
-  Customer,
-  Driver,
-  Order,
-  PromoCode,
-  SystemSettings,
-  SystemNotification,
-} from "../data/mockData";
+import RestaurantOverviewSection from "../components/RestaurantOverviewSection";
 import RestaurantReelsSection from "../components/RestaurantReelsSection";
 import ReelsSection from "../components/ReelsSection";
+import { EmptyState } from "../components/ui/States";
+import { Compass } from "lucide-react";
+import { useI18n } from "../../lib/i18n";
+import { applyThemeClass, THEME_STORAGE_KEY } from "../../lib/theme";
 
 /**
  * Sections that actually consume the global `searchQuery` prop. On every other
@@ -53,8 +48,8 @@ const SEARCHABLE_TABS = new Set([
 ]);
 
 export default function Home() {
-  const router = useRouter();
   const pathname = usePathname();
+  const { t } = useI18n();
 
   const [isHydrated, setIsHydrated] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
@@ -62,9 +57,6 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [authToken, setAuthToken] = useState<string | null>(null);
-
-  // Stateful DB
-  const [db, setDb] = useState<ReturnType<typeof loadDb> | null>(null);
 
   // Stats for the sidebar
   const [pendingRestaurantsCount, setPendingRestaurantsCount] = useState(0);
@@ -96,51 +88,51 @@ export default function Home() {
     isRequesting: isRequestingPush,
   } = useNotifications(!!authToken);
 
-  // Initialize theme from localStorage/system preferences on mount
+  // Adopt whatever the pre-paint script in layout.tsx already put on <html>,
+  // so React state and the DOM agree from the first render.
   useEffect(() => {
-    let darkPreference = false;
-    try {
-      const stored = window.localStorage.getItem("nowlny_theme");
-      if (stored) {
-        darkPreference = stored === "dark";
-      } else {
-        darkPreference = window.matchMedia(
-          "(prefers-color-scheme: dark)",
-        ).matches;
-      }
-    } catch (e) {
-      darkPreference = false;
-    }
-    setIsDarkMode(darkPreference);
+    setIsDarkMode(document.documentElement.classList.contains("dark"));
   }, []);
 
-  // Update DOM and localstorage when theme state changes
-  useEffect(() => {
+  /**
+   * Flip the palette. The class on <html> is set alongside React state so the
+   * DOM and the component agree in the same frame — the swap is instant, with
+   * no transition of any kind.
+   */
+  const handleToggleTheme = useCallback(() => {
+    const next = !isDarkMode;
+    setIsDarkMode(next);
+    applyThemeClass(next);
+
     try {
-      if (isDarkMode) {
-        document.documentElement.classList.add("dark");
-        window.localStorage.setItem("nowlny_theme", "dark");
-      } else {
-        document.documentElement.classList.remove("dark");
-        window.localStorage.setItem("nowlny_theme", "light");
-      }
-    } catch (e) {
+      window.localStorage.setItem(THEME_STORAGE_KEY, next ? "dark" : "light");
+    } catch {
       // safe fallback for iframe security containers
     }
   }, [isDarkMode]);
 
-  // Load database from localStorage on mount (hydration safety check)
+  // Pick up an existing session on mount.
   useEffect(() => {
-    const loadedData = loadDb();
-    setDb(loadedData);
-
-    // Check for auth token
     const token = localStorage.getItem("token");
-    if (token) {
-      setAuthToken(token);
-    }
-
+    if (token) setAuthToken(token);
     setIsHydrated(true);
+  }, []);
+
+  /**
+   * `apiClient` raises this once a refresh has definitively failed. Without it
+   * the panel sat on a dead session firing 401s until the operator reloaded.
+   */
+  useEffect(() => {
+    const onExpired = () => {
+      setAuthToken(null);
+      setIsRoleResolved(false);
+      setCurrentUser(null);
+      import("react-hot-toast").then((toast) =>
+        toast.default.error("Your session expired. Please sign in again."),
+      );
+    };
+    window.addEventListener("nowlny:session-expired", onExpired);
+    return () => window.removeEventListener("nowlny:session-expired", onExpired);
   }, []);
 
   // JWT token decoder (zero-dependency, client-side only).
@@ -152,7 +144,7 @@ export default function Home() {
   // role-resolution effect bail out early while `currentRole` was still at its
   // default of `admin`, so the panel issued admin-only requests for whoever
   // was signed in and the API answered 403.
-  const decodeToken = (token: string): Record<string, any> | null => {
+  const decodeToken = (token: string): Record<string, unknown> | null => {
     try {
       const segment = token.split(".")[1];
       if (!segment) return null;
@@ -172,24 +164,55 @@ export default function Home() {
     }
   };
 
+  /**
+   * Switch section.
+   *
+   * This used to call `router.push("/" + tab)`. Every tab is a different value
+   * of the `[[...tab]]` catch-all, and the App Router keys a route segment by
+   * its parameter — so changing it unmounted and remounted this entire
+   * component. `isHydrated` went back to false (the "Booting administrative
+   * interface" splash flashed up), the decoded role was thrown away, and every
+   * effect re-ran, refetching the sidebar counters and the whole section. A
+   * sidebar click cost a full app boot.
+   *
+   * The active tab is client state; the URL only has to mirror it so links and
+   * refreshes keep working. `history.pushState` updates the address bar
+   * without asking the router to navigate anywhere.
+   */
+  const handleTabChange = useCallback(
+    (tab: string, { replace = false }: { replace?: boolean } = {}) => {
+      setActiveTab(tab);
+      if (typeof window === "undefined") return;
+      if (window.location.pathname === `/${tab}`) return;
+      // `replace` is for the landing redirect (`/` → `/overview`), so Back
+      // leaves the panel instead of bouncing between the two.
+      if (replace) window.history.replaceState(null, "", `/${tab}`);
+      else window.history.pushState(null, "", `/${tab}`);
+    },
+    [],
+  );
+
   // Fetch and refresh merchant submission status (for restaurant_owner role)
-  const refetchSubmissionStatus = async () => {
+  const refetchSubmissionStatus = useCallback(async () => {
     try {
-      const data = await restaurantsService.getMySubmission();
+      // `/restaurants/me/submission` answers with a paginated list, newest
+      // first — reading `.status` off the envelope gave `undefined` and left
+      // every owner staring at the "apply now" screen.
+      const data = await restaurantsService.getLatestSubmission();
       setMerchantSubmission(data);
-      // If approved and has a linked restaurantId, switch to store dashboard
-      if (data.status === "approved" && data.restaurantId) {
+      // If approved and linked to a restaurant, switch to the store dashboard.
+      if (data?.status === "approved" && data.restaurantId) {
         setCurrentRole({ type: "restaurant", restaurantId: data.restaurantId });
         handleTabChange("restaurants");
       }
-    } catch (err: any) {
-      // 404 means no submission yet – expected state for new owners
-      if (!err?.message?.includes("404")) {
-        console.error("Failed to fetch submission status:", err);
-      }
+    } catch (err) {
+      console.warn(
+        "Failed to fetch submission status:",
+        err instanceof Error ? err.message : err,
+      );
       setMerchantSubmission(null);
     }
-  };
+  }, [handleTabChange]);
 
   const rejectSession = (message: string) => {
     localStorage.removeItem("token");
@@ -214,19 +237,20 @@ export default function Home() {
     }
 
     const currentHash = pathname === "/" ? "" : pathname.replace("/", "");
-    const userType = decoded.userType;
+    const userType = decoded.userType as string | undefined;
 
     if (userType === "restaurant_owner") {
       // Keep role as restaurant_owner and fetch their submission
       setCurrentRole({ type: "restaurant_owner" });
       setIsRoleResolved(true);
-      handleTabChange(currentHash || "restaurant_application");
+      handleTabChange(currentHash || "restaurant_application", {
+        replace: !currentHash,
+      });
       refetchSubmissionStatus();
     } else if (userType === "admin" || userType === "super_admin") {
-      // Default: treat as admin
       setCurrentRole({ type: "admin" });
       setIsRoleResolved(true);
-      handleTabChange(currentHash || "overview");
+      handleTabChange(currentHash || "overview", { replace: !currentHash });
     } else {
       // Reject unauthorized users (e.g. customers, drivers). Naming the actual
       // role turns "why am I locked out?" into a one-line answer.
@@ -263,43 +287,26 @@ export default function Home() {
   // Keep the browser tab title in sync with the active section.
   useEffect(() => {
     if (!activeTab) return;
-    document.title = `${tabLabel(activeTab)} · Nowlny Admin`;
-  }, [activeTab]);
+    document.title = `${tabLabel(activeTab, t)} · Nowlny Admin`;
+  }, [activeTab, t]);
 
-  // Fetch pending count from API for the sidebar
+  // Pending-application badge for the sidebar.
   useEffect(() => {
-    // Only verify admin if there's a token and role is admin
-    if (authToken && isRoleResolved && currentRole.type === "admin") {
-      restaurantsService
-        .getSubmissions({ status: "pending", limit: 1 })
-        .then((subs: any) => {
-          if (subs && typeof subs.total === "number") {
-            setPendingRestaurantsCount(subs.total);
-          } else if (
-            subs &&
-            typeof subs === "object" &&
-            Array.isArray(subs.data)
-          ) {
-            setPendingRestaurantsCount(
-              subs.data.filter((s: any) => s.status === "pending").length,
-            );
-          } else if (Array.isArray(subs)) {
-            setPendingRestaurantsCount(
-              subs.filter((s) => s.status === "pending").length,
-            );
-          } else {
-            console.warn(
-              "Expected valid response from getSubmissions but got:",
-              subs,
-            );
-            setPendingRestaurantsCount(0);
-          }
-        })
-        .catch((err) => {
-          console.warn("Sidebar count fetch failed (ignoring):", err.message);
-          setPendingRestaurantsCount(0);
-        });
-    }
+    if (!authToken || !isRoleResolved || currentRole.type !== "admin") return;
+
+    let cancelled = false;
+    restaurantsService
+      .getSubmissions({ status: "pending", limit: 1 })
+      .then((res) => {
+        if (!cancelled) setPendingRestaurantsCount(res.total);
+      })
+      .catch((err) => {
+        console.warn("Sidebar count fetch failed (ignoring):", err?.message);
+        if (!cancelled) setPendingRestaurantsCount(0);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [currentRole.type, activeTab, authToken, isRoleResolved]);
 
   // Keep the sidebar's "Live Orders" badge honest. It was previously
@@ -330,7 +337,14 @@ export default function Home() {
     };
   }, [authToken, currentRole.type, isRoleResolved]);
 
-  // Sync tab state with URL path to support browser back button
+  /**
+   * Back / forward support.
+   *
+   * `history.pushState` is picked up by the App Router, so `usePathname`
+   * reflects our own URL writes as well as the browser's, and a popstate lands
+   * here. Setting the tab we are already on is a no-op re-render, not a
+   * remount — which is the whole point of driving the URL this way.
+   */
   useEffect(() => {
     const tab = pathname === "/" ? "" : pathname.replace("/", "");
     if (tab) {
@@ -341,23 +355,12 @@ export default function Home() {
           ? "overview"
           : currentRole.type === "restaurant_owner"
             ? "restaurant_application"
-            : "restaurant_overview",
+            : "restaurants",
       );
     }
   }, [pathname, currentRole.type]);
 
-  const handleTabChange = (tab: string) => {
-    setActiveTab(tab);
-    router.push(`/${tab}`);
-  };
-
-  // Sync to localStorage on React state changes
-  const updateDb = (newDb: ReturnType<typeof loadDb>) => {
-    setDb(newDb);
-    saveDb(newDb);
-  };
-
-  if (!isHydrated || !db) {
+  if (!isHydrated) {
     return (
       // The boot screen was hardcoded to `bg-zinc-950`, so every light-mode
       // user got a full-screen dark flash on each load.
@@ -367,10 +370,10 @@ export default function Home() {
         </div>
         <div className="text-center space-y-1">
           <h2 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-widest">
-            NOWLNY DELIVERIES
+            {t("boot.brand")}
           </h2>
           <p className="text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold uppercase tracking-widest">
-            Booting administrative interface...
+            {t("boot.loading")}
           </p>
         </div>
       </div>
@@ -381,99 +384,35 @@ export default function Home() {
     return <LoginScreen onLoginSuccess={setAuthToken} />;
   }
 
-  // Stats for the sidebar are now updated via useEffect at the top level
-  // Global Actions handlers
-  const handleUpdateRestaurant = (updatedRest: Restaurant) => {
-    const nextRestaurants = db.restaurants.map((r) =>
-      r.id === updatedRest.id ? updatedRest : r,
-    );
-    updateDb({ ...db, restaurants: nextRestaurants });
-  };
-
-  const handleUpdateCustomer = (updatedCust: Customer) => {
-    const nextCustomers = db.customers.map((c) =>
-      c.id === updatedCust.id ? updatedCust : c,
-    );
-    updateDb({ ...db, customers: nextCustomers });
-  };
-
-  const handleUpdateOrder = (updatedOrder: Order) => {
-    const nextOrders = db.orders.map((o) =>
-      o.id === updatedOrder.id ? updatedOrder : o,
-    );
-    updateDb({ ...db, orders: nextOrders });
-  };
-
-  const handleSendNotification = (
-    title: string,
-    body: string,
-    recipient: "all" | "customers" | "restaurants" | "drivers",
-  ) => {
-    const newNotif: SystemNotification = {
-      id: `notif-${Date.now()}`,
-      title,
-      body,
-      recipientType: recipient,
-      timestamp: new Date().toISOString(),
-      read: false,
-    };
-
-    const nextNotifs = [newNotif, ...db.notifications];
-    updateDb({ ...db, notifications: nextNotifs });
-  };
-
-  // Fast-track Overview Approvals
-  const handleApproveRestaurantFromOverview = (restId: string) => {
-    const target = db.restaurants.find((r) => r.id === restId);
-    if (target) {
-      handleUpdateRestaurant({ ...target, status: "Active" });
-      // We don't send mock local notifications anymore. If needed, the backend does this on approval.
-    }
-  };
-
-  // Role Switching trigger
-  const handleRoleChange = (nextRole: Role) => {
-    setCurrentRole(nextRole);
-    if (nextRole.type === "admin") {
-      handleTabChange("overview");
-    } else {
-      handleTabChange("restaurant_overview");
-    }
-  };
+  /** Where "back to safety" goes for the signed-in role. */
+  const homeTab =
+    currentRole.type === "admin"
+      ? "overview"
+      : currentRole.type === "restaurant_owner"
+        ? "restaurant_application"
+        : "restaurant_overview";
 
   // Section Routing
   const renderActiveSection = () => {
-    // Check if store scope impersonation is active
-    const currentRest =
-      currentRole.type === "restaurant"
-        ? db.restaurants.find((r) => r.id === currentRole.restaurantId)
-        : null;
-
     switch (activeTab) {
       // Root Administrator Tabs
       case "overview":
-        return (
-          <OverviewSection
-            db={db}
-            setActiveTab={handleTabChange}
-            onApproveRestaurant={handleApproveRestaurantFromOverview}
-          />
-        );
+        return <OverviewSection setActiveTab={handleTabChange} />;
       case "restaurants":
         return (
           <RestaurantsSection
-            db={db}
-            onUpdateRestaurant={handleUpdateRestaurant}
             searchQuery={searchQuery}
             currentRole={currentRole}
           />
         );
       case "restaurant_categories":
         return <RestaurantCategoriesSection />;
+      case "menu_tags":
+        return <MenuTagsPanel />;
       case "delivery_companies":
         return <DeliveryCompaniesSection searchQuery={searchQuery} />;
       case "customers":
-        return <CustomersSection db={db} searchQuery={searchQuery} />;
+        return <CustomersSection searchQuery={searchQuery} />;
       case "orders":
         return <OrdersSection searchQuery={searchQuery} />;
       case "system_users":
@@ -482,10 +421,16 @@ export default function Home() {
         return <CurrenciesSection searchQuery={searchQuery} />;
       case "notifications":
         return <NotificationsSection />;
+      case "sms_gateway":
+        return <SmsGatewaySection />;
       case "app_version":
         return <AppVersionSection />;
       case "reels":
         return <ReelsSection />;
+
+      // Merchant portal
+      case "restaurant_overview":
+        return <RestaurantOverviewSection setActiveTab={handleTabChange} />;
 
       // Restaurant Owner (applicant) portal
       case "restaurant_application":
@@ -499,7 +444,28 @@ export default function Home() {
         return <RestaurantReelsSection />;
 
       default:
-        return <div className="p-8 text-xs font-bold">Routing Error</div>;
+        /*
+         * An unknown path used to render the bare text "Routing Error" with no
+         * way back — reachable from any typo in the address bar, and from
+         * `/restaurant_overview`, which the role switcher itself linked to.
+         */
+        return (
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
+            <EmptyState
+              icon={Compass}
+              title={t("route.not_found_title")}
+              hint={t("route.not_found_body", { tab: activeTab })}
+              action={
+                <button
+                  onClick={() => handleTabChange(homeTab)}
+                  className="text-xs font-bold px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all shadow-sm"
+                >
+                  {t("route.go_to", { tab: tabLabel(homeTab, t) })}
+                </button>
+              }
+            />
+          </div>
+        );
     }
   };
 
@@ -517,8 +483,6 @@ export default function Home() {
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         currentRole={currentRole}
-        onChangeRole={handleRoleChange}
-        restaurants={db.restaurants}
         currentUser={currentUser}
       />
 
@@ -531,7 +495,7 @@ export default function Home() {
           setSearchQuery={setSearchQuery}
           onOpenSidebar={() => setSidebarOpen(true)}
           isDarkMode={isDarkMode}
-          onToggleTheme={() => setIsDarkMode(!isDarkMode)}
+          onToggleTheme={handleToggleTheme}
           notificationToast={notificationToast}
           searchEnabled={SEARCHABLE_TABS.has(activeTab)}
           pushPermission={pushPermission}
@@ -547,13 +511,13 @@ export default function Home() {
 
       {/* FCM Notification Toast */}
       {notificationToast && (
-        <div className="fixed top-6 right-6 z-[9999] bg-white dark:bg-zinc-900 border border-orange-500/30 dark:border-orange-500/30 shadow-2xl shadow-orange-500/10 rounded-2xl p-4 w-80 animate-in slide-in-from-top-4 fade-in duration-300 flex flex-col gap-2">
+        <div className="fixed top-6 end-6 z-[9999] bg-white dark:bg-zinc-900 border border-orange-500/30 dark:border-orange-500/30 shadow-2xl shadow-orange-500/10 rounded-2xl p-4 w-80 animate-in slide-in-from-top-4 fade-in duration-300 flex flex-col gap-2">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-3">
               {notificationToast.icon ? (
                 <img
                   src={notificationToast.icon}
-                  alt="icon"
+                  alt=""
                   className="w-8 h-8 rounded-full object-cover"
                 />
               ) : (
@@ -567,6 +531,7 @@ export default function Home() {
                     strokeWidth="2"
                     strokeLinecap="round"
                     strokeLinejoin="round"
+                    aria-hidden="true"
                   >
                     <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
                     <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
@@ -584,6 +549,7 @@ export default function Home() {
             </div>
             <button
               onClick={() => setNotificationToast(null)}
+              aria-label={t("page.dismiss_notification")}
               className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg shrink-0 transition-colors"
             >
               <svg
@@ -595,6 +561,7 @@ export default function Home() {
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
+                aria-hidden="true"
               >
                 <line x1="18" y1="6" x2="6" y2="18" />
                 <line x1="6" y1="6" x2="18" y2="18" />

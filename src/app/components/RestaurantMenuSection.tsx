@@ -22,17 +22,18 @@ import {
   ToggleRight,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { Restaurant } from "../data/mockData";
+import { RestaurantResponse } from "../../services/restaurants";
 import { menuService, MenuSection, MenuItem as ApiMenuItem } from "../../services/menu";
-import { formatMoney } from "../../lib/format";
+import { formatAddress, formatMoney } from "../../lib/format";
 import MenuSectionEditorModal from "./MenuSectionEditorModal";
 import MenuItemEditorModal from "./MenuItemEditorModal";
 import { useConfirm } from "./ui/ConfirmDialog";
 import { EmptyState, ErrorBanner, ErrorState, Skeleton } from "./ui/States";
 
+import { useI18n } from "../../lib/i18n";
 interface RestaurantMenuSectionProps {
-  restaurant: Restaurant;
-  onUpdateRestaurant: (updatedRest: Restaurant) => void;
+  /** The live API record, not the retired localStorage `Restaurant` fixture. */
+  restaurant: RestaurantResponse;
 }
 
 interface ParsedMenuData {
@@ -53,8 +54,8 @@ interface ParsedMenuData {
 
 export default function RestaurantMenuSection({
   restaurant,
-  onUpdateRestaurant,
 }: RestaurantMenuSectionProps) {
+  const { t } = useI18n();
   // Real Google Gemini API states
   const [geminiApiKey, setGeminiApiKey] = useState(() => {
     if (typeof window !== "undefined") {
@@ -148,7 +149,7 @@ export default function RestaurantMenuSection({
     } catch (err: any) {
       setSections([]);
       setItemsBySection({});
-      setMenuError(err?.message || "Failed to load the menu from the API. Check your connection.");
+      setMenuError(err?.message || t("rmenu.load_failed"));
     } finally {
       setIsLoadingMenu(false);
       setHasLoadedMenu(true);
@@ -288,7 +289,7 @@ export default function RestaurantMenuSection({
           categories: parsedResult.categories || [],
         });
         setParseSuccess(true);
-        toast.success("Menu parsed successfully by Gemini AI!");
+        toast.success(t("rmenu.parsed_ok"));
       }, 500);
     } catch (err: any) {
       clearInterval(progressInterval);
@@ -313,7 +314,7 @@ export default function RestaurantMenuSection({
       }
 
       setParsingError(friendlyMessage);
-      toast.error("Gemini parsing failed. See details below.");
+      toast.error(t("rmenu.parse_failed"));
     }
   };
 
@@ -443,9 +444,9 @@ export default function RestaurantMenuSection({
       setParseSuccess(false);
       setLastUploadedFile(null);
 
-      toast.success("AI parsed menu approved. Items integrated into your live menu.");
+      toast.success(t("rmenu.approved"));
     } catch (err: any) {
-      toast.error(err?.message || "An error occurred integrating the menu via API.");
+      toast.error(err?.message || t("rmenu.integrate_failed"));
     } finally {
       setIsIntegrating(false);
     }
@@ -465,8 +466,8 @@ export default function RestaurantMenuSection({
   const handleDeleteItem = async (item: ApiMenuItem) => {
     const confirmed = await confirm({
       title: `Delete “${item.name}”?`,
-      description: "This permanently removes the dish from your store menu.",
-      confirmLabel: "Delete dish",
+      description: t("rmenu.delete_dish_body"),
+      confirmLabel: t("rmenu.delete_dish_cta"),
       variant: "danger",
     });
     if (!confirmed) return;
@@ -477,7 +478,7 @@ export default function RestaurantMenuSection({
       await loadMenu();
       toast.success(`“${item.name}” deleted.`);
     } catch (err: any) {
-      toast.error(err?.message || "Failed to delete item.");
+      toast.error(err?.message || t("rmenu.delete_item_failed"));
     } finally {
       setPendingItemId(null);
     }
@@ -496,7 +497,7 @@ export default function RestaurantMenuSection({
       toast.success(next ? `“${item.name}” is available again.` : `“${item.name}” snoozed.`);
     } catch (err: any) {
       patchItem(item, { isAvailable: !next }); // roll back
-      toast.error(err?.message || "Failed to toggle availability.");
+      toast.error(err?.message || t("rmenu.toggle_failed"));
     }
   };
 
@@ -533,7 +534,10 @@ export default function RestaurantMenuSection({
     const parsed = parseFloat(draft);
     if (draft.trim() === "" || !Number.isFinite(parsed) || parsed <= 0) {
       clearPriceDraft(item.id); // revert to the stored price
-      setPriceErrors((prev) => ({ ...prev, [item.id]: "Enter an amount above 0." }));
+      setPriceErrors((prev) => ({
+        ...prev,
+        [item.id]: t("rmenu.price_invalid"),
+      }));
       toast.error(`“${item.name}”: price must be a number above 0. Reverted.`);
       return;
     }
@@ -545,10 +549,12 @@ export default function RestaurantMenuSection({
     patchItem(item, { price: parsed }); // optimistic
     try {
       await menuService.updateItem(item.id, { price: parsed });
-      toast.success(`“${item.name}” priced at $${formatMoney(parsed)}.`);
+      toast.success(
+        `“${item.name}” priced at ${formatMoney(parsed, restaurant.currency?.code)}.`,
+      );
     } catch (err: any) {
       patchItem(item, { price: previousPrice }); // roll back
-      toast.error(err?.message || "Failed to update price.");
+      toast.error(err?.message || t("rmenu.price_failed"));
     }
   };
 
@@ -559,8 +565,8 @@ export default function RestaurantMenuSection({
       description:
         itemCount > 0
           ? `${itemCount} dish${itemCount > 1 ? "es" : ""} inside this category will be permanently deleted with it.`
-          : "This category is empty. It will be permanently deleted.",
-      confirmLabel: "Delete category",
+          : t("rmenu.empty_category_body"),
+      confirmLabel: t("rmenu.delete_category_cta"),
       variant: "danger",
       ...(itemCount > 0 ? { confirmPhrase: section.name } : {}),
     });
@@ -573,7 +579,7 @@ export default function RestaurantMenuSection({
       await loadMenu();
       toast.success(`“${section.name}” deleted.`);
     } catch (err: any) {
-      toast.error(err?.message || "Failed to delete category.");
+      toast.error(err?.message || t("rmenu.delete_category_failed"));
     } finally {
       setPendingSectionId(null);
     }
@@ -583,18 +589,18 @@ export default function RestaurantMenuSection({
     <div className="space-y-8 animate-in fade-in duration-200">
       {/* Banner / Store Header Info Card */}
       <div className="relative h-48 sm:h-56 rounded-3xl overflow-hidden shadow-md">
-        <img
-          src={
-            (restaurant as any).backgroundImageUrl ||
-            (restaurant as any).coverImage ||
-            "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
-          }
-          alt={restaurant.name}
-          className="absolute inset-0 w-full h-full object-cover"
-        />
+        {restaurant.backgroundImageUrl ? (
+          <img
+            src={restaurant.backgroundImageUrl}
+            alt=""
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-zinc-800" />
+        )}
         <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent" />
 
-        <div className="absolute bottom-6 left-6 right-6 flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
+        <div className="absolute bottom-6 start-6 end-6 flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-2xl bg-white dark:bg-zinc-900 shadow-lg flex items-center justify-center text-4xl shrink-0 border-2 border-orange-500/20 overflow-hidden">
               {restaurant.logo && typeof restaurant.logo === 'string' && restaurant.logo.length > 5 ? (
@@ -610,21 +616,24 @@ export default function RestaurantMenuSection({
                 </h1>
                 <span
                   className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
-                    restaurant.status.toLowerCase() === "active"
+                    restaurant.status === "active"
                       ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                      : restaurant.status.toLowerCase() === "pending"
+                      : restaurant.status === "pending"
                         ? "bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse"
                         : "bg-red-500/20 text-red-400 border border-red-500/30"
                   }`}
                 >
-                  {restaurant.status}
+                  {restaurant.status ?? "unknown"}
                 </span>
               </div>
               <p className="text-xs text-zinc-300 font-semibold mt-1">
-                Cuisine: {restaurant.cuisine} • Total Items: {allItems.length}
+                {restaurant.categories?.map((c) => c.name).join(", ") ||
+t("rmenu.no_categories")}{" "}
+                • {allItems.length} item{allItems.length === 1 ? "" : "s"}
               </p>
               <p className="text-[10px] text-zinc-400 mt-0.5">
-                {restaurant.address}
+                {formatAddress(restaurant.restaurantAddress) ||
+                  t("rmenu.no_address")}
               </p>
             </div>
           </div>
@@ -636,7 +645,7 @@ export default function RestaurantMenuSection({
             }}
             className="bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-lg shadow-orange-500/20 flex items-center gap-2 transition-all self-stretch sm:self-auto justify-center"
           >
-            <Plus className="w-4 h-4" /> Add Menu Item
+            <Plus className="w-4 h-4" /> {t("rmenu.add_item")}
           </button>
         </div>
       </div>
@@ -657,7 +666,7 @@ export default function RestaurantMenuSection({
                 </span>
                 <div>
                   <h3 className="text-sm font-bold text-zinc-900 dark:text-white">
-                    AI Menu Uploader & Parser
+                    {t("rmenu.uploader")}
                   </h3>
                   <p className="text-[10px] text-zinc-400">
                     Import menu lists from PDF flyer, Excel spreadsheets, or
@@ -667,7 +676,7 @@ export default function RestaurantMenuSection({
               </div>
 
               <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 bg-purple-500/10 text-purple-600 rounded border border-purple-500/10 animate-pulse">
-                Powered by OCR
+                {t("rmenu.powered_by")}
               </span>
             </div>
 
@@ -678,7 +687,7 @@ export default function RestaurantMenuSection({
                   <AlertCircle className="w-4.5 h-4.5 shrink-0 mt-0.5" />
                   <div className="space-y-1">
                     <p className="font-bold text-red-650 dark:text-red-400">
-                      Gemini Parsing Failure
+                      {t("rmenu.parse_failure")}
                     </p>
                     <p className="text-[11px] text-zinc-650 dark:text-zinc-300 leading-normal font-medium">
                       {parsingError}
@@ -696,14 +705,14 @@ export default function RestaurantMenuSection({
                       <Loader2
                         className={`w-3.5 h-3.5 ${isParsing ? "animate-spin" : ""}`}
                       />
-                      Retry Scan
+                      {t("rmenu.retry_scan")}
                     </button>
                   )}
                   <button
                     onClick={() => setParsingError(null)}
                     className="border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-850 text-zinc-500 font-bold text-[10px] px-3.5 py-2 rounded-xl transition-all"
                   >
-                    Dismiss
+                    {t("rmenu.dismiss")}
                   </button>
                 </div>
               </div>
@@ -727,19 +736,19 @@ export default function RestaurantMenuSection({
                     htmlFor="gemini-api-key"
                     className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest block"
                   >
-                    Google Gemini API Key
+                    {t("rmenu.api_key_label")}
                   </label>
                   <input
                     id="gemini-api-key"
                     type="password"
-                    placeholder="Enter Gemini API Key (AIzaSy...)"
+                    placeholder={t("rmenu.api_key_placeholder")}
                     value={geminiApiKey}
                     onChange={(e) => handleUpdateApiKey(e.target.value)}
                     className="w-full bg-white dark:bg-zinc-900 border border-zinc-250 dark:border-zinc-850 text-[11px] font-bold text-zinc-850 dark:text-zinc-100 placeholder-zinc-400 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-purple-500 shadow-sm"
                   />
                 </div>
                 <p className="text-[9px] text-zinc-400 leading-normal">
-                  💡 <strong>Safe & Secure</strong>: Transmitted securely to
+                  💡 <strong>{t("rmenu.safe_secure")}</strong>: Transmitted securely to
                   Gemini's API endpoints. Get a free API Key at{" "}
                   <a
                     href="https://aistudio.google.com/"
@@ -760,15 +769,15 @@ export default function RestaurantMenuSection({
               <UploadCloud className="w-10 h-10 text-zinc-300 dark:text-zinc-700" />
               <div className="space-y-1">
                 <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                  Drag & drop your store menu file here
+                  {t("rmenu.drag_drop")}
                 </p>
                 <p className="text-[10px] text-zinc-400">
-                  PDF, Excel (XLSX, CSV), PNG, JPG up to 10MB
+                  {t("rmenu.file_types")}
                 </p>
               </div>
 
               <label className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/80 text-zinc-700 dark:text-zinc-300 font-bold text-[10px] px-3 py-2 rounded-lg cursor-pointer transition-all shadow-sm">
-                Browse Files
+                {t("rmenu.browse")}
                 <input
                   type="file"
                   accept=".pdf, .xlsx, .xls, .csv, .png, .jpg, .jpeg, .webp"
@@ -808,7 +817,7 @@ export default function RestaurantMenuSection({
 
         {/* AI Parsed Results Preview Panel - Right */}
         {parsedData && (
-          <div className="lg:col-span-6 bg-white dark:bg-zinc-900 border border-purple-500/20 dark:border-purple-500/10 rounded-3xl p-6 shadow-md flex flex-col justify-between max-h-[460px] animate-in slide-in-from-right-4 duration-300">
+          <div className="lg:col-span-6 bg-white dark:bg-zinc-900 border border-purple-500/20 dark:border-purple-500/10 rounded-3xl p-6 shadow-md flex flex-col justify-between max-h-[460px] animate-in slide-in-from-end-4 duration-300">
             <div className="space-y-4 overflow-hidden flex flex-col flex-1">
               <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-3">
                 <div className="flex items-center gap-2">
@@ -817,7 +826,7 @@ export default function RestaurantMenuSection({
                   </span>
                   <div>
                     <h3 className="text-xs font-black text-zinc-900 dark:text-white uppercase tracking-wider">
-                      AI Parsed Menu Preview
+                      {t("rmenu.preview")}
                     </h3>
                     <p className="text-[9px] text-zinc-500 dark:text-zinc-400 font-semibold truncate max-w-[200px]">
                       Source: {parsedData.name}
@@ -833,7 +842,7 @@ export default function RestaurantMenuSection({
               </div>
 
               {/* Extracted category items list (Scrollable) */}
-              <div className="overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800 flex-1 pr-1 space-y-4">
+              <div className="overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800 flex-1 pe-1 space-y-4">
                 {parsedData.categories.map((cat, catIdx) => (
                   <div key={catIdx} className="pt-3 first:pt-0 space-y-2">
                     <h4 className="text-[10px] font-black text-purple-500 dark:text-purple-400 uppercase tracking-widest flex items-center gap-1.5">
@@ -877,7 +886,7 @@ export default function RestaurantMenuSection({
                 }}
                 className="px-4 py-2.5 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-500 dark:text-zinc-400 font-bold text-xs rounded-xl transition-all"
               >
-                Discard
+                {t("rmenu.discard")}
               </button>
 
               {/* Disabled while integrating: a second click used to re-run the
@@ -896,7 +905,7 @@ export default function RestaurantMenuSection({
                   </>
                 ) : (
                   <>
-                    <Check className="w-4 h-4" /> Approve & Integrate Menu
+                    <Check className="w-4 h-4" /> {t("rmenu.approve_cta")}
                   </>
                 )}
               </button>
@@ -924,8 +933,8 @@ export default function RestaurantMenuSection({
             <input
               id="menu-catalog-search"
               type="search"
-              aria-label="Search the store menu catalog"
-              placeholder="Search catalog..."
+              aria-label={t("rmenu.search_aria")}
+              placeholder={t("rmenu.search_placeholder")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-zinc-50 border border-zinc-200 text-zinc-850 placeholder-zinc-400 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-orange-500 dark:bg-zinc-950/20 dark:border-zinc-800 dark:text-zinc-200"
@@ -976,7 +985,7 @@ export default function RestaurantMenuSection({
             used to key off `sections.length === 0`, so during the initial fetch
             the user saw the "create a section" CTA and created duplicates. */}
         {isLoadingMenu && !hasLoadedMenu ? (
-          <div className="space-y-8" aria-busy="true" aria-label="Loading menu">
+          <div className="space-y-8" aria-busy="true" aria-label={t("rmenu.loading_menu")}>
             {[0, 1].map((sectionIdx) => (
               <div key={sectionIdx} className="space-y-4">
                 <Skeleton className="h-4 w-40 rounded" />
@@ -989,12 +998,12 @@ export default function RestaurantMenuSection({
             ))}
           </div>
         ) : menuError ? (
-          <ErrorState message={menuError} onRetry={loadMenu} title="Couldn't load this menu" />
+          <ErrorState message={menuError} onRetry={loadMenu} title={t("rmenu.load_error_title")} />
         ) : sections.length === 0 ? (
           <EmptyState
             icon={Store}
-            title="Your menu is empty"
-            hint="Start by creating a section, then add your dishes to it."
+            title={t("rmenu.empty_title")}
+            hint={t("rmenu.empty_hint")}
             action={
               <button
                 type="button"
@@ -1004,7 +1013,7 @@ export default function RestaurantMenuSection({
                 }}
                 className="bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-colors"
               >
-                Create Section
+                {t("rmenu.create_section")}
               </button>
             }
           />
@@ -1035,7 +1044,7 @@ export default function RestaurantMenuSection({
                           }}
                           className="text-xs font-bold text-zinc-500 dark:text-zinc-400 hover:text-orange-500"
                         >
-                          Edit Section
+                          {t("rmenu.edit_section")}
                         </button>
                         <button
                           type="button"
@@ -1044,14 +1053,16 @@ export default function RestaurantMenuSection({
                           className="text-xs font-bold text-zinc-500 dark:text-zinc-400 hover:text-red-500 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
                         >
                           {pendingSectionId === sec.id && <Loader2 className="w-3 h-3 animate-spin" />}
-                          {pendingSectionId === sec.id ? "Deleting…" : "Delete"}
+                          {pendingSectionId === sec.id
+                            ? t("rmenu.deleting")
+                            : t("common.delete")}
                         </button>
                       </div>
                     </div>
 
                     {/* Items Grid for this Section */}
                     {secItems.length === 0 ? (
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400 italic">No items found in this section.</p>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400 italic">{t("rmenu.no_items_section")}</p>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {secItems.map((item) => (
@@ -1091,7 +1102,7 @@ export default function RestaurantMenuSection({
                                         setIsItemModalOpen(true);
                                       }}
                                       className="text-zinc-500 dark:text-zinc-400 hover:text-orange-500 p-2.5 hover:bg-zinc-150 dark:hover:bg-zinc-800 rounded-lg"
-                                      title="Edit dish"
+                                      title={t("rmenu.edit_dish")}
                                       aria-label={`Edit ${item.name}`}
                                     >
                                       <FileText className="w-3.5 h-3.5" />
@@ -1101,7 +1112,7 @@ export default function RestaurantMenuSection({
                                       onClick={() => handleDeleteItem(item)}
                                       disabled={pendingItemId === item.id}
                                       className="text-zinc-500 dark:text-zinc-400 hover:text-red-500 p-2.5 hover:bg-zinc-150 dark:hover:bg-zinc-800 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                                      title="Delete dish"
+                                      title={t("rmenu.delete_dish")}
                                       aria-label={`Delete ${item.name}`}
                                     >
                                       {pendingItemId === item.id ? (
@@ -1160,11 +1171,11 @@ export default function RestaurantMenuSection({
                                 >
                                   {item.isAvailable ? (
                                     <>
-                                      <Check className="w-3 h-3" /> Available
+                                      <Check className="w-3 h-3" /> {t("rmenu.available")}
                                     </>
                                   ) : (
                                     <>
-                                      <X className="w-3 h-3" /> Snoozed
+                                      <X className="w-3 h-3" /> {t("rmenu.snoozed")}
                                     </>
                                   )}
                                 </button>

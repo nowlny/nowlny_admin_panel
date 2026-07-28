@@ -14,11 +14,14 @@ import toast from "react-hot-toast";
 import {
   deliveryCompaniesService,
   DeliveryCompany,
+  DeliveryCompanyStatus,
 } from "../../services/deliveryCompanies";
-import StatusPill from "./ui/StatusPill";
+import DeliveryCompanyDetailModal from "./DeliveryCompanyDetailModal";
+import StatusPill, { statusLabel } from "./ui/StatusPill";
 import { EmptyState, ErrorState, Skeleton } from "./ui/States";
 import { formatMoney } from "../../lib/format";
 
+import { useI18n } from "../../lib/i18n";
 interface DeliveryCompaniesSectionProps {
   searchQuery: string;
 }
@@ -40,14 +43,16 @@ const getImageUrl = (path?: string) => {
 export default function DeliveryCompaniesSection({
   searchQuery,
 }: DeliveryCompaniesSectionProps) {
+  const { t } = useI18n();
   const [companies, setCompanies] = useState<DeliveryCompany[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [statusFilter, setStatusFilter] = useState<
-    "all" | "pending" | "active" | "rejected" | "suspended" | "inactive"
+    DeliveryCompanyStatus | "all"
   >("pending");
+  const [inspecting, setInspecting] = useState<DeliveryCompany | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
@@ -61,31 +66,20 @@ export default function DeliveryCompaniesSection({
   const fetchCompanies = async () => {
     try {
       setIsLoading(true);
-      const data = await deliveryCompaniesService.getDeliveryCompanies({
+      const res = await deliveryCompaniesService.getDeliveryCompanies({
         status: statusFilter,
         search: searchQuery,
         page: currentPage,
         limit: 20,
       });
-
-      if (data && data.data) {
-        setCompanies(data.data);
-        setTotalPages(data.totalPages || Math.ceil((data.total || 0) / 20) || 1);
-        setTotalItems(data.total || 0);
-      } else if (Array.isArray(data)) {
-        setCompanies(data);
-        setTotalPages(1);
-        setTotalItems(data.length);
-      } else {
-        setCompanies([]);
-        setTotalPages(1);
-        setTotalItems(0);
-      }
+      setCompanies(res.data);
+      setTotalPages(Math.max(1, res.totalPages ?? 1));
+      setTotalItems(res.total);
       setError(null);
     } catch (err: any) {
       console.error("Failed to fetch delivery companies:", err);
       setError(
-        err?.message || "An unexpected error occurred while loading data.",
+        err?.message || t("delivery.load_failed"),
       );
       setCompanies([]);
     } finally {
@@ -99,7 +93,7 @@ export default function DeliveryCompaniesSection({
 
   const handleReview = async (id: string, approve: boolean) => {
     if (!approve && !rejectionReason.trim()) {
-      toast.error("Please provide a rejection reason.");
+      toast.error(t("delivery.need_reason"));
       return;
     }
 
@@ -110,13 +104,13 @@ export default function DeliveryCompaniesSection({
         rejectionReason: approve ? undefined : rejectionReason,
       });
       toast.success(
-        `Company ${approve ? "approved" : "rejected"} successfully.`,
+        approve ? t("delivery.approved_toast") : t("delivery.rejected_toast"),
       );
       setReviewingCompanyId(null);
       setRejectionReason("");
       fetchCompanies(); // Refresh list
     } catch (err: any) {
-      toast.error(err?.message || "Failed to review company.");
+      toast.error(err?.message || t("delivery.review_failed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -130,15 +124,17 @@ export default function DeliveryCompaniesSection({
         <div>
           <h2 className="text-lg font-bold text-zinc-900 dark:text-white tracking-tight flex items-center gap-2">
             <Truck className="w-5 h-5 text-orange-500" />
-            Delivery Companies
+            {t("delivery.title")}
           </h2>
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-semibold mt-1">
-            Manage delivery companies, applications, and integration statuses.
+            {t("delivery.subtitle")}
           </p>
         </div>
         {!isLoading && !error && totalItems > 0 && (
           <span className="text-[11px] font-bold text-zinc-500 dark:text-zinc-400">
-            {totalItems} {totalItems === 1 ? "company" : "companies"}
+            {totalItems === 1
+              ? t("delivery.count_one")
+              : t("delivery.count", { count: totalItems })}
           </span>
         )}
       </div>
@@ -146,7 +142,7 @@ export default function DeliveryCompaniesSection({
       {/* Tabs — `scrollbar-none` (globals.css); `hide-scrollbar` was never defined. */}
       <div
         role="group"
-        aria-label="Filter companies by status"
+        aria-label={t("delivery.filter_label")}
         className="flex overflow-x-auto scrollbar-none gap-2 pb-2"
       >
         {["pending", "active", "suspended", "inactive", "rejected", "all"].map(
@@ -155,7 +151,7 @@ export default function DeliveryCompaniesSection({
               key={status}
               aria-pressed={statusFilter === status}
               onClick={() => {
-                setStatusFilter(status as any);
+                setStatusFilter(status as DeliveryCompanyStatus | "all");
                 setCurrentPage(1);
               }}
               className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap transition-all duration-200 ${
@@ -164,7 +160,7 @@ export default function DeliveryCompaniesSection({
                   : "bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800"
               }`}
             >
-              {status.charAt(0).toUpperCase() + status.slice(1)}
+              {status === "all" ? t("common.all") : statusLabel(status, t)}
             </button>
           ),
         )}
@@ -191,14 +187,14 @@ export default function DeliveryCompaniesSection({
           <EmptyState
             icon={isFiltered ? SearchX : Truck}
             title={
-              isFiltered ? "No companies match this view" : "No companies yet"
+              isFiltered
+                ? t("delivery.filtered_title")
+                : t("delivery.none_title")
             }
             hint={
               isFiltered
-                ? `Nothing found${
-                    searchQuery?.trim() ? ` for “${searchQuery}”` : ""
-                  } under the “${statusFilter}” filter. Try another status.`
-                : "Delivery companies appear here once they submit an application."
+                ? t("delivery.filtered_hint", { status: statusFilter })
+                : t("delivery.none_hint")
             }
           />
         ) : (
@@ -245,14 +241,28 @@ export default function DeliveryCompaniesSection({
                             </div>
                           )}
                           <div className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
-                            <span className="font-bold">Charge:</span>
+                            <span className="font-bold">{t("delivery.charge")}</span>
                             <span>
                               {formatMoney(
                                 company.deliveryCharge,
-                                company.currencyId,
+                                company.currency?.code ?? company.currencyId,
                               )}
                             </span>
                           </div>
+                          {company.driversCount != null && (
+                            <div className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                              <span className="font-bold">
+                                {t("delivery.fleet")}
+                              </span>
+                              <span>{company.driversCount}</span>
+                            </div>
+                          )}
+                          <button
+                            onClick={() => setInspecting(company)}
+                            className="text-xs font-bold text-orange-500 hover:text-orange-600 transition-colors"
+                          >
+                            {t("delivery.view_detail")}
+                          </button>
                         </div>
                       </div>
 
@@ -265,7 +275,7 @@ export default function DeliveryCompaniesSection({
                                 htmlFor={`rejection-reason-${company.id}`}
                                 className="text-xs font-bold text-zinc-700 dark:text-zinc-300"
                               >
-                                Reject {company.name}
+                                {t("delivery.reject_named", { name: company.name })}
                               </label>
                               <textarea
                                 id={`rejection-reason-${company.id}`}
@@ -273,7 +283,7 @@ export default function DeliveryCompaniesSection({
                                 onChange={(e) =>
                                   setRejectionReason(e.target.value)
                                 }
-                                placeholder="Reason for rejection..."
+                                placeholder={t("delivery.reject_placeholder")}
                                 className={`${inputClass} resize-none h-20`}
                               />
                               <div className="flex gap-2 justify-end">
@@ -285,7 +295,7 @@ export default function DeliveryCompaniesSection({
                                   disabled={isSubmitting}
                                   className="px-3 py-2 text-xs font-bold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors disabled:opacity-50"
                                 >
-                                  Cancel
+                                  {t("common.cancel")}
                                 </button>
                                 <button
                                   onClick={() =>
@@ -301,7 +311,7 @@ export default function DeliveryCompaniesSection({
                                   ) : (
                                     <XCircle className="w-3.5 h-3.5" />
                                   )}
-                                  Confirm Reject
+                                  {t("delivery.confirm_reject")}
                                 </button>
                               </div>
                             </div>
@@ -310,7 +320,7 @@ export default function DeliveryCompaniesSection({
                               <button
                                 onClick={() => handleReview(company.id, true)}
                                 disabled={isSubmitting}
-                                aria-label={`Approve ${company.name}`}
+                                aria-label={t("delivery.approve_named", { name: company.name })}
                                 className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-bold transition-colors shadow-sm disabled:opacity-50"
                               >
                                 {isSubmitting ? (
@@ -318,18 +328,18 @@ export default function DeliveryCompaniesSection({
                                 ) : (
                                   <CheckCircle className="w-4 h-4" />
                                 )}
-                                Approve
+                                {t("delivery.approve")}
                               </button>
                               <button
                                 onClick={() =>
                                   setReviewingCompanyId(company.id)
                                 }
                                 disabled={isSubmitting}
-                                aria-label={`Reject ${company.name}`}
+                                aria-label={t("delivery.reject_named", { name: company.name })}
                                 className="flex items-center gap-1.5 px-3 py-2 bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
                               >
                                 <XCircle className="w-4 h-4" />
-                                Reject
+                                {t("delivery.reject")}
                               </button>
                             </>
                           )}
@@ -340,7 +350,7 @@ export default function DeliveryCompaniesSection({
                       <div className="mt-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-100 dark:border-red-500/20 rounded-xl">
                         <p className="text-xs font-bold text-red-800 dark:text-red-400 mb-1 flex items-center gap-1.5">
                           <AlertTriangle className="w-3.5 h-3.5" />
-                          Rejection Reason
+                          {t("common.rejection_reason")}
                         </p>
                         <p className="text-sm text-red-700 dark:text-red-300">
                           {company.rejectionReason}
@@ -354,11 +364,21 @@ export default function DeliveryCompaniesSection({
           </div>
         )}
 
+        {/* Detail — zones, ratings and exchange rates, none of which the list
+            row can show. */}
+        <DeliveryCompanyDetailModal
+          company={inspecting}
+          onClose={() => setInspecting(null)}
+        />
+
         {/* Pagination */}
         {!isLoading && !error && totalPages > 1 && (
           <div className="p-4 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-zinc-50 dark:bg-zinc-900/50">
             <span className="text-sm text-zinc-500 dark:text-zinc-400">
-              Showing page {currentPage} of {totalPages}
+              {t("delivery.showing_page", {
+                page: currentPage,
+                total: totalPages,
+              })}
             </span>
             <div className="flex gap-2">
               <button
@@ -366,7 +386,7 @@ export default function DeliveryCompaniesSection({
                 disabled={currentPage === 1 || isSubmitting}
                 className="px-3 py-1.5 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 transition-colors"
               >
-                Previous
+                {t("common.previous")}
               </button>
               <button
                 onClick={() =>
@@ -375,7 +395,7 @@ export default function DeliveryCompaniesSection({
                 disabled={currentPage === totalPages || isSubmitting}
                 className="px-3 py-1.5 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 transition-colors"
               >
-                Next
+                {t("common.next")}
               </button>
             </div>
           </div>

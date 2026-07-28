@@ -15,7 +15,6 @@ import {
   AlertCircle,
   Sparkles,
   Phone,
-  Mail,
   Globe,
   FileImage,
   Pencil,
@@ -24,9 +23,18 @@ import toast from "react-hot-toast";
 import {
   restaurantsService,
   RestaurantSubmission,
-  RestaurantCreate,
+  RestaurantApplyPayload,
+  SubmissionUpdatePayload,
   OpeningHourEntry,
+  WEEK_DAYS,
 } from "../../services/restaurants";
+import {
+  restaurantCategoriesService,
+  RestaurantCategory,
+} from "../../services/restaurantCategories";
+import { currenciesService, Currency } from "../../services/currencies";
+import { isNotFound } from "../../services/apiClient";
+import { useI18n, type MessageKey } from "../../lib/i18n";
 import { useConfirm } from "./ui/ConfirmDialog";
 import { formatDate, shortId } from "../../lib/format";
 
@@ -48,53 +56,59 @@ interface RestaurantApplicationSectionProps {
 type ApplicationForm = {
   name: string;
   description: string;
-  cuisineType: string;
-  email: string;
+  /** `SubmitRestaurantApplicationDto.categoryIds` — replaces free-text cuisine. */
+  categoryIds: string[];
+  currencyId: string;
   phone: string;
   website: string;
   logo: string;
-  coverImage: string;
+  backgroundImageUrl: string;
   deliveryFee: string;
-  estimatedDeliveryMinutes: string;
+  deliveryTimeMinMinutes: string;
+  deliveryTimeMaxMinutes: string;
   city: string;
   address: string;
+  building: string;
   latitude: string;
   longitude: string;
   openingHours: { entries: OpeningHourEntry[] };
 };
 
-const STEP_TITLES = [
-  "General Information",
-  "Branding & Operations",
-  "Location Details",
-  "Opening Hours & Review",
-] as const;
-
-const DEFAULT_HOURS: OpeningHourEntry[] = [
-  { day: "Monday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-  { day: "Tuesday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-  { day: "Wednesday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-  { day: "Thursday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-  { day: "Friday", is24Hours: true, openTime: "00:00", closeTime: "00:00" },
-  { day: "Saturday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
-  { day: "Sunday", is24Hours: false, openTime: "08:00", closeTime: "23:00" },
+const STEP_TITLE_KEYS: MessageKey[] = [
+  "app.step1",
+  "app.step2",
+  "app.step3",
+  "app.step4",
 ];
+
+/** The API's day enum is lowercase; capitalised names were rejected outright. */
+const DEFAULT_HOURS: OpeningHourEntry[] = WEEK_DAYS.map((day) => ({
+  day,
+  is24Hours: false,
+  openTime: "08:00",
+  closeTime: "23:00",
+}));
+
+const dayLabel = (day: string) =>
+  day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
 
 const EMPTY_FORM: ApplicationForm = {
   name: "",
   description: "",
-  cuisineType: "",
-  email: "",
+  categoryIds: [],
+  currencyId: "",
   phone: "",
   website: "",
   logo: "",
-  coverImage: "",
-  deliveryFee: "3",
-  estimatedDeliveryMinutes: "25",
-  city: "Riyadh",
+  backgroundImageUrl: "",
+  deliveryFee: "0",
+  deliveryTimeMinMinutes: "20",
+  deliveryTimeMaxMinutes: "45",
+  city: "",
   address: "",
-  latitude: "24.7136",
-  longitude: "46.6753",
+  building: "",
+  latitude: "",
+  longitude: "",
   openingHours: { entries: DEFAULT_HOURS },
 };
 
@@ -102,19 +116,20 @@ function formFromSubmission(s: RestaurantSubmission): ApplicationForm {
   return {
     name: s.name || "",
     description: s.description || "",
-    cuisineType: s.cuisineType || "",
-    email: s.email || "",
+    categoryIds: s.categoryIds ?? [],
+    currencyId: s.currencyId || "",
     phone: s.phone || "",
     website: s.website || "",
     logo: s.logo || "",
-    coverImage: s.coverImage || "",
-    deliveryFee: s.deliveryFee != null ? String(s.deliveryFee) : "3",
-    estimatedDeliveryMinutes:
-      s.estimatedDeliveryMinutes != null
-        ? String(s.estimatedDeliveryMinutes)
-        : "25",
-    city: s.address?.city || "Riyadh",
+    backgroundImageUrl: s.backgroundImageUrl || "",
+    deliveryFee: s.deliveryFee != null ? String(s.deliveryFee) : "0",
+    deliveryTimeMinMinutes:
+      s.deliveryTimeMinMinutes != null ? String(s.deliveryTimeMinMinutes) : "20",
+    deliveryTimeMaxMinutes:
+      s.deliveryTimeMaxMinutes != null ? String(s.deliveryTimeMaxMinutes) : "45",
+    city: s.address?.city || "",
     address: s.address?.street || "",
+    building: s.address?.building || "",
     latitude: s.address?.latitude != null ? String(s.address.latitude) : "",
     longitude: s.address?.longitude != null ? String(s.address.longitude) : "",
     openingHours: {
@@ -123,7 +138,6 @@ function formFromSubmission(s: RestaurantSubmission): ApplicationForm {
   };
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const PHONE_RE = /^\+?[\d\s()-]{7,20}$/;
 
 function isHttpUrl(value: string): boolean {
@@ -138,69 +152,81 @@ function isHttpUrl(value: string): boolean {
 type Errors = Record<string, string>;
 
 /** Field-level validation, per step. Step 4 covers the opening-hours rows. */
-function validateStep(step: number, data: ApplicationForm): Errors {
+/** `t` is threaded in because this runs outside the component tree. */
+function validateStep(
+  step: number,
+  data: ApplicationForm,
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): Errors {
   const errors: Errors = {};
 
   if (step === 1) {
-    if (!data.name.trim()) errors.name = "Restaurant name is required.";
-    if (!data.cuisineType.trim())
-      errors.cuisineType = "Tell customers what you cook.";
-    if (!data.email.trim()) errors.email = "A contact email is required.";
-    else if (!EMAIL_RE.test(data.email.trim()))
-      errors.email = "Enter a valid email address, e.g. owner@restaurant.com.";
-    if (!data.phone.trim()) errors.phone = "A contact phone number is required.";
+    if (!data.name.trim()) errors.name = t("app.v_name");
+    if (data.categoryIds.length === 0)
+      errors.categoryIds = t("app.v_categories");
+    if (!data.phone.trim()) errors.phone = t("app.v_phone_required");
     else if (!PHONE_RE.test(data.phone.trim()))
-      errors.phone = "Enter a valid phone number, e.g. +966500000000.";
+      errors.phone = t("app.v_phone_invalid");
     if (data.website.trim() && !isHttpUrl(data.website))
-      errors.website = "Enter a full URL starting with https://.";
+      errors.website = t("app.v_url");
   }
 
   if (step === 2) {
-    if (!data.logo.trim()) errors.logo = "A logo image URL is required.";
+    if (!data.logo.trim()) errors.logo = t("app.v_logo_required");
     else if (!isHttpUrl(data.logo))
-      errors.logo = "Enter a full image URL starting with https://.";
-    if (!data.coverImage.trim())
-      errors.coverImage = "A cover banner image URL is required.";
-    else if (!isHttpUrl(data.coverImage))
-      errors.coverImage = "Enter a full image URL starting with https://.";
+      errors.logo = t("app.v_image_url");
+    if (
+      data.backgroundImageUrl.trim() &&
+      !isHttpUrl(data.backgroundImageUrl)
+    )
+      errors.backgroundImageUrl = t("app.v_image_url");
 
     const fee = Number(data.deliveryFee);
     if (!data.deliveryFee.trim() || !Number.isFinite(fee))
-      errors.deliveryFee = "Enter a delivery fee, e.g. 3.50.";
-    else if (fee < 0) errors.deliveryFee = "The fee cannot be negative.";
+      errors.deliveryFee = t("app.v_fee");
+    else if (fee < 0) errors.deliveryFee = t("app.v_fee_negative");
 
-    const eta = Number(data.estimatedDeliveryMinutes);
-    if (!data.estimatedDeliveryMinutes.trim() || !Number.isFinite(eta))
-      errors.estimatedDeliveryMinutes = "Enter an estimate in minutes.";
-    else if (eta < 5)
-      errors.estimatedDeliveryMinutes = "Give yourself at least 5 minutes.";
+    const min = Number(data.deliveryTimeMinMinutes);
+    const max = Number(data.deliveryTimeMaxMinutes);
+    if (!data.deliveryTimeMinMinutes.trim() || !Number.isFinite(min))
+      errors.deliveryTimeMinMinutes = t("app.v_min_time");
+    else if (min < 5)
+      errors.deliveryTimeMinMinutes = t("app.v_min_low");
+    if (!data.deliveryTimeMaxMinutes.trim() || !Number.isFinite(max))
+      errors.deliveryTimeMaxMinutes = t("app.v_max_time");
+    else if (Number.isFinite(min) && max < min)
+      errors.deliveryTimeMaxMinutes = t("app.v_max_lt_min");
   }
 
   if (step === 3) {
+    if (!data.city.trim()) errors.city = t("app.v_city");
     if (!data.address.trim())
-      errors.address = "The physical street address is required.";
+      errors.address = t("app.v_address");
 
     const lat = Number(data.latitude);
     if (!data.latitude.trim() || !Number.isFinite(lat))
-      errors.latitude = "Enter a latitude, e.g. 24.7136.";
+      errors.latitude = t("app.v_lat");
     else if (lat < -90 || lat > 90)
-      errors.latitude = "Latitude must be between -90 and 90.";
+      errors.latitude = t("app.v_lat_range");
 
     const lng = Number(data.longitude);
     if (!data.longitude.trim() || !Number.isFinite(lng))
-      errors.longitude = "Enter a longitude, e.g. 46.6753.";
+      errors.longitude = t("app.v_lng");
     else if (lng < -180 || lng > 180)
-      errors.longitude = "Longitude must be between -180 and 180.";
+      errors.longitude = t("app.v_lng_range");
   }
 
   if (step === 4) {
     data.openingHours.entries.forEach((entry, idx) => {
       if (entry.is24Hours) return;
       if (!entry.openTime || !entry.closeTime) {
-        errors[`hours-${idx}`] = `Set both times for ${entry.day}, or tick 24h.`;
+        errors[`hours-${idx}`] = t("app.v_hours_both", {
+          day: dayLabel(entry.day),
+        });
       } else if (entry.openTime === entry.closeTime) {
-        errors[`hours-${idx}`] =
-          `${entry.day} opens and closes at the same time — tick 24h instead.`;
+        errors[`hours-${idx}`] = t("app.v_hours_same", {
+          day: dayLabel(entry.day),
+        });
       }
     });
   }
@@ -252,6 +278,7 @@ export default function RestaurantApplicationSection({
   onRefreshSubmissionStatus,
   initialSubmission,
 }: RestaurantApplicationSectionProps) {
+  const { t } = useI18n();
   const confirm = useConfirm();
   const [submission, setSubmission] = useState<RestaurantSubmission | null>(
     initialSubmission,
@@ -266,6 +293,43 @@ export default function RestaurantApplicationSection({
   const [focusField, setFocusField] = useState<string | null>(null);
 
   const [formData, setFormData] = useState<ApplicationForm>(EMPTY_FORM);
+
+  // The application takes category *ids* and a currency code, so both lists
+  // have to be on hand before the owner can fill the form in.
+  const [categories, setCategories] = useState<RestaurantCategory[]>([]);
+  const [currencies, setCurrencies] = useState<Currency[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      restaurantCategoriesService
+        .getActiveCategories()
+        .then((res) => res.data)
+        .catch(() => [] as RestaurantCategory[]),
+      currenciesService.getActiveCurrencies().catch(() => [] as Currency[]),
+    ]).then(([categoryList, currencyList]) => {
+      if (cancelled) return;
+      setCategories(categoryList);
+      setCurrencies(currencyList);
+      setFormData((prev) =>
+        prev.currencyId || currencyList.length === 0
+          ? prev
+          : { ...prev, currencyId: currencyList[0].code },
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleCategory = (id: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      categoryIds: prev.categoryIds.includes(id)
+        ? prev.categoryIds.filter((c) => c !== id)
+        : [...prev.categoryIds, id],
+    }));
+  };
 
   // Serialised snapshot of the last "saved or freshly opened" form, so we can
   // tell whether the merchant has unsaved typing.
@@ -303,15 +367,19 @@ export default function RestaurantApplicationSection({
   const loadStatus = async () => {
     try {
       setIsLoading(true);
-      const data = await restaurantsService.getMySubmission();
-      setSubmission(data);
-    } catch (err: any) {
-      console.error("Failed to load submission:", err);
-      // If 404, the user has no application yet, which is expected.
-      if (err.message && err.message.includes("404")) {
+      // The endpoint answers with a *paginated list*, newest first — not one
+      // record. Reading `.status` off the envelope always gave `undefined`,
+      // which showed owners the "you haven't applied yet" screen while their
+      // application sat pending.
+      setSubmission(await restaurantsService.getLatestSubmission());
+    } catch (err) {
+      // A 404 just means no application yet, which is the expected state for
+      // a new owner. Anything else is worth surfacing.
+      if (isNotFound(err)) {
         setSubmission(null);
       } else {
-        toast.error("Could not retrieve application status. Please try again.");
+        console.error("Failed to load submission:", err);
+        toast.error(t("app.status_failed"));
       }
     } finally {
       setIsLoading(false);
@@ -338,11 +406,10 @@ export default function RestaurantApplicationSection({
   const handleCloseForm = async () => {
     if (isDirty) {
       const ok = await confirm({
-        title: "Discard your application?",
-        description:
-          "You have unsaved changes on this form. Closing it now loses everything you have typed.",
-        confirmLabel: "Discard changes",
-        cancelLabel: "Keep editing",
+        title: t("app.discard_title"),
+        description: t("app.discard_body"),
+        confirmLabel: t("app.discard_cta"),
+        cancelLabel: t("app.keep_editing"),
         variant: "danger",
       });
       if (!ok) return;
@@ -355,9 +422,9 @@ export default function RestaurantApplicationSection({
     const ok = await confirm({
       title: `Cancel the application for “${submission?.name ?? "your restaurant"}”?`,
       description:
-        "Your pending application is withdrawn from review. You can start a new one afterwards.",
-      confirmLabel: "Cancel application",
-      cancelLabel: "Keep it pending",
+        t("app.cancel_body"),
+      confirmLabel: t("app.cancel_cta"),
+      cancelLabel: t("app.keep_pending"),
       variant: "danger",
     });
     if (!ok) return;
@@ -365,7 +432,7 @@ export default function RestaurantApplicationSection({
       setIsLoading(true);
       await restaurantsService.cancelMySubmission();
       await loadStatus();
-      toast.success("Application cancelled successfully.");
+      toast.success(t("app.cancelled"));
       onRefreshSubmissionStatus();
     } catch (err: any) {
       toast.error(`Failed to cancel application: ${err.message}`);
@@ -423,7 +490,7 @@ export default function RestaurantApplicationSection({
   };
 
   const handleNextStep = () => {
-    const found = validateStep(currentStep, formData);
+    const found = validateStep(currentStep, formData, t);
     if (Object.keys(found).length > 0) {
       applyErrors(currentStep, found);
       return;
@@ -446,7 +513,7 @@ export default function RestaurantApplicationSection({
       return;
     }
     for (let step = currentStep; step < target; step++) {
-      const found = validateStep(step, formData);
+      const found = validateStep(step, formData, t);
       if (Object.keys(found).length > 0) {
         setCurrentStep(step);
         applyErrors(step, found);
@@ -471,7 +538,7 @@ export default function RestaurantApplicationSection({
     // `type="email"` / `type="url"` checks never saw steps 1-3. Re-run every
     // gate here before anything reaches the API.
     for (let step = 1; step <= 4; step++) {
-      const found = validateStep(step, formData);
+      const found = validateStep(step, formData, t);
       if (Object.keys(found).length > 0) {
         setCurrentStep(step);
         applyErrors(step, found);
@@ -480,66 +547,60 @@ export default function RestaurantApplicationSection({
     }
 
     const isUpdate = !!submission && submission.status === "pending";
-    const numbers = {
+
+    /*
+     * `SubmitRestaurantApplicationDto` names the restaurant `restaurantName`,
+     * takes the location as a nested `address` object, and has no `email`,
+     * `cuisineType`, `coverImage` or `estimatedDeliveryMinutes` at all. The
+     * previous payload sent the admin `CreateRestaurantDto` shape instead, so
+     * every application submitted from this screen was rejected.
+     */
+    const payload: SubmissionUpdatePayload = {
+      restaurantName: formData.name.trim(),
+      description: formData.description.trim() || undefined,
+      logo: formData.logo.trim() || undefined,
+      backgroundImageUrl: formData.backgroundImageUrl.trim() || undefined,
+      phone: formData.phone.trim() || undefined,
+      website: formData.website.trim() || undefined,
+      currencyId: formData.currencyId || undefined,
+      categoryIds: formData.categoryIds,
       deliveryFee: Number(formData.deliveryFee),
-      estimatedDeliveryMinutes: Number(formData.estimatedDeliveryMinutes),
-      latitude: Number(formData.latitude),
-      longitude: Number(formData.longitude),
+      deliveryTimeMinMinutes: Number(formData.deliveryTimeMinMinutes),
+      deliveryTimeMaxMinutes: Number(formData.deliveryTimeMaxMinutes),
+      openingHours: formData.openingHours.entries,
+      address: {
+        city: formData.city.trim(),
+        street: formData.address.trim(),
+        building: formData.building.trim() || undefined,
+        latitude: Number(formData.latitude),
+        longitude: Number(formData.longitude),
+      },
     };
 
     try {
       setIsSubmitting(true);
       if (isUpdate) {
-        const updatePayload: Partial<RestaurantSubmission> = {
-          name: formData.name,
-          description: formData.description,
-          logo: formData.logo,
-          coverImage: formData.coverImage,
-          email: formData.email,
-          phone: formData.phone,
-          website: formData.website,
-          cuisineType: formData.cuisineType,
-          deliveryFee: numbers.deliveryFee,
-          estimatedDeliveryMinutes: numbers.estimatedDeliveryMinutes,
-          openingHours: formData.openingHours.entries,
-          address: {
-            city: formData.city,
-            street: formData.address,
-            latitude: numbers.latitude,
-            longitude: numbers.longitude,
-          },
-        };
-        await restaurantsService.updateMySubmission(updatePayload);
+        await restaurantsService.updateMySubmission(payload);
       } else {
-        const createPayload: RestaurantCreate = {
-          name: formData.name,
-          description: formData.description,
-          cuisineType: formData.cuisineType,
-          email: formData.email,
-          phone: formData.phone,
-          website: formData.website,
-          logo: formData.logo,
-          coverImage: formData.coverImage,
-          city: formData.city,
-          address: formData.address,
-          openingHours: formData.openingHours,
-          ...numbers,
-        };
-        await restaurantsService.applyRestaurant(createPayload);
+        await restaurantsService.applyRestaurant(
+          payload as RestaurantApplyPayload,
+        );
       }
       setPristine(formData);
       setIsApplying(false);
       await loadStatus();
       toast.success(
         isUpdate
-          ? "Application updated successfully!"
-          : "Application submitted successfully!",
+          ? t("app.updated")
+          : t("app.submitted"),
       );
       onRefreshSubmissionStatus();
     } catch (err: any) {
       console.error("Submission failed:", err);
       toast.error(
-        `Application submission failed: ${err.message || "Unknown error"}`,
+        t("app.submit_failed", {
+          error: err.message || t("common.unexpected"),
+        }),
       );
     } finally {
       setIsSubmitting(false);
@@ -550,7 +611,7 @@ export default function RestaurantApplicationSection({
     return (
       <div className="flex flex-col items-center justify-center p-24 text-zinc-500 dark:text-zinc-400">
         <Loader2 className="w-8 h-8 animate-spin mb-4 text-orange-500" />
-        <p className="text-sm font-semibold">Updating application status...</p>
+        <p className="text-sm font-semibold">{t("app.updating_status")}</p>
       </div>
     );
   }
@@ -564,33 +625,44 @@ export default function RestaurantApplicationSection({
     }[] = [
       {
         step: 1,
-        title: "General information",
+        title: t("app.review_general"),
         rows: [
-          ["Restaurant name", formData.name],
-          ["Cuisine type", formData.cuisineType],
-          ["Description", formData.description || "—"],
-          ["Contact email", formData.email],
-          ["Contact phone", formData.phone],
-          ["Website", formData.website || "—"],
+          [t("app.name"), formData.name],
+          [
+            t("common.categories"),
+            formData.categoryIds
+              .map((id) => categories.find((c) => c.id === id)?.name ?? id)
+              .join(", ") || "—",
+          ],
+          [t("common.description"), formData.description || "—"],
+          [t("app.contact_phone"), formData.phone],
+          [t("common.website"), formData.website || "—"],
         ],
       },
       {
         step: 2,
-        title: "Branding & operations",
+        title: t("app.review_branding"),
         rows: [
-          ["Logo URL", formData.logo],
-          ["Cover banner URL", formData.coverImage],
-          ["Delivery fee", `$${formData.deliveryFee}`],
-          ["Estimated delivery", `${formData.estimatedDeliveryMinutes} min`],
+          [t("common.logo_url"), formData.logo],
+          [t("common.background_url"), formData.backgroundImageUrl || "—"],
+          [
+            t("common.delivery_fee"),
+            `${formData.deliveryFee} ${formData.currencyId || ""}`.trim(),
+          ],
+          [
+            t("common.delivery_window"),
+            `${formData.deliveryTimeMinMinutes}–${formData.deliveryTimeMaxMinutes} min`,
+          ],
         ],
       },
       {
         step: 3,
-        title: "Location",
+        title: t("app.review_location"),
         rows: [
-          ["City", formData.city],
-          ["Street address", formData.address],
-          ["Coordinates", `${formData.latitude}, ${formData.longitude}`],
+          [t("common.city"), formData.city],
+          [t("rest.street_address"), formData.address],
+          [t("common.building"), formData.building || "—"],
+          [t("rests.coordinates"), `${formData.latitude}, ${formData.longitude}`],
         ],
       },
     ];
@@ -602,8 +674,8 @@ export default function RestaurantApplicationSection({
           <button
             type="button"
             onClick={handleCloseForm}
-            aria-label="Close application form"
-            className="absolute top-4 right-4 text-white/80 hover:text-white bg-black/10 hover:bg-black/20 p-2.5 rounded-full transition-all"
+            aria-label={t("app.close_form")}
+            className="absolute top-4 end-4 text-white/80 hover:text-white bg-black/10 hover:bg-black/20 p-2.5 rounded-full transition-all"
           >
             <X className="w-4 h-4" />
           </button>
@@ -614,10 +686,13 @@ export default function RestaurantApplicationSection({
             </div>
             <div>
               <h3 className="text-lg font-black tracking-tight">
-                Restaurant Partner Application
+                {t("app.title")}
               </h3>
               <p className="text-xs text-orange-100">
-                Step {currentStep} of 4: {STEP_TITLES[currentStep - 1]}
+                {t("app.step_of", {
+                  step: currentStep,
+                  title: t(STEP_TITLE_KEYS[currentStep - 1]),
+                })}
               </p>
             </div>
           </div>
@@ -628,22 +703,25 @@ export default function RestaurantApplicationSection({
             aria-valuemin={1}
             aria-valuemax={4}
             aria-valuenow={currentStep}
-            aria-valuetext={`Step ${currentStep} of 4: ${STEP_TITLES[currentStep - 1]}`}
+            aria-valuetext={t("app.step_of", {
+              step: currentStep,
+              title: t(STEP_TITLE_KEYS[currentStep - 1]),
+            })}
             className="sr-only"
           />
-          <nav aria-label="Application steps" className="mt-6">
+          <nav aria-label={t("app.steps_nav")} className="mt-6">
             <ol className="flex gap-2">
-              {STEP_TITLES.map((label, index) => {
+              {STEP_TITLE_KEYS.map((labelKey, index) => {
                 const step = index + 1;
                 const done = step < currentStep;
                 const active = step === currentStep;
                 return (
-                  <li key={label} className="flex-1">
+                  <li key={labelKey} className="flex-1">
                     <button
                       type="button"
                       onClick={() => goToStep(step)}
                       aria-current={active ? "step" : undefined}
-                      className="w-full text-left rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                      className="w-full text-start rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                     >
                       <span
                         className={`block h-1.5 rounded-full transition-all duration-300 ${
@@ -657,7 +735,7 @@ export default function RestaurantApplicationSection({
                             : "text-orange-100/70 hover:text-white"
                         }`}
                       >
-                        {step}. {label}
+                        {step}. {t(labelKey)}
                       </span>
                       <span className="sr-only">
                         {active ? " (current step)" : ""}
@@ -677,7 +755,7 @@ export default function RestaurantApplicationSection({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label htmlFor={fid("name")} className={LABEL}>
-                    Restaurant Name
+                    {t("app.name")}
                     <Req />
                   </label>
                   <input
@@ -691,7 +769,7 @@ export default function RestaurantApplicationSection({
                     }
                     value={formData.name}
                     onChange={handleFormChange}
-                    placeholder="e.g. Burger Palace"
+                    placeholder={t("app.name_placeholder")}
                     className={inputCls(!!errors.name)}
                   />
                   <FieldError
@@ -700,82 +778,112 @@ export default function RestaurantApplicationSection({
                   />
                 </div>
                 <div>
-                  <label htmlFor={fid("cuisineType")} className={LABEL}>
-                    Cuisine Type
-                    <Req />
+                  <label htmlFor={fid("currencyId")} className={LABEL}>
+                    {t("rest.pricing_currency")}
                   </label>
-                  <input
-                    id={fid("cuisineType")}
-                    type="text"
-                    name="cuisineType"
-                    required
-                    aria-invalid={!!errors.cuisineType}
-                    aria-describedby={
-                      errors.cuisineType
-                        ? `${fid("cuisineType")}-error`
-                        : undefined
-                    }
-                    value={formData.cuisineType}
+                  <select
+                    id={fid("currencyId")}
+                    name="currencyId"
+                    value={formData.currencyId}
                     onChange={handleFormChange}
-                    placeholder="e.g. American, Fast Food, Italian"
-                    className={inputCls(!!errors.cuisineType)}
-                  />
-                  <FieldError
-                    id={`${fid("cuisineType")}-error`}
-                    message={errors.cuisineType}
-                  />
+                    className={`${inputCls(false)} pe-8`}
+                  >
+                    <option value="">{t("rest.platform_default")}</option>
+                    {currencies.map((currency) => (
+                      <option key={currency.code} value={currency.code}>
+                        {currency.code} — {currency.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className={HELP}>
+                    {t("app.currency_hint")}
+                  </span>
                 </div>
               </div>
 
+              {/*
+                Categories replace the old free-text "cuisine type" box: the API
+                takes ids from the platform's own category list, and anything
+                typed into that box was silently dropped on submit.
+              */}
+              <fieldset>
+                <legend className={LABEL}>
+                  {t("common.categories")}
+                  <Req />
+                </legend>
+                {categories.length === 0 ? (
+                  <p className={BODY}>{t("app.loading_categories")}</p>
+                ) : (
+                  <div
+                    className="flex flex-wrap gap-2"
+                    aria-describedby={
+                      errors.categoryIds
+                        ? `${fid("categoryIds")}-error`
+                        : undefined
+                    }
+                  >
+                    {categories.map((category) => {
+                      const selected = formData.categoryIds.includes(
+                        category.id,
+                      );
+                      return (
+                        <button
+                          key={category.id}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => toggleCategory(category.id)}
+                          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all ${
+                            selected
+                              ? "bg-orange-500 text-white border-orange-500 shadow-sm shadow-orange-500/20"
+                              : "bg-zinc-50 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800 hover:border-orange-500/50"
+                          }`}
+                        >
+                          {category.icon && (
+                            <img
+                              src={category.icon}
+                              alt=""
+                              className="w-3.5 h-3.5 object-contain"
+                            />
+                          )}
+                          {category.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <FieldError
+                  id={`${fid("categoryIds")}-error`}
+                  message={errors.categoryIds}
+                />
+              </fieldset>
+
               <div>
                 <label htmlFor={fid("description")} className={LABEL}>
-                  Description
+                  {t("common.description")}
                 </label>
                 <textarea
                   id={fid("description")}
                   name="description"
                   value={formData.description}
                   onChange={handleFormChange}
-                  placeholder="Tell customers about your story, ingredients, and signature dishes..."
+                  placeholder={t("app.desc_placeholder")}
                   className={`${inputCls(false)} h-24 resize-none`}
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label htmlFor={fid("email")} className={LABEL}>
-                    Contact Email
-                    <Req />
-                  </label>
-                  <div className="relative">
-                    <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
-                    <input
-                      id={fid("email")}
-                      type="email"
-                      name="email"
-                      required
-                      aria-invalid={!!errors.email}
-                      aria-describedby={
-                        errors.email ? `${fid("email")}-error` : undefined
-                      }
-                      value={formData.email}
-                      onChange={handleFormChange}
-                      placeholder="partner@restaurant.com"
-                      className={inputCls(!!errors.email, "pl-10 pr-3 py-3")}
-                    />
-                  </div>
-                  <FieldError
-                    id={`${fid("email")}-error`}
-                    message={errors.email}
-                  />
-                </div>
+              {/*
+                The email field was removed: the application DTO has no email
+                property, so anything typed here was discarded on submit while
+                still being enforced as required.
+              */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label htmlFor={fid("phone")} className={LABEL}>
-                    Contact Phone
+                    {t("app.contact_phone")}
                     <Req />
                   </label>
                   <div className="relative">
-                    <Phone className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
+                    <Phone className="absolute start-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
                     <input
                       id={fid("phone")}
                       type="tel"
@@ -787,8 +895,8 @@ export default function RestaurantApplicationSection({
                       }
                       value={formData.phone}
                       onChange={handleFormChange}
-                      placeholder="+96650000000"
-                      className={inputCls(!!errors.phone, "pl-10 pr-3 py-3")}
+                      placeholder={t("app.phone_placeholder")}
+                      className={inputCls(!!errors.phone, "ps-10 pe-3 py-3")}
                     />
                   </div>
                   <FieldError
@@ -798,10 +906,10 @@ export default function RestaurantApplicationSection({
                 </div>
                 <div>
                   <label htmlFor={fid("website")} className={LABEL}>
-                    Website (Optional)
+                    {t("app.website_optional")}
                   </label>
                   <div className="relative">
-                    <Globe className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
+                    <Globe className="absolute start-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
                     <input
                       id={fid("website")}
                       type="url"
@@ -813,7 +921,7 @@ export default function RestaurantApplicationSection({
                       value={formData.website}
                       onChange={handleFormChange}
                       placeholder="https://restaurant.com"
-                      className={inputCls(!!errors.website, "pl-10 pr-3 py-3")}
+                      className={inputCls(!!errors.website, "ps-10 pe-3 py-3")}
                     />
                   </div>
                   <FieldError
@@ -831,11 +939,11 @@ export default function RestaurantApplicationSection({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label htmlFor={fid("logo")} className={LABEL}>
-                    Logo URL
+                    {t("common.logo_url")}
                     <Req />
                   </label>
                   <div className="relative">
-                    <FileImage className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
+                    <FileImage className="absolute start-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
                     <input
                       id={fid("logo")}
                       type="url"
@@ -846,7 +954,7 @@ export default function RestaurantApplicationSection({
                       value={formData.logo}
                       onChange={handleFormChange}
                       placeholder="https://example.com/logo.jpg"
-                      className={inputCls(!!errors.logo, "pl-10 pr-3 py-3")}
+                      className={inputCls(!!errors.logo, "ps-10 pe-3 py-3")}
                     />
                   </div>
                   <FieldError
@@ -854,39 +962,39 @@ export default function RestaurantApplicationSection({
                     message={errors.logo}
                   />
                   <span id={`${fid("logo")}-help`} className={HELP}>
-                    You can use direct image links from Unsplash or other
-                    hosting sites.
+                    {t("app.logo_hint")}
                   </span>
                 </div>
                 <div>
-                  <label htmlFor={fid("coverImage")} className={LABEL}>
-                    Cover Banner URL
-                    <Req />
+                  <label htmlFor={fid("backgroundImageUrl")} className={LABEL}>
+                    {t("app.background_url")}
                   </label>
                   <div className="relative">
-                    <FileImage className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
+                    <FileImage className="absolute start-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
                     <input
-                      id={fid("coverImage")}
+                      id={fid("backgroundImageUrl")}
                       type="url"
-                      name="coverImage"
-                      required
-                      aria-invalid={!!errors.coverImage}
-                      aria-describedby={`${fid("coverImage")}-help${errors.coverImage ? ` ${fid("coverImage")}-error` : ""}`}
-                      value={formData.coverImage}
+                      name="backgroundImageUrl"
+                      aria-invalid={!!errors.backgroundImageUrl}
+                      aria-describedby={`${fid("backgroundImageUrl")}-help${errors.backgroundImageUrl ? ` ${fid("backgroundImageUrl")}-error` : ""}`}
+                      value={formData.backgroundImageUrl}
                       onChange={handleFormChange}
                       placeholder="https://example.com/banner.jpg"
                       className={inputCls(
-                        !!errors.coverImage,
-                        "pl-10 pr-3 py-3",
+                        !!errors.backgroundImageUrl,
+                        "ps-10 pe-3 py-3",
                       )}
                     />
                   </div>
                   <FieldError
-                    id={`${fid("coverImage")}-error`}
-                    message={errors.coverImage}
+                    id={`${fid("backgroundImageUrl")}-error`}
+                    message={errors.backgroundImageUrl}
                   />
-                  <span id={`${fid("coverImage")}-help`} className={HELP}>
-                    Recommended size: 1200 x 400 pixels.
+                  <span
+                    id={`${fid("backgroundImageUrl")}-help`}
+                    className={HELP}
+                  >
+                    {t("app.recommended_size")}
                   </span>
                 </div>
               </div>
@@ -894,11 +1002,12 @@ export default function RestaurantApplicationSection({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                 <div>
                   <label htmlFor={fid("deliveryFee")} className={LABEL}>
-                    Delivery Fee ($)
+                    Delivery Fee{" "}
+                    {formData.currencyId ? `(${formData.currencyId})` : ""}
                     <Req />
                   </label>
                   <div className="relative">
-                    <DollarSign className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
+                    <DollarSign className="absolute start-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
                     <input
                       id={fid("deliveryFee")}
                       type="text"
@@ -913,10 +1022,10 @@ export default function RestaurantApplicationSection({
                       }
                       value={formData.deliveryFee}
                       onChange={handleFormChange}
-                      placeholder="3.50"
+                      placeholder="50000"
                       className={inputCls(
                         !!errors.deliveryFee,
-                        "pl-10 pr-3 py-3",
+                        "ps-10 pe-3 py-3",
                       )}
                     />
                   </div>
@@ -925,41 +1034,85 @@ export default function RestaurantApplicationSection({
                     message={errors.deliveryFee}
                   />
                 </div>
-                <div>
-                  <label
-                    htmlFor={fid("estimatedDeliveryMinutes")}
-                    className={LABEL}
-                  >
-                    Estimated Delivery Time (Mins)
-                    <Req />
-                  </label>
-                  <div className="relative">
-                    <Clock className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
-                    <input
-                      id={fid("estimatedDeliveryMinutes")}
-                      type="text"
-                      inputMode="numeric"
-                      name="estimatedDeliveryMinutes"
-                      required
-                      aria-invalid={!!errors.estimatedDeliveryMinutes}
-                      aria-describedby={
-                        errors.estimatedDeliveryMinutes
-                          ? `${fid("estimatedDeliveryMinutes")}-error`
-                          : undefined
-                      }
-                      value={formData.estimatedDeliveryMinutes}
-                      onChange={handleFormChange}
-                      placeholder="25"
-                      className={inputCls(
-                        !!errors.estimatedDeliveryMinutes,
-                        "pl-10 pr-3 py-3",
-                      )}
+                {/*
+                  The API models the delivery estimate as a window
+                  (`deliveryTimeMinMinutes`/`deliveryTimeMaxMinutes`) and shows
+                  customers "20m - 45m". The single `estimatedDeliveryMinutes`
+                  field this replaces did not exist on any DTO.
+                */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label
+                      htmlFor={fid("deliveryTimeMinMinutes")}
+                      className={LABEL}
+                    >
+                      {t("app.fastest")}
+                      <Req />
+                    </label>
+                    <div className="relative">
+                      <Clock className="absolute start-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
+                      <input
+                        id={fid("deliveryTimeMinMinutes")}
+                        type="text"
+                        inputMode="numeric"
+                        name="deliveryTimeMinMinutes"
+                        required
+                        aria-invalid={!!errors.deliveryTimeMinMinutes}
+                        aria-describedby={
+                          errors.deliveryTimeMinMinutes
+                            ? `${fid("deliveryTimeMinMinutes")}-error`
+                            : undefined
+                        }
+                        value={formData.deliveryTimeMinMinutes}
+                        onChange={handleFormChange}
+                        placeholder="20"
+                        className={inputCls(
+                          !!errors.deliveryTimeMinMinutes,
+                          "ps-10 pe-3 py-3",
+                        )}
+                      />
+                    </div>
+                    <FieldError
+                      id={`${fid("deliveryTimeMinMinutes")}-error`}
+                      message={errors.deliveryTimeMinMinutes}
                     />
                   </div>
-                  <FieldError
-                    id={`${fid("estimatedDeliveryMinutes")}-error`}
-                    message={errors.estimatedDeliveryMinutes}
-                  />
+                  <div>
+                    <label
+                      htmlFor={fid("deliveryTimeMaxMinutes")}
+                      className={LABEL}
+                    >
+                      {t("app.slowest")}
+                      <Req />
+                    </label>
+                    <div className="relative">
+                      <Clock className="absolute start-3.5 top-3.5 w-4 h-4 text-zinc-400 pointer-events-none" />
+                      <input
+                        id={fid("deliveryTimeMaxMinutes")}
+                        type="text"
+                        inputMode="numeric"
+                        name="deliveryTimeMaxMinutes"
+                        required
+                        aria-invalid={!!errors.deliveryTimeMaxMinutes}
+                        aria-describedby={
+                          errors.deliveryTimeMaxMinutes
+                            ? `${fid("deliveryTimeMaxMinutes")}-error`
+                            : undefined
+                        }
+                        value={formData.deliveryTimeMaxMinutes}
+                        onChange={handleFormChange}
+                        placeholder="45"
+                        className={inputCls(
+                          !!errors.deliveryTimeMaxMinutes,
+                          "ps-10 pe-3 py-3",
+                        )}
+                      />
+                    </div>
+                    <FieldError
+                      id={`${fid("deliveryTimeMaxMinutes")}-error`}
+                      message={errors.deliveryTimeMaxMinutes}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -969,28 +1122,39 @@ export default function RestaurantApplicationSection({
           {currentStep === 3 && (
             <div className="space-y-4 animate-in fade-in duration-200">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/*
+                  City was a five-item dropdown of Saudi cities. The API takes
+                  free text and the platform runs on +961 numbers and LBP
+                  pricing, so any merchant outside that list simply could not
+                  enter their own address.
+                */}
                 <div className="md:col-span-1">
                   <label htmlFor={fid("city")} className={LABEL}>
-                    City
+                    {t("common.city")}
                     <Req />
                   </label>
-                  <select
+                  <input
                     id={fid("city")}
+                    type="text"
                     name="city"
+                    required
+                    aria-invalid={!!errors.city}
+                    aria-describedby={
+                      errors.city ? `${fid("city")}-error` : undefined
+                    }
                     value={formData.city}
                     onChange={handleFormChange}
-                    className={`${inputCls(false)} pr-8`}
-                  >
-                    <option value="Riyadh">Riyadh</option>
-                    <option value="Jeddah">Jeddah</option>
-                    <option value="Dammam">Dammam</option>
-                    <option value="Beirut">Beirut</option>
-                    <option value="Dubai">Dubai</option>
-                  </select>
+                    placeholder={t("app.city_placeholder")}
+                    className={inputCls(!!errors.city)}
+                  />
+                  <FieldError
+                    id={`${fid("city")}-error`}
+                    message={errors.city}
+                  />
                 </div>
-                <div className="md:col-span-2">
+                <div className="md:col-span-1">
                   <label htmlFor={fid("address")} className={LABEL}>
-                    Physical Street Address
+                    {t("app.street")}
                     <Req />
                   </label>
                   <input
@@ -1004,7 +1168,7 @@ export default function RestaurantApplicationSection({
                     }
                     value={formData.address}
                     onChange={handleFormChange}
-                    placeholder="e.g. Olaya Street, Building 45"
+                    placeholder={t("app.street_placeholder")}
                     className={inputCls(!!errors.address)}
                   />
                   <FieldError
@@ -1012,12 +1176,26 @@ export default function RestaurantApplicationSection({
                     message={errors.address}
                   />
                 </div>
+                <div className="md:col-span-1">
+                  <label htmlFor={fid("building")} className={LABEL}>
+                    {t("common.building")}
+                  </label>
+                  <input
+                    id={fid("building")}
+                    type="text"
+                    name="building"
+                    value={formData.building}
+                    onChange={handleFormChange}
+                    placeholder={t("app.building_placeholder")}
+                    className={inputCls(false)}
+                  />
+                </div>
               </div>
 
               <div className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-850 p-4 rounded-2xl grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label htmlFor={fid("latitude")} className={LABEL}>
-                    Latitude Coordinate
+                    {t("app.latitude")}
                     <Req />
                   </label>
                   <input
@@ -1042,7 +1220,7 @@ export default function RestaurantApplicationSection({
                 </div>
                 <div>
                   <label htmlFor={fid("longitude")} className={LABEL}>
-                    Longitude Coordinate
+                    {t("app.longitude")}
                     <Req />
                   </label>
                   <input
@@ -1073,8 +1251,8 @@ export default function RestaurantApplicationSection({
           {currentStep === 4 && (
             <div className="space-y-6 animate-in fade-in duration-200">
               <div>
-                <h4 className={LABEL}>Configure Weekly Opening Hours</h4>
-                <div className="space-y-2.5 max-h-[260px] overflow-y-auto pr-2 border border-zinc-100 dark:border-zinc-850 rounded-xl p-3 bg-zinc-50 dark:bg-zinc-950 custom-scrollbar">
+                <h4 className={LABEL}>{t("app.hours_title")}</h4>
+                <div className="space-y-2.5 max-h-[260px] overflow-y-auto pe-2 border border-zinc-100 dark:border-zinc-850 rounded-xl p-3 bg-zinc-50 dark:bg-zinc-950 custom-scrollbar">
                   {formData.openingHours.entries.map((entry, idx) => {
                     const rowError = errors[`hours-${idx}`];
                     // Closing before opening is a legitimate overnight shift
@@ -1091,7 +1269,7 @@ export default function RestaurantApplicationSection({
                       >
                         <div className="flex flex-wrap items-center gap-3">
                           <span className="font-extrabold w-20 text-zinc-700 dark:text-zinc-300">
-                            {entry.day}
+                            {dayLabel(entry.day)}
                           </span>
 
                           <label className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400 cursor-pointer py-2">
@@ -1111,11 +1289,11 @@ export default function RestaurantApplicationSection({
                           </label>
 
                           {!entry.is24Hours && (
-                            <div className="flex items-center gap-2 ml-auto">
+                            <div className="flex items-center gap-2 ms-auto">
                               <input
                                 id={fid(`openTime-${idx}`)}
                                 type="time"
-                                aria-label={`${entry.day} opening time`}
+                                aria-label={`${dayLabel(entry.day)} opening time`}
                                 aria-invalid={!!rowError}
                                 value={entry.openTime || ""}
                                 onChange={(e) =>
@@ -1137,7 +1315,7 @@ export default function RestaurantApplicationSection({
                               <input
                                 id={fid(`closeTime-${idx}`)}
                                 type="time"
-                                aria-label={`${entry.day} closing time`}
+                                aria-label={`${dayLabel(entry.day)} closing time`}
                                 aria-invalid={!!rowError}
                                 value={entry.closeTime || ""}
                                 onChange={(e) =>
@@ -1163,7 +1341,7 @@ export default function RestaurantApplicationSection({
                           />
                         ) : overnight ? (
                           <p className="mt-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
-                            Closes after midnight, the next day.
+                            {t("app.closes_after_midnight")}
                           </p>
                         ) : null}
                       </div>
@@ -1174,7 +1352,7 @@ export default function RestaurantApplicationSection({
 
               {/* Read-only review of everything typed so far */}
               <div className="space-y-3">
-                <h4 className={LABEL}>Review your answers</h4>
+                <h4 className={LABEL}>{t("app.review_answers")}</h4>
                 {reviewGroups.map((group) => (
                   <div
                     key={group.step}
@@ -1190,7 +1368,7 @@ export default function RestaurantApplicationSection({
                         className="flex items-center gap-1 text-[11px] font-bold text-orange-500 hover:text-orange-600 transition-colors"
                       >
                         <Pencil className="w-3 h-3" />
-                        Edit
+                        {t("app.edit_step")}
                         <span className="sr-only"> {group.title}</span>
                       </button>
                     </div>
@@ -1203,7 +1381,7 @@ export default function RestaurantApplicationSection({
                           <dt className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 shrink-0">
                             {label}
                           </dt>
-                          <dd className="text-[11px] font-bold text-zinc-800 dark:text-zinc-200 text-right break-all">
+                          <dd className="text-[11px] font-bold text-zinc-800 dark:text-zinc-200 text-end break-all">
                             {value || "—"}
                           </dd>
                         </div>
@@ -1216,10 +1394,10 @@ export default function RestaurantApplicationSection({
               <div className="bg-orange-500/5 border border-orange-500/10 rounded-2xl p-4 space-y-2.5">
                 <h4 className="text-xs font-bold text-orange-500 flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-                  Ready to submit your application!
+                  {t("app.ready")}
                 </h4>
                 <p className="text-[11px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                  By submitting this form, you verify that you own this
+                  {t("app.terms")}
                   restaurant business and all coordinate locations are correct.
                   Administrators will review your submission within 24-48 hours.
                 </p>
@@ -1236,8 +1414,8 @@ export default function RestaurantApplicationSection({
                 disabled={isSubmitting}
                 className="flex items-center gap-1.5 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
               >
-                <ChevronLeft className="w-4 h-4" />
-                Back
+                <ChevronLeft className="w-4 h-4 rtl:rotate-180" />
+                {t("app.back")}
               </button>
             ) : (
               <div />
@@ -1247,27 +1425,27 @@ export default function RestaurantApplicationSection({
               <button
                 type="button"
                 onClick={handleNextStep}
-                className="flex items-center gap-1.5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 hover:opacity-90 text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-md ml-auto"
+                className="flex items-center gap-1.5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 hover:opacity-90 text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-md ms-auto"
               >
-                Continue
-                <ChevronRight className="w-4 h-4" />
+                {t("app.continue")}
+                <ChevronRight className="w-4 h-4 rtl:rotate-180" />
               </button>
             ) : (
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="flex items-center gap-1.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white hover:opacity-90 active:scale-95 text-xs font-bold px-6 py-2.5 rounded-xl transition-all shadow-lg shadow-orange-500/20 disabled:opacity-50 ml-auto"
+                className="flex items-center gap-1.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white hover:opacity-90 active:scale-95 text-xs font-bold px-6 py-2.5 rounded-xl transition-all shadow-lg shadow-orange-500/20 disabled:opacity-50 ms-auto"
               >
                 {isSubmitting ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Submitting...
+                    {t("app.submitting")}
                   </>
                 ) : (
                   <>
                     {submission && submission.status === "pending"
-                      ? "Update Application"
-                      : "Submit Application"}
+                      ? t("app.update_cta")
+                      : t("app.submit_cta")}
                     <Send className="w-4 h-4" />
                   </>
                 )}
@@ -1284,7 +1462,7 @@ export default function RestaurantApplicationSection({
     return (
       <div className="max-w-xl mx-auto space-y-6">
         <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border border-zinc-200 dark:border-zinc-800 p-8 rounded-3xl text-center space-y-6 shadow-xl relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 to-orange-500 animate-pulse" />
+          <div className="absolute top-0 start-0 w-full h-1 bg-gradient-to-r from-amber-500 to-orange-500 animate-pulse" />
 
           <div className="relative inline-flex items-center justify-center">
             <div className="absolute inset-0 bg-amber-500/20 rounded-full blur-xl animate-ping duration-1000" />
@@ -1298,7 +1476,7 @@ export default function RestaurantApplicationSection({
 
           <div className="space-y-2">
             <h3 className="text-xl font-black text-zinc-900 dark:text-white tracking-tight">
-              Application Under Review
+              {t("app.under_review")}
             </h3>
             <p className={`${BODY} max-w-sm mx-auto`}>
               We have received your request to launch{" "}
@@ -1310,9 +1488,9 @@ export default function RestaurantApplicationSection({
             </p>
           </div>
 
-          <div className="p-4 bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-100 dark:border-zinc-800/80 rounded-2xl text-left space-y-2.5 text-xs">
+          <div className="p-4 bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-100 dark:border-zinc-800/80 rounded-2xl text-start space-y-2.5 text-xs">
             <div className="flex justify-between items-center gap-3 text-zinc-500 dark:text-zinc-400">
-              <span>Reference</span>
+              <span>{t("app.reference")}</span>
               {/* A full UUID meant nothing to a merchant and overflowed the row. */}
               <span
                 className="font-mono font-bold text-zinc-700 dark:text-zinc-300"
@@ -1322,17 +1500,17 @@ export default function RestaurantApplicationSection({
               </span>
             </div>
             <div className="flex justify-between items-center gap-3 text-zinc-500 dark:text-zinc-400">
-              <span>Contact Email</span>
+              <span>{t("app.contact_phone")}</span>
               <span className="font-bold text-zinc-700 dark:text-zinc-300 truncate">
-                {submission.email || "Not provided"}
+                {submission.phone || t("rests.not_provided")}
               </span>
             </div>
             <div className="flex justify-between items-center gap-3 text-zinc-500 dark:text-zinc-400">
-              <span>Submission Date</span>
+              <span>{t("app.submission_date")}</span>
               <span className="font-bold text-zinc-700 dark:text-zinc-300">
                 {submission.createdAt
                   ? formatDate(submission.createdAt)
-                  : "Just now"}
+: t("app.just_now")}
               </span>
             </div>
           </div>
@@ -1342,13 +1520,13 @@ export default function RestaurantApplicationSection({
               onClick={handleApplyClick}
               className="bg-zinc-100 dark:bg-zinc-800/40 text-blue-500 border border-blue-500/10 hover:bg-blue-500 hover:text-white text-xs font-bold px-5 py-3 rounded-xl transition-all"
             >
-              Edit Application
+              {t("app.edit_application")}
             </button>
             <button
               onClick={handleCancelApplication}
               className="bg-zinc-100 dark:bg-zinc-800/40 text-red-500 border border-red-500/10 hover:bg-red-500 hover:text-white text-xs font-bold px-5 py-3 rounded-xl transition-all"
             >
-              Cancel Application
+              {t("app.cancel_application")}
             </button>
           </div>
         </div>
@@ -1361,7 +1539,7 @@ export default function RestaurantApplicationSection({
     return (
       <div className="max-w-xl mx-auto space-y-6">
         <div className="bg-red-500/5 dark:bg-red-500/10 border border-red-500/20 p-8 rounded-3xl text-center space-y-6 shadow-xl relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-red-500" />
+          <div className="absolute top-0 start-0 w-full h-1 bg-red-500" />
 
           <div className="p-4 bg-red-500/10 text-red-500 border border-red-500/20 rounded-full inline-flex">
             <ShieldAlert className="w-10 h-10" />
@@ -1369,7 +1547,7 @@ export default function RestaurantApplicationSection({
 
           <div className="space-y-2">
             <h3 className="text-xl font-black text-red-500 tracking-tight">
-              Application Declined
+              {t("app.declined_title")}
             </h3>
             <p className={`${BODY} max-w-sm mx-auto`}>
               Unfortunately, your application for{" "}
@@ -1381,13 +1559,13 @@ export default function RestaurantApplicationSection({
           </div>
 
           {/* Rejection reason box */}
-          <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-5 text-left text-xs text-red-600 dark:text-red-400 space-y-1.5">
+          <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-5 text-start text-xs text-red-600 dark:text-red-400 space-y-1.5">
             <p className="font-extrabold uppercase tracking-wider text-[10px]">
-              Rejection Reason:
+              {t("app.rejection_reason")}
             </p>
             <p className="font-bold leading-relaxed">
               {submission.rejectionReason ||
-                "No details provided by administrator."}
+t("app.no_admin_details")}
             </p>
           </div>
 
@@ -1396,7 +1574,7 @@ export default function RestaurantApplicationSection({
               onClick={handleApplyClick}
               className="bg-gradient-to-r from-orange-500 to-amber-500 text-white hover:opacity-90 active:scale-95 text-xs font-bold px-6 py-3 rounded-xl transition-all shadow-lg shadow-orange-500/20"
             >
-              Edit &amp; Re-submit Application
+              {t("app.edit_resubmit")}
             </button>
           </div>
         </div>
@@ -1415,7 +1593,7 @@ export default function RestaurantApplicationSection({
 
           <div className="space-y-2">
             <h3 className="text-xl font-black text-zinc-900 dark:text-white tracking-tight">
-              Application Cancelled
+              {t("app.cancelled_title")}
             </h3>
             <p className={`${BODY} max-w-sm mx-auto`}>
               Your application was cancelled. You can launch a brand-new
@@ -1428,7 +1606,7 @@ export default function RestaurantApplicationSection({
               onClick={handleApplyClick}
               className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold px-6 py-3 rounded-xl transition-all shadow-lg"
             >
-              Start New Application
+              {t("app.start_new")}
             </button>
           </div>
         </div>
@@ -1441,15 +1619,15 @@ export default function RestaurantApplicationSection({
     <div className="max-w-4xl mx-auto space-y-10 animate-in fade-in duration-300">
       {/* Premium Hero Banner */}
       <div className="relative bg-zinc-950 border border-zinc-800 rounded-3xl p-8 md:p-12 overflow-hidden shadow-2xl">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-orange-500/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-0 left-0 w-80 h-80 bg-amber-500/5 rounded-full blur-3xl" />
+        <div className="absolute top-0 end-0 w-80 h-80 bg-orange-500/10 rounded-full blur-3xl" />
+        <div className="absolute bottom-0 start-0 w-80 h-80 bg-amber-500/5 rounded-full blur-3xl" />
 
         <div className="relative space-y-6 max-w-lg">
           <span className="inline-block bg-gradient-to-r from-orange-500 to-amber-500 text-white text-[10px] font-black uppercase px-3 py-1.5 rounded-full tracking-widest shadow-md">
-            Partner Portal
+            {t("app.partner_portal")}
           </span>
           <h2 className="text-3xl md:text-4xl font-black text-white leading-tight tracking-tight">
-            Grow Your Business with Nowlny Food
+            {t("app.hero_title")}
           </h2>
           {/* Always on the dark hero — zinc-300 keeps contrast in both themes. */}
           <p className="text-xs text-zinc-300 leading-relaxed">
@@ -1463,7 +1641,7 @@ export default function RestaurantApplicationSection({
             className="flex items-center gap-2 bg-gradient-to-r from-orange-500 via-orange-600 to-amber-600 text-white text-xs font-extrabold px-6 py-3.5 rounded-2xl hover:opacity-90 active:scale-95 shadow-lg shadow-orange-500/20 transition-all"
           >
             <Store className="w-4 h-4" />
-            Apply to be a Restaurant Partner
+            {t("app.hero_cta")}
           </button>
         </div>
       </div>
@@ -1475,7 +1653,7 @@ export default function RestaurantApplicationSection({
             <CheckCircle2 className="w-5 h-5" />
           </div>
           <h4 className="font-bold text-sm text-zinc-900 dark:text-white">
-            Seamless Management
+            {t("app.perk_management")}
           </h4>
           <p className={BODY}>
             Configure catalogs, prices, descriptions, and categories dynamically
@@ -1488,7 +1666,7 @@ export default function RestaurantApplicationSection({
             <DollarSign className="w-5 h-5" />
           </div>
           <h4 className="font-bold text-sm text-zinc-900 dark:text-white">
-            Instant Revenue Tracking
+            {t("app.perk_revenue")}
           </h4>
           <p className={BODY}>
             Track daily gross revenue, successful orders count, and rating
@@ -1501,7 +1679,7 @@ export default function RestaurantApplicationSection({
             <Clock className="w-5 h-5" />
           </div>
           <h4 className="font-bold text-sm text-zinc-900 dark:text-white">
-            Fast Logistics
+            {t("app.perk_logistics")}
           </h4>
           <p className={BODY}>
             Our optimized delivery dispatch fleet ensures that food arrives

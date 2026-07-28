@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "react-hot-toast";
 import { ConfirmProvider } from "./components/ui/ConfirmDialog";
+import { I18nProvider } from "../lib/i18n";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -30,13 +31,15 @@ export const viewport: Viewport = {
 };
 
 /**
- * Applies the stored theme before first paint.
+ * Applies the stored theme and language before first paint.
  *
  * The theme was previously applied in a `useEffect`, so every dark-mode user
  * saw a white flash on each load and every light-mode user saw a dark boot
- * screen. This runs synchronously in `<head>`, before the browser paints.
+ * screen. Language has the same problem but worse: Arabic operators would see
+ * the whole panel laid out start-to-right and then snap. This runs
+ * synchronously in `<head>`, before the browser paints.
  */
-const themeScript = `
+const bootScript = `
 (function () {
   try {
     var stored = window.localStorage.getItem("nowlny_theme");
@@ -44,6 +47,13 @@ const themeScript = `
       ? stored === "dark"
       : window.matchMedia("(prefers-color-scheme: dark)").matches;
     if (dark) document.documentElement.classList.add("dark");
+  } catch (e) {}
+  try {
+    var locale = window.localStorage.getItem("nowlny_locale");
+    if (locale === "ar" || locale === "en") {
+      document.documentElement.lang = locale;
+      document.documentElement.dir = locale === "ar" ? "rtl" : "ltr";
+    }
   } catch (e) {}
 })();
 `;
@@ -56,14 +66,17 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      dir="ltr"
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <script dangerouslySetInnerHTML={{ __html: bootScript }} />
       </head>
       <body className="min-h-full flex flex-col">
-        <ConfirmProvider>{children}</ConfirmProvider>
+        <I18nProvider>
+          <ConfirmProvider>{children}</ConfirmProvider>
+        </I18nProvider>
         <Toaster 
           position="top-center" 
           toastOptions={{

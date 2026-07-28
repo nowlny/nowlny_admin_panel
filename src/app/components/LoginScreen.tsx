@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { authService } from "../../services/auth";
 import { Loader2, Phone, ArrowRight } from "lucide-react";
 import toast from "react-hot-toast";
+import { useI18n } from "../../lib/i18n";
+import LanguageToggle from "./ui/LanguageToggle";
 
 interface LoginScreenProps {
   onLoginSuccess: (token: string) => void;
@@ -14,6 +16,7 @@ const OTP_LENGTH = 4;
 const RESEND_COOLDOWN_SECONDS = 30;
 
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
+  const { t } = useI18n();
   const [step, setStep] = useState<"phone" | "otp">("phone");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [otp, setOtp] = useState("");
@@ -38,45 +41,6 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     if (step === "otp") inputRefs.current[0]?.focus();
   }, [step]);
 
-  const handleOtpChange = (index: number, value: string) => {
-    if (!/^\d*$/.test(value)) return;
-    const newOtp = [...otpArr];
-    newOtp[index] = value.substring(value.length - 1);
-    setOtpArr(newOtp);
-    setOtp(newOtp.join(""));
-
-    if (value && index < OTP_LENGTH - 1) {
-      inputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handleOtpKeyDown = (
-    index: number,
-    e: React.KeyboardEvent<HTMLInputElement>,
-  ) => {
-    if (e.key === "Backspace" && !otpArr[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-    }
-  };
-
-  const handlePaste = (e: React.ClipboardEvent) => {
-    e.preventDefault();
-    const pastedData = e.clipboardData
-      .getData("text")
-      .replace(/\D/g, "")
-      .slice(0, OTP_LENGTH);
-    if (pastedData) {
-      const newOtp = [...otpArr];
-      for (let i = 0; i < pastedData.length; i++) {
-        newOtp[i] = pastedData[i];
-      }
-      setOtpArr(newOtp);
-      setOtp(newOtp.join(""));
-      const nextIndex = Math.min(pastedData.length, OTP_LENGTH - 1);
-      inputRefs.current[nextIndex]?.focus();
-    }
-  };
-
   const getFullPhone = () => {
     const cleanPhone = phoneNumber.replace(/\s+/g, "");
     if (cleanPhone.startsWith("+961")) return cleanPhone;
@@ -85,20 +49,19 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     return "+961" + cleanPhone;
   };
 
-  const sendOtp = useCallback(async () => {
+  const sendOtp = async () => {
     await authService.sendOtp({
       phoneNumber: getFullPhone(),
       channel: "sms",
     });
     setResendIn(RESEND_COOLDOWN_SECONDS);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phoneNumber]);
+  };
 
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     const digits = phoneNumber.replace(/\D/g, "");
     if (digits.length < 7) {
-      toast.error("Enter a valid phone number");
+      toast.error(t("login.invalid_phone"));
       return;
     }
 
@@ -121,7 +84,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       setOtpArr(Array(OTP_LENGTH).fill(""));
       setOtp("");
       inputRefs.current[0]?.focus();
-      toast.success("A new code is on its way");
+      toast.success(t("login.code_on_way"));
     } catch (err: any) {
       toast.error(err.message || "Couldn't resend the code.");
     } finally {
@@ -129,80 +92,136 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     }
   };
 
-  const handleVerifyOtp = useCallback(
-    async (e?: React.FormEvent, codeOverride?: string) => {
-      e?.preventDefault();
-      const code = codeOverride ?? otp;
-      if (code.length !== OTP_LENGTH) {
-        toast.error(`Enter the ${OTP_LENGTH}-digit code`);
-        return;
-      }
-
-      try {
-        setIsLoading(true);
-        const res = await authService.verifyOtp({
-          phoneNumber: getFullPhone(),
-          code,
-        });
-
-        const token = res.access_token || res.accessToken;
-        const rToken = res.refresh_token || res.refreshToken;
-
-        if (!token) {
-          throw new Error(
-            "Invalid response from server. No access token provided.",
-          );
-        }
-
-        // Save token to localStorage for apiClient to use
-        localStorage.setItem("token", token);
-        if (rToken) {
-          localStorage.setItem("refreshToken", rToken);
-        }
-
-        // Trigger parent callback to show main app
-        onLoginSuccess(token);
-      } catch (err: any) {
-        toast.error(err.message || "Invalid OTP. Please try again.");
-        // Clear the boxes so the operator can retype without 4 backspaces.
-        setOtpArr(Array(OTP_LENGTH).fill(""));
-        setOtp("");
-        inputRefs.current[0]?.focus();
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [otp, phoneNumber, onLoginSuccess],
-  );
-
-  // Submit as soon as the last digit lands — including after an SMS autofill —
-  // rather than making the user reach for the button.
-  useEffect(() => {
-    if (step === "otp" && otp.length === OTP_LENGTH && !isLoading) {
-      handleVerifyOtp(undefined, otp);
+  const handleVerifyOtp = async (
+    e?: React.FormEvent,
+    codeOverride?: string,
+  ) => {
+    e?.preventDefault();
+    const code = codeOverride ?? otp;
+    if (code.length !== OTP_LENGTH) {
+      toast.error(`Enter the ${OTP_LENGTH}-digit code`);
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [otp, step]);
+
+    try {
+      setIsLoading(true);
+      const res = await authService.verifyOtp({
+        phoneNumber: getFullPhone(),
+        code,
+      });
+
+      const token = res.access_token || res.accessToken;
+      const rToken = res.refresh_token || res.refreshToken;
+
+      if (!token) {
+        throw new Error(
+          "Invalid response from server. No access token provided.",
+        );
+      }
+
+      // Save token to localStorage for apiClient to use
+      localStorage.setItem("token", token);
+      if (rToken) {
+        localStorage.setItem("refreshToken", rToken);
+      }
+
+      // Trigger parent callback to show main app
+      onLoginSuccess(token);
+    } catch (err: any) {
+      toast.error(err.message || "Invalid OTP. Please try again.");
+      // Clear the boxes so the operator can retype without 4 backspaces.
+      setOtpArr(Array(OTP_LENGTH).fill(""));
+      setOtp("");
+      inputRefs.current[0]?.focus();
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Writes `digits` into the boxes from `startIndex` on, advances focus, and
+   * submits the moment the last box is filled — so a complete code still logs
+   * the operator in without them reaching for the button.
+   *
+   * The submit fires from the event that completed the code rather than from an
+   * effect watching `otp`: filling the last box is something the operator did,
+   * not state that needs synchronizing, and driving it from an effect meant an
+   * extra render pass before the request went out.
+   */
+  const fillDigits = (startIndex: number, digits: string) => {
+    const next = [...otpArr];
+    for (let i = 0; i < digits.length && startIndex + i < OTP_LENGTH; i++) {
+      next[startIndex + i] = digits[i];
+    }
+    const code = next.join("");
+    setOtpArr(next);
+    setOtp(code);
+
+    inputRefs.current[
+      Math.min(startIndex + digits.length, OTP_LENGTH - 1)
+    ]?.focus();
+
+    // Every box holds one character, so a full-length join means none are empty.
+    if (code.length === OTP_LENGTH && !isLoading) {
+      void handleVerifyOtp(undefined, code);
+    }
+  };
+
+  const handleOtpChange = (index: number, value: string) => {
+    if (!/^\d*$/.test(value)) return;
+
+    if (!value) {
+      const cleared = [...otpArr];
+      cleared[index] = "";
+      setOtpArr(cleared);
+      setOtp(cleared.join(""));
+      return;
+    }
+
+    // A platform SMS autofill drops the whole code into a single box, so take
+    // however many digits arrived instead of only the last one.
+    fillDigits(index, value);
+  };
+
+  const handleOtpKeyDown = (
+    index: number,
+    e: React.KeyboardEvent<HTMLInputElement>,
+  ) => {
+    if (e.key === "Backspace" && !otpArr[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    const pastedData = e.clipboardData
+      .getData("text")
+      .replace(/\D/g, "")
+      .slice(0, OTP_LENGTH);
+    if (pastedData) fillDigits(0, pastedData);
+  };
 
   return (
     <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-4">
       {/* Background decoration */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-[30%] -right-[10%] w-[70%] h-[70%] rounded-full bg-orange-600/10 blur-[120px]" />
-        <div className="absolute -bottom-[20%] -left-[10%] w-[60%] h-[60%] rounded-full bg-red-600/10 blur-[100px]" />
+        <div className="absolute -top-[30%] -end-[10%] w-[70%] h-[70%] rounded-full bg-orange-600/10 blur-[120px]" />
+        <div className="absolute -bottom-[20%] -start-[10%] w-[60%] h-[60%] rounded-full bg-red-600/10 blur-[100px]" />
       </div>
 
       <div className="w-full max-w-md relative z-10 animate-in fade-in zoom-in-95 duration-500">
+        <div className="flex justify-center mb-6">
+          <LanguageToggle />
+        </div>
         <div className="text-center mb-8">
           <div className="h-16 w-16 mx-auto rounded-2xl bg-gradient-to-tr from-orange-500 to-red-600 flex items-center justify-center shadow-lg shadow-orange-500/20 mb-4">
             <span className="text-white font-black text-3xl">N</span>
           </div>
           <h1 className="text-2xl font-bold text-white tracking-tight">
-            NOWLNY Admin
+            {t("login.title")}
           </h1>
           <p className="text-zinc-500 text-sm mt-2 font-medium">
-            Secure Operations Portal
+            {t("login.subtitle")}
           </p>
         </div>
 
@@ -214,13 +233,15 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   htmlFor="login-phone"
                   className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2"
                 >
-                  Phone Number
+                  {t("login.phone_label")}
                 </label>
                 <div className="relative flex items-center">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none gap-2">
+                  <div className="absolute inset-y-0 start-0 ps-4 flex items-center pointer-events-none gap-2">
                     <Phone className="h-5 w-5 text-zinc-500" />
-                    <span className="text-zinc-400 font-medium">+961</span>
-                    <div className="h-5 w-px bg-zinc-800 ml-1"></div>
+                    <span className="text-zinc-400 font-medium" dir="ltr">
+                      +961
+                    </span>
+                    <div className="h-5 w-px bg-zinc-800 ms-1"></div>
                   </div>
                   <input
                     id="login-phone"
@@ -232,7 +253,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                     value={phoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value)}
                     placeholder="71 000 000"
-                    className="w-full bg-black border border-zinc-800 text-white rounded-xl pl-[105px] pr-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all"
+                    dir="ltr"
+                    className="w-full bg-black border border-zinc-800 text-white rounded-xl ps-[105px] pe-4 py-3.5 text-start focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all"
                     required
                   />
                 </div>
@@ -247,7 +269,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   <Loader2 className="w-5 h-5 animate-spin" />
                 ) : (
                   <>
-                    Send OTP <ArrowRight className="w-4 h-4" />
+                    {t("login.send_code")}{" "}
+                    <ArrowRight className="w-4 h-4 rtl:rotate-180" />
                   </>
                 )}
               </button>
@@ -259,11 +282,13 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   id="otp-label"
                   className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-4 text-center"
                 >
-                  Verification Code
+                  {t("login.otp_title")}
                 </p>
+                {/* Codes read start-to-right in every locale. */}
                 <div
                   className="flex justify-center gap-3"
                   role="group"
+                  dir="ltr"
                   aria-labelledby="otp-label"
                 >
                   {otpArr.map((digit, index) => (
@@ -289,10 +314,18 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   ))}
                 </div>
                 <p className="text-[11px] text-zinc-500 mt-4 text-center">
-                  Code sent to{" "}
-                  <span className="text-zinc-300 font-medium">
-                    {getFullPhone()}
-                  </span>
+                  {t("login.otp_sent_to", { phone: "\u0000" })
+                    .split("\u0000")
+                    .map((part, idx) => (
+                      <React.Fragment key={idx}>
+                        {part}
+                        {idx === 0 && (
+                          <span className="text-zinc-300 font-medium" dir="ltr">
+                            {getFullPhone()}
+                          </span>
+                        )}
+                      </React.Fragment>
+                    ))}
                 </p>
                 <div className="flex items-center justify-center gap-3 mt-2 text-[11px]">
                   <button
@@ -301,7 +334,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                     disabled={resendIn > 0 || isLoading}
                     className="text-orange-500 hover:underline disabled:text-zinc-600 disabled:no-underline disabled:cursor-not-allowed font-semibold"
                   >
-                    {resendIn > 0 ? `Resend in ${resendIn}s` : "Resend code"}
+                    {resendIn > 0
+                      ? t("login.resend_in", { seconds: resendIn })
+                      : t("login.resend")}
                   </button>
                   <span className="text-zinc-700" aria-hidden="true">
                     ·
@@ -315,7 +350,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                     }}
                     className="text-zinc-400 hover:text-white hover:underline font-semibold"
                   >
-                    Change number
+                    {t("login.change_number")}
                   </button>
                 </div>
               </div>
@@ -328,7 +363,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 {isLoading ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
                 ) : (
-                  "Verify & Login"
+                  t("login.verify")
                 )}
               </button>
             </form>

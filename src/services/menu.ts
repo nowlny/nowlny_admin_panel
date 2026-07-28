@@ -1,26 +1,45 @@
-import { apiClient } from './apiClient';
+import { apiClient, toList } from "./apiClient";
 
 export interface MenuSection {
   id: string;
   restaurantId?: string;
   name: string;
-  description?: string;
+  description?: string | null;
   sortOrder: number;
   isActive: boolean;
+  items?: MenuItem[];
+}
+
+/** Predefined item tag (`Spicy`, `Vegan`, …) — admin-managed. */
+export interface MenuTag {
+  id: string;
+  name: string;
+  icon?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface MenuItem {
   id: string;
   sectionId: string;
   name: string;
-  description?: string;
-  price: number;
-  discountedPrice?: number;
-  image?: string;
+  description?: string | null;
+  /** Prices come back as decimal strings (`"750000.00"`). */
+  price: number | string;
+  discountedPrice?: number | string | null;
+  image?: string | null;
   isActive: boolean;
   isAvailable: boolean;
   isPopular: boolean;
-  tags?: string[];
+  tags?: MenuTag[];
+  tagIds?: string[];
+  sortOrder: number;
+}
+
+export interface MenuOption {
+  id: string;
+  name: string;
+  price: number | string;
   sortOrder: number;
 }
 
@@ -34,73 +53,162 @@ export interface MenuOptionGroup {
   options?: MenuOption[];
 }
 
-export interface MenuOption {
-  id: string;
-  name: string;
-  price: number;
-  sortOrder: number;
+export interface MenuItemPayload {
+  sectionId?: string;
+  name?: string;
+  description?: string;
+  image?: string;
+  price?: number;
+  discountedPrice?: number;
+  sortOrder?: number;
+  isActive?: boolean;
+  isAvailable?: boolean;
+  isPopular?: boolean;
+  /** The API takes tag *ids*, not free-text tag names. */
+  tagIds?: string[];
 }
 
 export const menuService = {
-  // Sections
-  createSection: (data: Partial<MenuSection>) => {
-    return apiClient<MenuSection>('/api/v1/menu/sections', { method: 'POST', body: JSON.stringify(data) });
-  },
-  getSectionsByRestaurant: (restaurantId: string) => {
-    return apiClient<MenuSection[]>(`/api/v1/menu/sections/restaurant/${restaurantId}`);
-  },
-  getSectionById: (id: string) => {
-    return apiClient<MenuSection>(`/api/v1/menu/sections/${id}`);
-  },
-  updateSection: (id: string, data: Partial<MenuSection>) => {
-    return apiClient<MenuSection>(`/api/v1/menu/sections/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-  },
-  deleteSection: (id: string) => {
-    return apiClient<void>(`/api/v1/menu/sections/${id}`, { method: 'DELETE' });
+  // ─── Sections ──────────────────────────────────────────────────────────────
+
+  createSection: (data: Partial<MenuSection>) =>
+    apiClient<MenuSection>("/api/v1/menu/sections", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  getSectionsByRestaurant: async (restaurantId: string) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/menu/sections/restaurant/${restaurantId}`,
+    );
+    return toList<MenuSection>(payload);
   },
 
-  // Items
-  createItem: (data: Partial<MenuItem>) => {
-    return apiClient<MenuItem>('/api/v1/menu/items', { method: 'POST', body: JSON.stringify(data) });
-  },
-  getItemsBySection: (sectionId: string) => {
-    return apiClient<MenuItem[]>(`/api/v1/menu/items/section/${sectionId}`);
-  },
-  getItemById: (id: string) => {
-    return apiClient<MenuItem>(`/api/v1/menu/items/${id}`);
-  },
-  updateItem: (id: string, data: Partial<MenuItem>) => {
-    return apiClient<MenuItem>(`/api/v1/menu/items/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-  },
-  deleteItem: (id: string) => {
-    return apiClient<void>(`/api/v1/menu/items/${id}`, { method: 'DELETE' });
+  getSectionById: (id: string) =>
+    apiClient<MenuSection>(`/api/v1/menu/sections/${id}`),
+
+  updateSection: (id: string, data: Partial<MenuSection>) =>
+    apiClient<MenuSection>(`/api/v1/menu/sections/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  deleteSection: (id: string) =>
+    apiClient<void>(`/api/v1/menu/sections/${id}`, { method: "DELETE" }),
+
+  reorderSections: (orderedIds: string[]) =>
+    apiClient<void>("/api/v1/menu/sections/reorder", {
+      method: "PUT",
+      body: JSON.stringify({ orderedIds }),
+    }),
+
+  // ─── Items ─────────────────────────────────────────────────────────────────
+
+  createItem: (data: MenuItemPayload) =>
+    apiClient<MenuItem>("/api/v1/menu/items", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  getItemsBySection: async (sectionId: string) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/menu/items/section/${sectionId}`,
+    );
+    return toList<MenuItem>(payload);
   },
 
-  // Option Groups
-  createOptionGroup: (data: Partial<MenuOptionGroup>) => {
-    return apiClient<MenuOptionGroup>('/api/v1/menu/option-groups', { method: 'POST', body: JSON.stringify(data) });
-  },
-  getOptionGroupsByItem: (menuItemId: string) => {
-    return apiClient<MenuOptionGroup[]>(`/api/v1/menu/option-groups/item/${menuItemId}`);
-  },
-  getOptionGroupById: (id: string) => {
-    return apiClient<MenuOptionGroup>(`/api/v1/menu/option-groups/${id}`);
-  },
-  updateOptionGroup: (id: string, data: Partial<MenuOptionGroup>) => {
-    return apiClient<MenuOptionGroup>(`/api/v1/menu/option-groups/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-  },
-  deleteOptionGroup: (id: string) => {
-    return apiClient<void>(`/api/v1/menu/option-groups/${id}`, { method: 'DELETE' });
+  getItemById: (id: string) => apiClient<MenuItem>(`/api/v1/menu/items/${id}`),
+
+  updateItem: (id: string, data: MenuItemPayload) =>
+    apiClient<MenuItem>(`/api/v1/menu/items/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  deleteItem: (id: string) =>
+    apiClient<void>(`/api/v1/menu/items/${id}`, { method: "DELETE" }),
+
+  reorderItems: (sectionId: string, orderedIds: string[]) =>
+    apiClient<void>(`/api/v1/menu/sections/${sectionId}/items/reorder`, {
+      method: "PUT",
+      body: JSON.stringify({ orderedIds }),
+    }),
+
+  // ─── Option groups ─────────────────────────────────────────────────────────
+
+  createOptionGroup: (data: Partial<MenuOptionGroup>) =>
+    apiClient<MenuOptionGroup>("/api/v1/menu/option-groups", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  getOptionGroupsByItem: async (menuItemId: string) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/menu/option-groups/item/${menuItemId}`,
+    );
+    return toList<MenuOptionGroup>(payload);
   },
 
-  // Options
-  createOption: (groupId: string, data: Partial<MenuOption>) => {
-    return apiClient<MenuOption>(`/api/v1/menu/option-groups/${groupId}/options`, { method: 'POST', body: JSON.stringify(data) });
+  getOptionGroupById: (id: string) =>
+    apiClient<MenuOptionGroup>(`/api/v1/menu/option-groups/${id}`),
+
+  updateOptionGroup: (id: string, data: Partial<MenuOptionGroup>) =>
+    apiClient<MenuOptionGroup>(`/api/v1/menu/option-groups/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  deleteOptionGroup: (id: string) =>
+    apiClient<void>(`/api/v1/menu/option-groups/${id}`, { method: "DELETE" }),
+
+  reorderOptionGroups: (itemId: string, orderedIds: string[]) =>
+    apiClient<void>(`/api/v1/menu/items/${itemId}/option-groups/reorder`, {
+      method: "PUT",
+      body: JSON.stringify({ orderedIds }),
+    }),
+
+  // ─── Options ───────────────────────────────────────────────────────────────
+
+  createOption: (groupId: string, data: Partial<MenuOption>) =>
+    apiClient<MenuOption>(`/api/v1/menu/option-groups/${groupId}/options`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateOption: (id: string, data: Partial<MenuOption>) =>
+    apiClient<MenuOption>(`/api/v1/menu/options/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  deleteOption: (id: string) =>
+    apiClient<void>(`/api/v1/menu/options/${id}`, { method: "DELETE" }),
+
+  reorderOptions: (groupId: string, orderedIds: string[]) =>
+    apiClient<void>(`/api/v1/menu/option-groups/${groupId}/options/reorder`, {
+      method: "PUT",
+      body: JSON.stringify({ orderedIds }),
+    }),
+
+  // ─── Tags (admin) ──────────────────────────────────────────────────────────
+
+  getTags: async () => {
+    const payload = await apiClient<unknown>("/api/v1/menu/tags");
+    return toList<MenuTag>(payload);
   },
-  updateOption: (id: string, data: Partial<MenuOption>) => {
-    return apiClient<MenuOption>(`/api/v1/menu/options/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-  },
-  deleteOption: (id: string) => {
-    return apiClient<void>(`/api/v1/menu/options/${id}`, { method: 'DELETE' });
-  }
+
+  createTag: (data: { name: string; icon?: string }) =>
+    apiClient<MenuTag>("/api/v1/menu/tags", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateTag: (id: string, data: { name?: string; icon?: string }) =>
+    apiClient<MenuTag>(`/api/v1/menu/tags/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  deleteTag: (id: string) =>
+    apiClient<void>(`/api/v1/menu/tags/${id}`, { method: "DELETE" }),
 };

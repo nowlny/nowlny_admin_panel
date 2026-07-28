@@ -1,98 +1,61 @@
-import { apiClient } from "./apiClient";
+import {
+  apiClient,
+  buildQuery,
+  Paginated,
+  toList,
+  toPaginated,
+} from "./apiClient";
+
+/* ---------------------------------------------------------------------------
+   Types mirror `GET /api/v1/restaurants` and friends as the API actually
+   answers them. The previous interface described a different product: it had
+   `email`, `cuisineType`, `coverImage`, `estimatedDeliveryMinutes`, `revenue`,
+   `ordersCount` and `joinedDate`, none of which the backend returns or accepts.
+   Every panel bound to those fields rendered an em dash, and every form that
+   submitted them was posting properties the DTOs reject.
+--------------------------------------------------------------------------- */
+
+export type RestaurantStatus =
+  | "active"
+  | "inactive"
+  | "pending"
+  | "rejected"
+  | "suspended";
+
+export type SubmissionStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled";
+
+export type WeekDay =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
+export const WEEK_DAYS: WeekDay[] = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+];
 
 export interface OpeningHourEntry {
-  day: string;
+  day: WeekDay;
   is24Hours: boolean;
   openTime?: string;
   closeTime?: string;
 }
 
-export interface RestaurantCreate {
-  name: string;
-  description?: string;
-  logo?: string;
-  coverImage?: string;
-  backgroundImageUrl?: string;
-  email: string;
-  phone: string;
-  website?: string;
-  city: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-  deliveryFee: number;
-  estimatedDeliveryMinutes: number;
-  cuisineType: string;
-  openingHours?: {
-    entries: OpeningHourEntry[];
-  };
-  status?: string;
-  isFeatured?: boolean;
-  ownerFullName?: string;
-  ownerPhoneNumber?: string;
-  deliveryTimeMinMinutes?: number;
-  deliveryTimeMaxMinutes?: number;
-  restaurantAddress?: {
-    city: string;
-    street: string;
-    building?: string;
-    latitude: number;
-    longitude: number;
-  };
-}
-
-export type RestaurantUpdate = Partial<RestaurantCreate>;
-
-export interface RestaurantReview {
-  decision: "approve" | "reject";
-  rejectionReason?: string;
-}
-
-export interface Story {
-  id: string;
-  restaurantId: string;
-  imageUrl: string;
-  caption?: string;
-  expiresAt: string;
-  createdAt: string;
-  updatedAt: string;
-  seenCount?: number;
-  seenByMe?: boolean;
-}
-
-// Full interface mapping to backend
-export interface RestaurantResponse extends RestaurantCreate {
-  id: string;
-  rating: number;
-  reviewsCount?: number;
-  totalRatings?: number;
-  revenue?: number;
-  ordersCount?: number;
-  joinedDate?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  isOpen?: boolean;
-  rejectionReason?: string | null;
-  documentUrl?: string;
-  menu?: any[]; // Keep flexible if not strictly defined
-  stories?: Story[];
-  isFeatured?: boolean;
-}
-
-export interface DeliveryZone {
-  id: string;
-  name: string;
-  polygon: { lat: number; lng: number }[];
-}
-
-export interface RestaurantFullResponse {
-  restaurant: RestaurantResponse;
-  menu: any[];
-  deliveryZones: DeliveryZone[];
-}
-
-// Restaurant Submission interfaces (matches actual API response)
-export interface SubmissionAddress {
+export interface RestaurantAddress {
+  id?: string;
   city: string;
   street: string;
   building?: string;
@@ -100,286 +63,486 @@ export interface SubmissionAddress {
   longitude: number;
 }
 
+export interface DeliveryZonePayload {
+  name: string;
+  polygon: { lat: number; lng: number }[];
+}
+
+export interface DeliveryZone extends DeliveryZonePayload {
+  id: string;
+  restaurantId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface RestaurantCategoryRef {
+  id: string;
+  name: string;
+  icon?: string | null;
+  description?: string | null;
+  isActive?: boolean;
+}
+
+export interface CurrencyRef {
+  code: string;
+  name?: string;
+  symbol?: string;
+}
+
+export interface ExchangeRateRef {
+  id?: string;
+  fromCurrencyId: string;
+  toCurrencyId: string;
+  /** The API serialises decimals as strings (`"89500.000000"`). */
+  rate: string | number;
+  restaurantId?: string | null;
+  deliveryCompanyId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface Story {
+  id: string;
+  restaurantId?: string;
+  imageUrl?: string | null;
+  videoUrl?: string | null;
+  caption?: string | null;
+  expiresAt?: string;
+  displayOrder?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  seenCount?: number;
+  seenByMe?: boolean;
+}
+
+export interface RestaurantResponse {
+  id: string;
+  name: string;
+  description?: string | null;
+  logo?: string | null;
+  backgroundImageUrl?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  deliveryFee?: number | null;
+  deliveryTimeMinMinutes?: number | null;
+  deliveryTimeMaxMinutes?: number | null;
+  deliveryTimeRange?: string | null;
+  deliveryCompanyId?: string | null;
+  deliveryCompanyName?: string | null;
+  autoSendToDeliveryCompany?: boolean;
+  hasOffer?: boolean;
+  isFeatured?: boolean;
+  categories?: RestaurantCategoryRef[];
+  categoryIds?: string[];
+  currency?: CurrencyRef | null;
+  currencyId?: string | null;
+  rating?: number;
+  totalRatings?: number;
+  status?: RestaurantStatus;
+  isOpen?: boolean;
+  rejectionReason?: string | null;
+  openingHours?: OpeningHourEntry[] | null;
+  restaurantAddress?: RestaurantAddress | null;
+  deliveryZones?: DeliveryZone[];
+  exchangeRates?: ExchangeRateRef[];
+  stories?: Story[];
+  hasStory?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** `POST /api/v1/restaurants` (admin). */
+export interface RestaurantCreate {
+  name: string;
+  ownerPhoneNumber?: string;
+  ownerFullName?: string;
+  description?: string;
+  logo?: string;
+  backgroundImageUrl?: string;
+  phone?: string;
+  website?: string;
+  city?: string;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
+  deliveryFee?: number;
+  deliveryTimeMinMinutes?: number;
+  deliveryTimeMaxMinutes?: number;
+  openingHours?: { entries: OpeningHourEntry[] };
+  status?: RestaurantStatus;
+  currencyId?: string;
+  deliveryZones?: DeliveryZonePayload[];
+}
+
+/** `PATCH /api/v1/restaurants/{id}` (admin) — adds the structured address. */
+export type RestaurantUpdate = Partial<RestaurantCreate> & {
+  restaurantAddress?: RestaurantAddress;
+};
+
+export interface RestaurantReview {
+  decision: "approve" | "reject";
+  rejectionReason?: string;
+}
+
+/** `POST /api/v1/restaurants/me/apply` — note `restaurantName`, not `name`. */
+export interface RestaurantApplyPayload {
+  restaurantName: string;
+  description?: string;
+  logo?: string;
+  backgroundImageUrl?: string;
+  currencyId?: string;
+  phone?: string;
+  website?: string;
+  deliveryFee?: number;
+  deliveryTimeMinMinutes?: number;
+  deliveryTimeMaxMinutes?: number;
+  openingHours?: OpeningHourEntry[];
+  address?: RestaurantAddress;
+  categoryIds?: string[];
+  deliveryZones?: DeliveryZonePayload[];
+}
+
+export type SubmissionUpdatePayload = Omit<
+  RestaurantApplyPayload,
+  "deliveryZones"
+>;
+
 export interface RestaurantSubmission {
   id: string;
   name: string;
   description?: string | null;
   logo?: string | null;
-  coverImage?: string | null;
   backgroundImageUrl?: string | null;
-  email?: string | null;
   phone?: string | null;
   website?: string | null;
-  cuisineType?: string | null;
   deliveryFee?: number | null;
-  estimatedDeliveryMinutes?: number | null;
+  deliveryTimeMinMinutes?: number | null;
+  deliveryTimeMaxMinutes?: number | null;
+  deliveryTimeRange?: string | null;
   openingHours?: OpeningHourEntry[] | null;
-  address?: SubmissionAddress | null;
+  address?: RestaurantAddress | null;
   categoryIds?: string[];
-  status: "pending" | "approved" | "rejected" | "cancelled";
+  currencyId?: string | null;
+  status: SubmissionStatus;
   rejectionReason?: string | null;
   restaurantId?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
 
-export type RestaurantApplyPayload = RestaurantCreate;
+export interface MenuSectionWithItems {
+  id: string;
+  name: string;
+  description?: string | null;
+  sortOrder: number;
+  isActive: boolean;
+  items: unknown[];
+}
+
+export interface RestaurantFullResponse {
+  restaurant: RestaurantResponse;
+  menu: MenuSectionWithItems[];
+  ratings?: unknown;
+  deliversToLocation?: boolean | null;
+  deliveryZones: DeliveryZone[];
+  exchangeRates?: ExchangeRateRef[];
+  canReview?: boolean;
+  hasStory?: boolean;
+}
+
+export interface RatingReaction {
+  likes?: number;
+  dislikes?: number;
+  myReaction?: "like" | "dislike" | "report" | null;
+}
+
+export interface RestaurantRating {
+  id: string;
+  rating: number;
+  comment?: string | null;
+  createdAt?: string;
+  customerName?: string | null;
+  customer?: { fullName?: string; nickname?: string } | null;
+  reactions?: RatingReaction;
+}
+
+export interface RatingDistributionBucket {
+  count: number;
+  percentage: number;
+}
+
+export interface RestaurantRatingsResponse extends Paginated<RestaurantRating> {
+  distribution?: Record<string, RatingDistributionBucket>;
+}
+
+export interface ListRestaurantsParams {
+  name?: string;
+  category?: string;
+  page?: number;
+  limit?: number;
+  hasOffer?: boolean;
+  freeDelivery?: boolean;
+  topRated?: boolean;
+  under30min?: boolean;
+  newRestaurants?: boolean;
+}
+
+export interface StoryPayload {
+  imageUrl?: string;
+  videoUrl?: string;
+  caption?: string;
+  shareTo?: ("instagram" | "facebook" | "tiktok")[];
+}
+
+/** Bounds a "fetch every page" sweep so a bad `total` can't loop forever. */
+const MAX_SWEEP_PAGES = 20;
+const SWEEP_PAGE_SIZE = 100;
 
 export const restaurantsService = {
   /**
-   * Get all restaurants
+   * `GET /api/v1/restaurants` — paginated. Returns the envelope so callers can
+   * page properly instead of silently rendering only the first slice.
    */
-  getRestaurants: () => {
-    return apiClient<RestaurantResponse[]>("/api/v1/restaurants", {
-      method: "GET",
-    });
+  getRestaurants: async (
+    params?: ListRestaurantsParams,
+  ): Promise<Paginated<RestaurantResponse>> => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/restaurants${buildQuery({ ...params })}`,
+    );
+    return toPaginated<RestaurantResponse>(payload, params?.limit ?? 20);
   },
 
   /**
-   * Get a restaurant by ID
+   * Walks every page. The dashboard needs platform-wide totals and the list
+   * endpoint caps a page well below the merchant count.
    */
-  getRestaurantById: (id: string) => {
-    return apiClient<RestaurantResponse>(`/api/v1/restaurants/${id}`, {
-      method: "GET",
-    });
+  getAllRestaurants: async (
+    params?: Omit<ListRestaurantsParams, "page" | "limit">,
+  ): Promise<RestaurantResponse[]> => {
+    const collected: RestaurantResponse[] = [];
+    for (let page = 1; page <= MAX_SWEEP_PAGES; page += 1) {
+      const res = await restaurantsService.getRestaurants({
+        ...params,
+        page,
+        limit: SWEEP_PAGE_SIZE,
+      });
+      collected.push(...res.data);
+      if (res.data.length === 0 || collected.length >= res.total) break;
+    }
+    return collected;
   },
 
-  /**
-   * Create a restaurant (admin)
-   */
-  createRestaurant: (data: RestaurantCreate) => {
-    return apiClient<RestaurantResponse>("/api/v1/restaurants", {
+  /** `GET /api/v1/restaurants/featured` */
+  getFeaturedRestaurants: async (params?: ListRestaurantsParams) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/restaurants/featured${buildQuery({ ...params })}`,
+    );
+    return toPaginated<RestaurantResponse>(payload, params?.limit ?? 20);
+  },
+
+  getRestaurantById: (id: string) =>
+    apiClient<RestaurantResponse>(`/api/v1/restaurants/${id}`),
+
+  /** `GET /api/v1/restaurants/{id}/full` — profile, menu and delivery zones. */
+  getRestaurantFull: (id: string) =>
+    apiClient<RestaurantFullResponse>(`/api/v1/restaurants/${id}/full`),
+
+  getRestaurantMenu: (id: string) =>
+    apiClient<MenuSectionWithItems[]>(`/api/v1/restaurants/${id}/menu`),
+
+  getDeliveryZones: async (id: string) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/restaurants/${id}/delivery-zones`,
+    );
+    return toList<DeliveryZone>(payload);
+  },
+
+  createRestaurant: (data: RestaurantCreate) =>
+    apiClient<RestaurantResponse>("/api/v1/restaurants", {
       method: "POST",
       body: JSON.stringify(data),
-    });
-  },
+    }),
 
-  /**
-   * Update a restaurant (admin)
-   */
-  updateRestaurant: (id: string, data: RestaurantUpdate) => {
-    return apiClient<void>(`/api/v1/restaurants/${id}`, {
+  updateRestaurant: (id: string, data: RestaurantUpdate) =>
+    apiClient<RestaurantResponse>(`/api/v1/restaurants/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
-    });
-  },
+    }),
 
-  /**
-   * Delete a restaurant (admin)
-   * DELETE /api/v1/restaurants/{id}
-   */
-  deleteRestaurant: (id: string) => {
-    return apiClient<void>(`/api/v1/restaurants/${id}`, {
-      method: "DELETE",
-    });
-  },
+  deleteRestaurant: (id: string) =>
+    apiClient<void>(`/api/v1/restaurants/${id}`, { method: "DELETE" }),
 
-  /**
-   * Mark a restaurant as featured (admin)
-   * PUT /api/v1/restaurants/{id}/featured
-   */
-  markAsFeatured: (id: string) => {
-    return apiClient<void>(`/api/v1/restaurants/${id}/featured`, {
-      method: "PUT",
-    });
-  },
+  markAsFeatured: (id: string) =>
+    apiClient<void>(`/api/v1/restaurants/${id}/featured`, { method: "PUT" }),
 
-  /**
-   * Remove featured status from a restaurant (admin)
-   * DELETE /api/v1/restaurants/{id}/featured
-   */
-  removeFeatured: (id: string) => {
-    return apiClient<void>(`/api/v1/restaurants/${id}/featured`, {
-      method: "DELETE",
-    });
-  },
+  removeFeatured: (id: string) =>
+    apiClient<void>(`/api/v1/restaurants/${id}/featured`, { method: "DELETE" }),
 
-  /**
-   * Admin reviews a pending restaurant application
-   */
-  reviewRestaurant: (id: string, data: RestaurantReview) => {
-    return apiClient<void>(`/api/v1/restaurants/${id}/review`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    });
-  },
+  // ─── Applications ──────────────────────────────────────────────────────────
 
-  /**
-   * Get all restaurant applications (admin)
-   * GET /api/v1/restaurants/submissions
-   */
-  getSubmissions: (params?: {
+  /** `GET /api/v1/restaurants/submissions` (admin) — paginated. */
+  getSubmissions: async (params?: {
     status?: string;
     page?: number;
     limit?: number;
   }) => {
-    let query = "";
-    if (params) {
-      const searchParams = new URLSearchParams();
-      if (params.status && params.status !== "all")
-        searchParams.append("status", params.status);
-      if (params.page) searchParams.append("page", params.page.toString());
-      if (params.limit) searchParams.append("limit", params.limit.toString());
-      const str = searchParams.toString();
-      if (str) query = `?${str}`;
-    }
-    return apiClient<any>(`/api/v1/restaurants/submissions${query}`, {
-      method: "GET",
-    });
+    const payload = await apiClient<unknown>(
+      `/api/v1/restaurants/submissions${buildQuery({ ...params })}`,
+    );
+    return toPaginated<RestaurantSubmission>(payload, params?.limit ?? 20);
   },
 
-  /**
-   * Review a restaurant submission (admin)
-   * PATCH /api/v1/restaurants/submissions/{id}/review
-   */
-  reviewSubmission: (id: string, data: RestaurantReview) => {
-    return apiClient<void>(`/api/v1/restaurants/submissions/${id}/review`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    });
-  },
+  reviewSubmission: (id: string, data: RestaurantReview) =>
+    apiClient<RestaurantSubmission>(
+      `/api/v1/restaurants/submissions/${id}/review`,
+      { method: "PATCH", body: JSON.stringify(data) },
+    ),
 
-  /**
-   * Apply to be a restaurant (merchant/owner)
-   * POST /api/v1/restaurants/me/apply
-   */
-  applyRestaurant: (data: RestaurantApplyPayload) => {
-    return apiClient<RestaurantSubmission>("/api/v1/restaurants/me/apply", {
+  applyRestaurant: (data: RestaurantApplyPayload) =>
+    apiClient<RestaurantSubmission>("/api/v1/restaurants/me/apply", {
       method: "POST",
       body: JSON.stringify(data),
-    });
-  },
+    }),
 
   /**
-   * Cancel own pending restaurant application (merchant/owner)
-   * PATCH /api/v1/restaurants/me/submission/cancel
+   * `GET /api/v1/restaurants/me/submission` is a *paginated list*, not a single
+   * record. It used to be typed as one object, so `data.status` read
+   * `undefined` and an owner with a pending application was shown the "you
+   * haven't applied yet" screen.
    */
-  cancelMySubmission: () => {
-    return apiClient<void>("/api/v1/restaurants/me/submission/cancel", {
+  getMySubmissions: async (params?: {
+    status?: string;
+    page?: number;
+    limit?: number;
+  }) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/restaurants/me/submission${buildQuery({ ...params })}`,
+    );
+    return toPaginated<RestaurantSubmission>(payload, params?.limit ?? 20);
+  },
+
+  /** The submission an owner is currently acting on. */
+  getLatestSubmission: async (): Promise<RestaurantSubmission | null> => {
+    const res = await restaurantsService.getMySubmissions({ page: 1, limit: 10 });
+    if (res.data.length === 0) return null;
+    const byRecency = [...res.data].sort(
+      (a, b) =>
+        new Date(b.createdAt ?? 0).getTime() -
+        new Date(a.createdAt ?? 0).getTime(),
+    );
+    // A pending application outranks an older approved/rejected one — it is
+    // the record the owner can still edit or cancel.
+    return byRecency.find((s) => s.status === "pending") ?? byRecency[0];
+  },
+
+  updateMySubmission: (data: Partial<SubmissionUpdatePayload>) =>
+    apiClient<RestaurantSubmission>("/api/v1/restaurants/me/submission", {
       method: "PATCH",
-    });
-  },
+      body: JSON.stringify(data),
+    }),
 
-  /**
-   * Get own restaurant application status/details (merchant/owner)
-   * GET /api/v1/restaurants/me/submission
-   */
-  getMySubmission: () => {
-    return apiClient<RestaurantSubmission>(
-      "/api/v1/restaurants/me/submission",
-      {
-        method: "GET",
-      },
+  cancelMySubmission: () =>
+    apiClient<RestaurantSubmission>("/api/v1/restaurants/me/submission/cancel", {
+      method: "PATCH",
+    }),
+
+  // ─── Owner profile ─────────────────────────────────────────────────────────
+
+  getMyRestaurant: () => apiClient<RestaurantResponse>("/api/v1/restaurants/me"),
+
+  updateMyRestaurant: (
+    data: Partial<
+      Omit<RestaurantApplyPayload, "restaurantName" | "address"> & {
+        name: string;
+        restaurantAddress: RestaurantAddress;
+        hasOffer: boolean;
+        autoSendToDeliveryCompany: boolean;
+      }
+    >,
+  ) =>
+    apiClient<RestaurantResponse>("/api/v1/restaurants/me", {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  /** `POST /api/v1/restaurants/me/profile-images` — multipart, 5 MB per file. */
+  uploadProfileImages: (files: { logo?: File; backgroundImage?: File }) => {
+    const body = new FormData();
+    if (files.logo) body.append("logo", files.logo);
+    if (files.backgroundImage)
+      body.append("backgroundImage", files.backgroundImage);
+    return apiClient<{ logo?: string; backgroundImageUrl?: string }>(
+      "/api/v1/restaurants/me/profile-images",
+      { method: "POST", body },
     );
   },
 
-  /**
-   * Edit own pending restaurant submission (partial update)
-   */
-  updateMySubmission: (data: Partial<RestaurantSubmission>) => {
-    return apiClient<RestaurantSubmission>(
-      "/api/v1/restaurants/me/submission",
-      {
-        method: "PATCH",
-        body: JSON.stringify(data),
-      },
+  // ─── Ratings ───────────────────────────────────────────────────────────────
+
+  getRatings: (
+    id: string,
+    params?: {
+      page?: number;
+      limit?: number;
+      sortBy?: "most_recent" | "highest" | "lowest";
+    },
+  ) =>
+    apiClient<RestaurantRatingsResponse>(
+      `/api/v1/restaurants/${id}/ratings${buildQuery({ ...params })}`,
+    ),
+
+  // ─── Stories ───────────────────────────────────────────────────────────────
+
+  getStories: async (restaurantId: string) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/restaurants/${restaurantId}/stories`,
     );
+    return toList<Story>(payload);
   },
 
-  /**
-   * Get own restaurant profile
-   */
-  getMyRestaurant: () => {
-    return apiClient<RestaurantResponse>("/api/v1/restaurants/me", {
-      method: "GET",
-    });
-  },
-
-  /**
-   * Update own restaurant info
-   */
-  updateMyRestaurant: (data: RestaurantUpdate) => {
-    return apiClient<RestaurantResponse>("/api/v1/restaurants/me", {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    });
-  },
-
-  /**
-   * Get current restaurant address (owner)
-   */
-  getMyAddress: () => {
-    return apiClient<SubmissionAddress>("/api/v1/restaurants/me/address", {
-      method: "GET",
-    });
-  },
-
-  /**
-   * Create or replace restaurant address (owner)
-   */
-  createMyAddress: (data: SubmissionAddress) => {
-    return apiClient<SubmissionAddress>("/api/v1/restaurants/me/address", {
+  createStoryForRestaurant: (restaurantId: string, data: StoryPayload) =>
+    apiClient<Story>(`/api/v1/restaurants/admin/${restaurantId}/stories`, {
       method: "POST",
       body: JSON.stringify(data),
-    });
+    }),
+
+  updateStoryForRestaurant: (
+    restaurantId: string,
+    storyId: string,
+    data: StoryPayload,
+  ) =>
+    apiClient<Story>(
+      `/api/v1/restaurants/admin/${restaurantId}/stories/${storyId}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+    ),
+
+  deleteStoryForRestaurant: (restaurantId: string, storyId: string) =>
+    apiClient<void>(
+      `/api/v1/restaurants/admin/${restaurantId}/stories/${storyId}`,
+      { method: "DELETE" },
+    ),
+
+  // ─── Exchange rate overrides (admin) ───────────────────────────────────────
+
+  /** Effective rates for a merchant: its overrides merged over the defaults. */
+  getRestaurantExchangeRates: async (id: string) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/restaurants/${id}/exchange-rate`,
+    );
+    return toList<ExchangeRateRef>(payload);
   },
 
-  /**
-   * Update a restaurant address (owner)
-   */
-  updateMyAddress: (data: Partial<SubmissionAddress>) => {
-    return apiClient<SubmissionAddress>("/api/v1/restaurants/me/address", {
-      method: "PATCH",
+  setRestaurantExchangeRate: (
+    id: string,
+    data: { fromCurrencyId: string; toCurrencyId: string; rate: number },
+  ) =>
+    apiClient<ExchangeRateRef>(`/api/v1/restaurants/${id}/exchange-rate`, {
+      method: "PUT",
       body: JSON.stringify(data),
-    });
-  },
+    }),
 
-  /**
-   * Delete a restaurant address (owner)
-   */
-  deleteMyAddress: () => {
-    return apiClient<void>("/api/v1/restaurants/me/address", {
+  clearRestaurantExchangeRates: (id: string) =>
+    apiClient<void>(`/api/v1/restaurants/${id}/exchange-rate`, {
       method: "DELETE",
-    });
-  },
-
-  /**
-   * Get restaurant info and full menu in one call (public)
-   */
-  getRestaurantFull: (id: string) => {
-    return apiClient<RestaurantFullResponse>(`/api/v1/restaurants/${id}/full`, {
-      method: "GET",
-    });
-  },
-
-  /**
-   * Get full menu for a restaurant (public)
-   */
-  getRestaurantMenu: (id: string) => {
-    return apiClient<any[]>(`/api/v1/restaurants/${id}/menu`, {
-      method: "GET",
-    });
-  },
-
-  /**
-   * Rate a restaurant (customer)
-   */
-  rateRestaurant: (id: string, data: { rating: number; review?: string }) => {
-    return apiClient<void>(`/api/v1/restaurants/${id}/rating`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  },
-
-  /**
-   * Get own rating for a restaurant (customer)
-   */
-  getMyRating: (id: string) => {
-    return apiClient<{ rating: number; review?: string }>(
-      `/api/v1/restaurants/${id}/rating/me`,
-      {
-        method: "GET",
-      },
-    );
-  },
+    }),
 };

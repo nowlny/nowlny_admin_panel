@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Users,
   Phone,
@@ -8,18 +8,27 @@ import {
   Shield,
   Trash2,
   Plus,
+  Search,
   Edit,
   ShieldAlert,
   Loader2,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { usersService, SystemUser } from "../../services/users";
+import {
+  usersService,
+  SystemUser,
+  UserType,
+  UserStatus,
+  USER_TYPES,
+  USER_STATUSES,
+} from "../../services/users";
 import Modal from "./ui/Modal";
 import { useConfirm } from "./ui/ConfirmDialog";
 import { EmptyState, ErrorState, CardSkeletonGrid } from "./ui/States";
 import StatusPill, { statusLabel } from "./ui/StatusPill";
 import { formatDate, shortId } from "../../lib/format";
 
+import { useI18n } from "../../lib/i18n";
 const inputClass =
   "w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm text-zinc-900 dark:text-white rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500";
 const labelClass =
@@ -34,10 +43,19 @@ function RequiredMark() {
   );
 }
 
+const PAGE_SIZE = 20;
+
 export default function SystemUsersSection() {
+  const { t } = useI18n();
   const confirm = useConfirm();
 
   const [users, setUsers] = useState<SystemUser[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<UserType | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<UserStatus | "all">("all");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -49,41 +67,58 @@ export default function SystemUsersSection() {
   const [formData, setFormData] = useState({
     fullName: "",
     phoneNumber: "",
-    userType: "admin",
-    status: "active",
+    userType: "admin" as UserType,
+    status: "active" as UserStatus,
     isActive: true,
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const fetchUsers = async () => {
+  // The search box feeds the API's own `search` parameter rather than
+  // filtering one page in the browser.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, typeFilter, statusFilter]);
+
+  const fetchUsers = useCallback(async () => {
     try {
       setIsLoading(true);
-      const data = await usersService.getSystemUsers();
-      const finalUsers = Array.isArray(data)
-        ? data
-        : data && (data as any).data
-          ? (data as any).data
-          : [];
-      setUsers(finalUsers);
+      const res = await usersService.getSystemUsers({
+        search: debouncedSearch || undefined,
+        userType: typeFilter,
+        status: statusFilter,
+        page,
+        limit: PAGE_SIZE,
+      });
+      setUsers(res.data);
+      setTotal(res.total);
+      setTotalPages(Math.max(1, res.totalPages ?? 1));
       setLoadError(null);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to fetch users:", err);
       // A failed fetch used to render the "No system users found" empty state,
       // which is indistinguishable from an account list that is genuinely empty.
       setLoadError(
-        err?.message || "Could not connect to the API to fetch system users.",
+        err instanceof Error
+          ? err.message
+          : t("users.load_failed"),
       );
       setUsers([]);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [debouncedSearch, typeFilter, statusFilter, page]);
 
   useEffect(() => {
     fetchUsers();
-  }, []);
+  }, [fetchUsers]);
 
   const closeModal = () => {
     setIsCreateModalOpen(false);
@@ -101,10 +136,10 @@ export default function SystemUsersSection() {
       });
       closeModal();
       resetForm();
-      toast.success("User created successfully!");
+      toast.success(t("users.created"));
       fetchUsers();
     } catch (err: any) {
-      toast.error(err?.message || "Failed to create user.");
+      toast.error(err?.message || t("users.create_failed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -124,10 +159,10 @@ export default function SystemUsersSection() {
       });
       closeModal();
       resetForm();
-      toast.success("User updated successfully!");
+      toast.success(t("users.updated"));
       fetchUsers();
     } catch (err: any) {
-      toast.error(err?.message || "Failed to update user.");
+      toast.error(err?.message || t("users.update_failed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -136,13 +171,14 @@ export default function SystemUsersSection() {
   const handleDelete = async (user: SystemUser) => {
     // The card falls back to "Unnamed User", so the prompt must too — it used
     // to read "delete undefined?" for any user without a full name.
-    const label = user.fullName?.trim() || user.phoneNumber || "this user";
+    const label =
+      user.fullName?.trim() || user.phoneNumber || t("users.this_user");
     const confirmed = await confirm({
-      title: `Delete ${label}?`,
-      description: `This permanently removes the ${statusLabel(
-        user.userType,
-      ).toLowerCase()} account and revokes its access to the admin panel.`,
-      confirmLabel: "Delete user",
+      title: t("users.delete_title", { name: label }),
+      description: t("users.delete_body", {
+        role: statusLabel(user.userType, t).toLowerCase(),
+      }),
+      confirmLabel: t("users.delete_cta"),
       variant: "danger",
     });
     if (!confirmed) return;
@@ -150,10 +186,10 @@ export default function SystemUsersSection() {
     try {
       setDeletingId(user.id);
       await usersService.deleteSystemUser(user.id);
-      toast.success("User deleted successfully!");
+      toast.success(t("users.deleted"));
       fetchUsers();
     } catch (err: any) {
-      toast.error(err?.message || "Failed to delete user.");
+      toast.error(err?.message || t("users.delete_failed"));
     } finally {
       setDeletingId(null);
     }
@@ -164,8 +200,8 @@ export default function SystemUsersSection() {
     setFormData({
       fullName: user.fullName,
       phoneNumber: user.phoneNumber,
-      userType: user.userType,
-      status: user.status,
+      userType: user.userType as UserType,
+      status: user.status as UserStatus,
       isActive: user.isActive,
     });
   };
@@ -195,7 +231,7 @@ export default function SystemUsersSection() {
       }}
       className="bg-zinc-900 hover:bg-orange-500 text-white dark:bg-zinc-800 text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-2"
     >
-      <Plus className="w-4 h-4" /> Add User
+      <Plus className="w-4 h-4" /> {t("users.add")}
     </button>
   );
 
@@ -205,15 +241,63 @@ export default function SystemUsersSection() {
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h2 className="text-lg font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-            <ShieldAlert className="w-5 h-5 text-orange-500" /> System Users
-            Control
+            <ShieldAlert className="w-5 h-5 text-orange-500" />{" "}
+            {t("users.title")}
           </h2>
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-semibold mt-1">
-            Manage administrators, support staff, and system access.
+            {t("users.subtitle")}
           </p>
         </div>
 
         {addButton}
+      </div>
+
+      {/* Server-side search and filters. The list endpoint supports `search`,
+          `userType`, `status` and pagination — none of which the panel used, so
+          it only ever showed the API's first page. */}
+      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row gap-3 md:items-center">
+        <div className="relative flex-1">
+          <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400 pointer-events-none" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t("users.search_placeholder")}
+            aria-label={t("users.search_label")}
+            className={`${inputClass} ps-9`}
+          />
+        </div>
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value as UserType | "all")}
+          aria-label={t("users.filter_role")}
+          className={`${inputClass} md:w-52`}
+        >
+          <option value="all">{t("users.all_roles")}</option>
+          {USER_TYPES.map((type) => (
+            <option key={type.value} value={type.value}>
+              {type.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as UserStatus | "all")}
+          aria-label={t("users.filter_status")}
+          className={`${inputClass} md:w-40`}
+        >
+          <option value="all">{t("users.all_statuses")}</option>
+          {USER_STATUSES.map((status) => (
+            <option key={status.value} value={status.value}>
+              {status.label}
+            </option>
+          ))}
+        </select>
+        {!isLoading && !loadError && (
+          <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
+            {t("users.count", { count: total })}
+          </span>
+        )}
       </div>
 
       {/* Users List */}
@@ -227,8 +311,8 @@ export default function SystemUsersSection() {
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
           <EmptyState
             icon={Shield}
-            title="No system users found"
-            hint="Add an administrator, support agent or super admin to give them access to this panel."
+            title={t("users.none_title")}
+            hint={t("users.none_hint")}
             action={addButton}
           />
         </div>
@@ -249,10 +333,12 @@ export default function SystemUsersSection() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <h4 className="text-sm font-bold text-zinc-950 dark:text-white truncate group-hover:text-orange-500 transition-colors">
-                        {user.fullName || "Unnamed User"}
+                        {user.fullName || t("users.unnamed")}
                       </h4>
                       <p className="text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold truncate mt-0.5">
-                        Role: {statusLabel(user.userType)}
+                        {t("users.role_label", {
+                          role: statusLabel(user.userType, t),
+                        })}
                       </p>
                     </div>
                   </div>
@@ -268,13 +354,19 @@ export default function SystemUsersSection() {
                   {user.nickname && (
                     <div className="flex items-center gap-2">
                       <Users className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                      <span>Nickname: {user.nickname}</span>
+                      <span>
+                        {t("users.nickname_label", { value: user.nickname })}
+                      </span>
                     </div>
                   )}
                   {user.dateOfBirth && (
                     <div className="flex items-center gap-2">
                       <Calendar className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                      <span>DOB: {formatDate(user.dateOfBirth)}</span>
+                      <span>
+                        {t("users.dob_label", {
+                          value: formatDate(user.dateOfBirth),
+                        })}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -285,7 +377,7 @@ export default function SystemUsersSection() {
                   className="text-[9px] font-bold text-zinc-500 dark:text-zinc-400 uppercase"
                   title={user.id}
                 >
-                  ID: {shortId(user.id)}
+                  {t("users.id_label", { id: shortId(user.id) })}
                 </span>
 
                 <div className="flex gap-2">
@@ -293,8 +385,10 @@ export default function SystemUsersSection() {
                     onClick={() => openEditModal(user)}
                     disabled={deletingId === user.id}
                     className="p-2.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors disabled:opacity-50"
-                    title="Edit User"
-                    aria-label={`Edit ${user.fullName || user.phoneNumber}`}
+                    title={t("common.edit")}
+                    aria-label={t("users.edit_aria", {
+                      name: user.fullName || user.phoneNumber,
+                    })}
                   >
                     <Edit className="w-4 h-4" />
                   </button>
@@ -304,8 +398,10 @@ export default function SystemUsersSection() {
                     onClick={() => handleDelete(user)}
                     disabled={deletingId === user.id}
                     className="p-2.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50"
-                    title="Delete User"
-                    aria-label={`Delete ${user.fullName || user.phoneNumber}`}
+                    title={t("common.delete")}
+                    aria-label={t("users.delete_aria", {
+                      name: user.fullName || user.phoneNumber,
+                    })}
                   >
                     {deletingId === user.id ? (
                       <Loader2 className="w-4 h-4 animate-spin text-red-500" />
@@ -320,15 +416,37 @@ export default function SystemUsersSection() {
         </div>
       )}
 
+      {!isLoading && !loadError && totalPages > 1 && (
+        <div className="flex justify-center items-center gap-2">
+          <button
+            disabled={page === 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
+          >
+            {t("common.previous")}
+          </button>
+          <span className="text-xs font-semibold text-zinc-500">
+            {t("common.page_of", { page, total: totalPages })}
+          </span>
+          <button
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
+          >
+            {t("common.next")}
+          </button>
+        </div>
+      )}
+
       {/* Create / Edit Modal */}
       <Modal
         isOpen={isCreateModalOpen || !!editingUser}
         onClose={closeModal}
-        title={editingUser ? "Edit System User" : "Create System User"}
+        title={editingUser ? t("users.edit_title") : t("users.create_title")}
         description={
           editingUser
-            ? "Changes take effect the next time this user signs in."
-            : "The user signs in with this phone number."
+            ? t("users.edit_desc")
+            : t("users.create_desc")
         }
         maxWidth="max-w-md"
         dismissable={!isSubmitting && !isDirty}
@@ -344,7 +462,7 @@ export default function SystemUsersSection() {
               onClick={closeModal}
               className="flex-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-white text-xs font-bold py-2.5 rounded-lg transition-colors"
             >
-              Cancel
+              {t("common.cancel")}
             </button>
             <button
               type="submit"
@@ -353,7 +471,7 @@ export default function SystemUsersSection() {
               className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold py-2.5 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              {editingUser ? "Save Changes" : "Create User"}
+              {editingUser ? t("common.save_changes") : t("users.create_cta")}
             </button>
           </>
         }
@@ -365,7 +483,7 @@ export default function SystemUsersSection() {
         >
           <div>
             <label htmlFor="system-user-fullName" className={labelClass}>
-              Full Name
+              {t("users.full_name")}
               <RequiredMark />
             </label>
             <input
@@ -377,13 +495,13 @@ export default function SystemUsersSection() {
                 setFormData({ ...formData, fullName: e.target.value })
               }
               className={inputClass}
-              placeholder="e.g. John Doe"
+              placeholder={t("users.name_placeholder")}
             />
           </div>
 
           <div>
             <label htmlFor="system-user-phoneNumber" className={labelClass}>
-              Phone Number
+              {t("users.phone")}
               <RequiredMark />
             </label>
             <input
@@ -401,37 +519,50 @@ export default function SystemUsersSection() {
 
           <div>
             <label htmlFor="system-user-type" className={labelClass}>
-              User Type
+              {t("users.user_type")}
             </label>
+            {/* `super_admin` and `support` were offered here but are not in
+                `CreateUserDto.userType`, so picking either returned a 400. */}
             <select
               id="system-user-type"
               value={formData.userType}
               onChange={(e) =>
-                setFormData({ ...formData, userType: e.target.value })
+                setFormData({
+                  ...formData,
+                  userType: e.target.value as UserType,
+                })
               }
               className={inputClass}
             >
-              <option value="admin">Admin</option>
-              <option value="super_admin">Super Admin</option>
-              <option value="support">Support</option>
+              {USER_TYPES.map((type) => (
+                <option key={type.value} value={type.value}>
+                  {statusLabel(type.value, t)}
+                </option>
+              ))}
             </select>
           </div>
 
           {editingUser && (
             <div>
               <label htmlFor="system-user-status" className={labelClass}>
-                Account Status
+                {t("users.account_status")}
               </label>
               <select
                 id="system-user-status"
                 value={formData.status}
                 onChange={(e) =>
-                  setFormData({ ...formData, status: e.target.value })
+                  setFormData({
+                    ...formData,
+                    status: e.target.value as UserStatus,
+                  })
                 }
                 className={inputClass}
               >
-                <option value="active">Active</option>
-                <option value="suspended">Suspended</option>
+                {USER_STATUSES.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {statusLabel(status.value, t)}
+                  </option>
+                ))}
               </select>
             </div>
           )}

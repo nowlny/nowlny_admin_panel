@@ -38,6 +38,7 @@ import {
   TableSkeleton,
 } from "./ui/States";
 
+import { useI18n, type MessageKey } from "../../lib/i18n";
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const LIVE_STATUSES: OrderStatus[] = [
@@ -53,26 +54,27 @@ const DONE_STATUSES: OrderStatus[] = ["delivered", "cancelled", "rejected"];
  * status on both tabs, which let you sit on the Live board filtered to
  * "Delivered" and stare at an empty screen.
  */
-const LIVE_STATUS_OPTIONS: { label: string; value: OrderStatus | "" }[] = [
-  { label: "All live statuses", value: "" },
-  { label: "Pending", value: "pending" },
-  { label: "Confirmed", value: "confirmed" },
-  { label: "Out for delivery", value: "out_for_delivery" },
+const LIVE_STATUS_OPTIONS: { key: MessageKey; value: OrderStatus | "" }[] = [
+  { key: "orders.all_live", value: "" },
+  { key: "status.pending", value: "pending" },
+  { key: "status.confirmed", value: "confirmed" },
+  { key: "status.out_for_delivery", value: "out_for_delivery" },
 ];
 
-const ARCHIVE_STATUS_OPTIONS: { label: string; value: OrderStatus | "" }[] = [
-  { label: "All archived statuses", value: "" },
-  { label: "Delivered", value: "delivered" },
-  { label: "Cancelled", value: "cancelled" },
-  { label: "Rejected", value: "rejected" },
+const ARCHIVE_STATUS_OPTIONS: { key: MessageKey; value: OrderStatus | "" }[] = [
+  { key: "orders.all_archived", value: "" },
+  { key: "status.delivered", value: "delivered" },
+  { key: "status.cancelled", value: "cancelled" },
+  { key: "status.rejected", value: "rejected" },
 ];
 
-const PAYMENT_STATUS_OPTIONS: { label: string; value: PaymentStatus | "" }[] = [
-  { label: "All Payments", value: "" },
-  { label: "Pending", value: "pending" },
-  { label: "Paid", value: "paid" },
-  { label: "Failed", value: "failed" },
-  { label: "Refunded", value: "refunded" },
+const PAYMENT_STATUS_OPTIONS: { key: MessageKey; value: PaymentStatus | "" }[] = [
+  { key: "orders.all_payments", value: "" },
+  { key: "status.pending", value: "pending" },
+  { key: "status.paid", value: "paid" },
+  { key: "status.failed", value: "failed" },
+  // The API's `paymentStatus` enum is pending|paid|failed — a "Refunded"
+  // filter always returned a 400 from the list endpoint.
 ];
 
 /** `NWL-2024-00001` is the operator-facing identity; the UUID is internal. */
@@ -81,6 +83,15 @@ function orderRef(order: OrderResponse): string {
     typeof order.orderNumber === "string" ? order.orderNumber.trim() : "";
   if (raw) return /^\d+$/.test(raw) ? `#${raw}` : raw;
   return `#${shortId(order.id)}`;
+}
+
+/**
+ * Orders are priced in the merchant's own currency (LBP for most of the
+ * platform). `formatMoney` was called without one everywhere, so a 750,000 LBP
+ * order rendered as a bare "750,000.00" with no unit at all.
+ */
+function orderCurrency(order?: OrderResponse | null): string | undefined {
+  return order?.currency?.code ?? order?.currencyCode ?? undefined;
 }
 
 function customerName(order: OrderResponse): string {
@@ -126,14 +137,14 @@ type OrderItemLike = OrderItemResponse & {
 };
 
 const KANBAN_LANES: {
-  title: string;
+  key: MessageKey;
   statuses: OrderStatus[];
   color: string;
 }[] = [
-  { title: "Incoming", statuses: ["pending"], color: "border-amber-400" },
-  { title: "Confirmed", statuses: ["confirmed"], color: "border-sky-500" },
+  { key: "orders.lane_incoming", statuses: ["pending"], color: "border-amber-400" },
+  { key: "orders.lane_confirmed", statuses: ["confirmed"], color: "border-sky-500" },
   {
-    title: "Out for Delivery",
+    key: "orders.lane_out",
     statuses: ["out_for_delivery"],
     color: "border-blue-500",
   },
@@ -151,6 +162,7 @@ export default function OrdersSection({
   restaurantId,
   isOwnerView = false,
 }: OrdersSectionProps) {
+  const { t } = useI18n();
   const confirm = useConfirm();
 
   // View mode
@@ -262,9 +274,7 @@ export default function OrdersSection({
         if (previous && previous.key === key) {
           const fresh = [...pendingIds].filter((id) => !previous.ids.has(id));
           if (fresh.length > 0) {
-            toast.success(
-              `${fresh.length} new order${fresh.length > 1 ? "s" : ""}`,
-            );
+            toast.success(t("orders.new_orders", { count: fresh.length }));
             setNewOrderIds((prev) => [...prev, ...fresh]);
             setTimeout(
               () =>
@@ -290,7 +300,7 @@ export default function OrdersSection({
       } catch (err: unknown) {
         if (requestId !== requestSeq.current) return;
         const msg =
-          err instanceof Error ? err.message : "Failed to fetch orders.";
+          err instanceof Error ? err.message : t("orders.fetch_failed");
         if (silent) {
           // A background refresh must never blank the dispatch board, but the
           // operator has to know the numbers on screen have stopped updating.
@@ -427,7 +437,7 @@ export default function OrdersSection({
       setDetailError(
         err instanceof Error
           ? err.message
-          : "Couldn't load the full order. Showing summary data only.",
+          : t("orders.detail_failed"),
       );
     } finally {
       setDetailLoading(false);
@@ -445,17 +455,27 @@ export default function OrdersSection({
     try {
       let updated: OrderResponse;
       if (isOwnerView) {
+        /*
+         * Owner transitions each have their own endpoint under
+         * `/orders/me/{id}/…`. The old code posted to
+         * `/orders/restaurant/me/{id}/accept|reject|status`, none of which
+         * exist, so every button on the merchant board 404'd.
+         */
         if (nextStatus === "confirmed") {
           await ordersService.acceptMyOrder(order.id);
           updated = { ...order, status: "confirmed" as OrderStatus };
         } else if (nextStatus === "rejected") {
           await ordersService.rejectMyOrder(order.id);
           updated = { ...order, status: "rejected" as OrderStatus };
+        } else if (nextStatus === "out_for_delivery") {
+          await ordersService.sendMyOrderOutForDelivery(order.id);
+          updated = { ...order, status: "out_for_delivery" as OrderStatus };
         } else {
-          await ordersService.updateMyOrderStatus(order.id, {
-            status: nextStatus,
-          });
-          updated = { ...order, status: nextStatus };
+          // Merchants cannot mark an order delivered or cancelled — the driver
+          // and the customer own those transitions.
+          throw new Error(
+            `A restaurant cannot move an order to "${nextStatus}" — that step belongs to the driver or the customer.`,
+          );
         }
       } else {
         updated = await ordersService.updateOrder(order.id, {
@@ -465,12 +485,17 @@ export default function OrdersSection({
       }
       setOrders((prev) => prev.map((o) => (o.id === order.id ? updated : o)));
       if (selectedOrder?.id === order.id) setSelectedOrder(updated);
-      toast.success(`${orderRef(order)} → ${statusLabel(nextStatus)}`);
+      toast.success(
+        t("orders.status_changed", {
+          ref: orderRef(order),
+          status: statusLabel(nextStatus, t),
+        }),
+      );
       // The order may have just left this tab's status set; resync quietly.
       fetchOrders(true);
     } catch (err: unknown) {
       const msg =
-        err instanceof Error ? err.message : "Update failed. Please retry.";
+        err instanceof Error ? err.message : t("orders.update_failed");
       toast.error(msg);
     } finally {
       setUpdatingId(null);
@@ -485,7 +510,7 @@ export default function OrdersSection({
       — {restaurantName(order) || "unknown restaurant"} for{" "}
       {customerName(order) || "an unnamed customer"}, total{" "}
       <span className="font-semibold text-zinc-900 dark:text-white">
-        {formatMoney(order.total)}
+        {formatMoney(order.total, orderCurrency(order))}
       </span>
       .
     </>
@@ -493,10 +518,10 @@ export default function OrdersSection({
 
   const handleCancel = async (order: OrderResponse) => {
     const ok = await confirm({
-      title: "Cancel this order?",
+      title: t("orders.cancel_title"),
       description: <>{orderSummary(order)} The customer will not receive it.</>,
-      confirmLabel: "Cancel order",
-      cancelLabel: "Keep order",
+      confirmLabel: t("orders.cancel_cta"),
+      cancelLabel: t("orders.keep"),
       variant: "danger",
     });
     if (!ok) return;
@@ -505,12 +530,12 @@ export default function OrdersSection({
 
   const handleReject = async (order: OrderResponse) => {
     const ok = await confirm({
-      title: "Reject this order?",
+      title: t("orders.reject_title"),
       description: (
         <>{orderSummary(order)} The restaurant will not prepare it.</>
       ),
-      confirmLabel: "Reject order",
-      cancelLabel: "Keep order",
+      confirmLabel: t("orders.reject_cta"),
+      cancelLabel: t("orders.keep"),
       variant: "danger",
     });
     if (!ok) return;
@@ -527,8 +552,8 @@ export default function OrdersSection({
     const recordsPayment = !isOwnerView && order.paymentStatus !== "paid";
     const ok = await confirm({
       title: recordsPayment
-        ? "Mark delivered and record payment?"
-        : "Mark this order delivered?",
+        ? t("orders.deliver_pay_title")
+        : t("orders.deliver_title"),
       description: (
         <>
           {orderSummary(order)}
@@ -537,7 +562,7 @@ export default function OrdersSection({
               {" "}
               This also records{" "}
               <span className="font-semibold text-zinc-900 dark:text-white">
-                {formatMoney(order.total)}
+                {formatMoney(order.total, orderCurrency(order))}
               </span>{" "}
               as collected
               {order.paymentMethod ? ` (${order.paymentMethod})` : ""}. Payment
@@ -546,7 +571,9 @@ export default function OrdersSection({
           )}
         </>
       ),
-      confirmLabel: recordsPayment ? "Deliver & record payment" : "Mark delivered",
+      confirmLabel: recordsPayment
+        ? t("orders.deliver_pay_cta")
+        : t("orders.deliver_cta"),
     });
     if (!ok) return;
     await handleUpdateStatus(
@@ -587,7 +614,7 @@ export default function OrdersSection({
                       : "bg-zinc-400"
                 }`}
               />
-              Live Dispatch Room
+              {t("orders.live_room")}
               {liveCount !== null && (
                 <span className="bg-red-500/10 text-red-600 dark:text-red-400 px-1.5 py-0.5 text-[9px] rounded-full font-black">
                   {liveCount}
@@ -604,7 +631,7 @@ export default function OrdersSection({
                   : "text-zinc-500 hover:text-zinc-950 dark:hover:text-white"
               }`}
             >
-              Archived History
+              {t("orders.archive")}
             </button>
           </div>
 
@@ -613,7 +640,7 @@ export default function OrdersSection({
             <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
               {loading ? (
                 <span className="flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Loading…
+                  <Loader2 className="w-3 h-3 animate-spin" /> {t("common.loading")}
                 </span>
               ) : (
                 <>
@@ -639,7 +666,7 @@ export default function OrdersSection({
               }`}
             >
               <Filter className="w-3 h-3" />
-              Filters
+              {t("orders.filters")}
               {hasFilters && (
                 <span className="bg-white/20 rounded-full px-1.5 text-[8px] font-black">
                   {[statusFilter, paymentFilter].filter(Boolean).length}
@@ -651,8 +678,8 @@ export default function OrdersSection({
               id="orders-refresh"
               onClick={() => fetchOrders()}
               disabled={loading}
-              aria-label="Refresh orders"
-              title="Refresh"
+              aria-label={t("orders.refresh_aria")}
+              title={t("orders.refresh")}
               className="p-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:text-orange-500 hover:border-orange-500/50 transition-all disabled:opacity-40"
             >
               <RefreshCw
@@ -670,7 +697,7 @@ export default function OrdersSection({
                 htmlFor="orders-filter-status"
                 className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-wider"
               >
-                Order Status
+                {t("orders.order_status")}
               </label>
               <select
                 id="orders-filter-status"
@@ -685,7 +712,7 @@ export default function OrdersSection({
               >
                 {statusOptions.map((o) => (
                   <option key={o.value} value={o.value}>
-                    {o.label}
+                    {t(o.key)}
                   </option>
                 ))}
               </select>
@@ -696,7 +723,7 @@ export default function OrdersSection({
                 htmlFor="orders-filter-payment"
                 className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-wider"
               >
-                Payment Status
+                {t("orders.payment_status")}
               </label>
               <select
                 id="orders-filter-payment"
@@ -709,7 +736,7 @@ export default function OrdersSection({
               >
                 {PAYMENT_STATUS_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>
-                    {o.label}
+                    {t(o.key)}
                   </option>
                 ))}
               </select>
@@ -721,7 +748,7 @@ export default function OrdersSection({
                 onClick={clearFilters}
                 className="self-end text-[10px] font-bold text-red-500 hover:text-red-600 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/50 hover:bg-red-50 dark:hover:bg-red-900/10 transition-all"
               >
-                Clear Filters
+                {t("orders.clear_filters")}
               </button>
             )}
           </div>
@@ -737,7 +764,7 @@ export default function OrdersSection({
           <div className="flex items-center gap-2.5 min-w-0">
             <AlertTriangle className="w-4 h-4 shrink-0" />
             <span className="text-xs font-semibold break-words">
-              Live updates paused
+              {t("orders.paused")}
               {syncedLabel ? ` · last synced ${syncedLabel}` : ""} — {pollError}
             </span>
           </div>
@@ -745,7 +772,7 @@ export default function OrdersSection({
             onClick={() => fetchOrders()}
             className="text-xs font-bold underline hover:no-underline shrink-0 self-start sm:self-auto"
           >
-            Retry
+            {t("common.retry")}
           </button>
         </div>
       )}
@@ -785,13 +812,13 @@ export default function OrdersSection({
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm">
           <EmptyState
             icon={ShoppingBag}
-            title="No orders found"
+            title={t("orders.none_title")}
             hint={
               hasFilters || searchQuery
-                ? "No orders match the current filters or search."
+                ? t("orders.none_filtered")
                 : activeSubTab === "live"
-                  ? "Ready for incoming transactions…"
-                  : "No completed orders yet."
+                  ? t("orders.none_live")
+                  : t("orders.none_archived")
             }
             action={
               hasFilters ? (
@@ -799,7 +826,7 @@ export default function OrdersSection({
                   onClick={clearFilters}
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-xs font-bold hover:bg-orange-500 dark:hover:bg-orange-500 dark:hover:text-white transition-colors"
                 >
-                  Clear filters
+                  {t("orders.clear_filters_short")}
                 </button>
               ) : undefined
             }
@@ -818,7 +845,7 @@ export default function OrdersSection({
               ).length;
               return (
                 <button
-                  key={lane.title}
+                  key={lane.key}
                   onClick={() => setSelectedMobileLane(idx)}
                   aria-pressed={selectedMobileLane === idx}
                   className={`text-[10px] font-bold px-3.5 py-2.5 rounded-xl whitespace-nowrap transition-all flex items-center gap-1.5 border shrink-0 ${
@@ -827,7 +854,7 @@ export default function OrdersSection({
                       : "bg-white border-zinc-200 text-zinc-500 dark:bg-zinc-950 dark:border-zinc-800"
                   }`}
                 >
-                  {lane.title}
+                  {t(lane.key)}
                   <span
                     className={`text-[8px] font-black px-1.5 py-0.5 rounded-full ${
                       selectedMobileLane === idx
@@ -850,7 +877,7 @@ export default function OrdersSection({
               );
               return (
                 <div
-                  key={lane.title}
+                  key={lane.key}
                   className={`flex flex-col space-y-4 ${
                     selectedMobileLane === idx
                       ? "flex animate-in fade-in duration-150"
@@ -862,7 +889,7 @@ export default function OrdersSection({
                     className={`p-3 border-b-2 ${lane.color} bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl flex justify-between items-center shadow-sm`}
                   >
                     <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
-                      {lane.title}
+                      {t(lane.key)}
                     </span>
                     <span className="bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-[10px] font-black rounded text-zinc-600 dark:text-zinc-300">
                       {colOrders.length}
@@ -870,10 +897,10 @@ export default function OrdersSection({
                   </div>
 
                   {/* Cards */}
-                  <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+                  <div className="space-y-3 max-h-[70vh] overflow-y-auto pe-1">
                     {colOrders.length === 0 ? (
                       <div className="p-8 text-center text-zinc-500 dark:text-zinc-400 text-[10px] italic border border-dashed border-zinc-200 dark:border-zinc-800 rounded-xl">
-                        Empty Lane
+                        {t("orders.empty_lane")}
                       </div>
                     ) : (
                       colOrders.map((order) => (
@@ -882,7 +909,7 @@ export default function OrdersSection({
                           type="button"
                           onClick={() => openOrder(order)}
                           aria-label={`Open order ${orderRef(order)}`}
-                          className={`w-full text-left bg-white dark:bg-zinc-900 border p-4 rounded-xl shadow-sm hover:border-orange-500/30 hover:shadow transition-all duration-200 space-y-3 ${
+                          className={`w-full text-start bg-white dark:bg-zinc-900 border p-4 rounded-xl shadow-sm hover:border-orange-500/30 hover:shadow transition-all duration-200 space-y-3 ${
                             newOrderIds.includes(order.id)
                               ? "border-orange-500 ring-2 ring-orange-500/30"
                               : "border-zinc-200 dark:border-zinc-800"
@@ -894,14 +921,14 @@ export default function OrdersSection({
                               {orderRef(order)}
                             </span>
                             <span className="text-[10px] font-black text-orange-500 shrink-0">
-                              {formatMoney(order.total)}
+                              {formatMoney(order.total, orderCurrency(order))}
                             </span>
                           </div>
                           <div className="flex items-center gap-2.5 bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl border border-zinc-100 dark:border-zinc-800">
                             {order.restaurant?.logo ? (
                               <img
                                 src={order.restaurant.logo}
-                                alt={`${restaurantName(order) || "Restaurant"} logo`}
+                                alt={`${restaurantName(order) || t("orders.restaurant_alt")} logo`}
                                 className="w-8 h-8 rounded-lg object-contain shadow-sm border border-zinc-200 dark:border-zinc-700 shrink-0 bg-white p-0.5"
                               />
                             ) : (
@@ -911,7 +938,8 @@ export default function OrdersSection({
                             )}
                             <div className="flex-1 min-w-0">
                               <p className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 truncate">
-                                {restaurantName(order) || "Unknown Restaurant"}
+                                {restaurantName(order) ||
+                                  t("orders.unknown_restaurant")}
                               </p>
                               {(customerName(order) || order.customerId) && (
                                 <p className="text-[9px] text-zinc-500 dark:text-zinc-400 truncate flex items-center gap-1 mt-0.5 font-medium">
@@ -933,14 +961,14 @@ export default function OrdersSection({
                                   >
                                     <div className="flex justify-between items-start gap-2">
                                       <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                                        <span className="text-orange-500 font-bold mr-1">
+                                        <span className="text-orange-500 font-bold me-1">
                                           {item.quantity}x
                                         </span>
                                         {item.name ?? item.menuItemId}
                                       </span>
                                     </div>
                                     {item.notes && (
-                                      <div className="text-[8px] text-zinc-500 dark:text-zinc-400 mt-0.5 whitespace-pre-wrap pl-2.5 border-l-2 border-zinc-200 dark:border-zinc-700 line-clamp-3">
+                                      <div className="text-[8px] text-zinc-500 dark:text-zinc-400 mt-0.5 whitespace-pre-wrap ps-2.5 border-s-2 border-zinc-200 dark:border-zinc-700 line-clamp-3">
                                         {item.notes}
                                       </div>
                                     )}
@@ -975,17 +1003,17 @@ export default function OrdersSection({
       {showBoard && activeSubTab === "archive" && displayOrders.length > 0 && (
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full text-start text-xs">
               <thead className="bg-zinc-50 dark:bg-zinc-800/40 text-zinc-500 dark:text-zinc-400 uppercase text-[9px] font-bold tracking-wider border-b border-zinc-100 dark:border-zinc-800">
                 <tr>
-                  <th className="p-4 font-black">Order</th>
-                  <th className="p-4 font-black">Restaurant</th>
-                  <th className="p-4 font-black">Customer</th>
-                  <th className="p-4 font-black">Total</th>
-                  <th className="p-4 font-black">Payment</th>
-                  <th className="p-4 font-black">Status</th>
-                  <th className="p-4 font-black">Date</th>
-                  <th className="p-4 font-black text-right">Actions</th>
+                  <th className="p-4 font-black">{t("orders.col_order")}</th>
+                  <th className="p-4 font-black">{t("orders.col_restaurant")}</th>
+                  <th className="p-4 font-black">{t("orders.col_customer")}</th>
+                  <th className="p-4 font-black">{t("orders.col_total")}</th>
+                  <th className="p-4 font-black">{t("orders.col_payment")}</th>
+                  <th className="p-4 font-black">{t("common.status")}</th>
+                  <th className="p-4 font-black">{t("orders.col_date")}</th>
+                  <th className="p-4 font-black text-end">{t("common.actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -1004,7 +1032,7 @@ export default function OrdersSection({
                       {customerName(order) || "—"}
                     </td>
                     <td className="p-4 font-black text-zinc-950 dark:text-white">
-                      {formatMoney(order.total)}
+                      {formatMoney(order.total, orderCurrency(order))}
                     </td>
                     <td className="p-4">
                       <StatusPill status={order.paymentStatus} />
@@ -1015,12 +1043,12 @@ export default function OrdersSection({
                     <td className="p-4 text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
                       {formatDate(order.createdAt)}
                     </td>
-                    <td className="p-4 text-right">
+                    <td className="p-4 text-end">
                       <button
                         onClick={() => openOrder(order)}
                         className="text-orange-500 font-bold hover:underline px-2 py-1"
                       >
-                        Inspect
+                        {t("orders.inspect")}
                       </button>
                     </td>
                   </tr>
@@ -1034,7 +1062,7 @@ export default function OrdersSection({
       {/* ── Pagination ── */}
       {totalPages > 1 && showBoard && (
         <nav
-          aria-label="Order pages"
+          aria-label={t("orders.pages_aria")}
           className="flex items-center justify-between bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-5 py-3 rounded-2xl shadow-sm"
         >
           <span className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400">
@@ -1046,10 +1074,10 @@ export default function OrdersSection({
               id="orders-prev-page"
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              aria-label="Previous page"
+              aria-label={t("orders.prev_page")}
               className="p-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:text-orange-500 hover:border-orange-400 disabled:opacity-30 transition-all"
             >
-              <ChevronLeft className="w-4 h-4" />
+              <ChevronLeft className="w-4 h-4 rtl:rotate-180" />
             </button>
             {[...Array(Math.min(5, totalPages))].map((_, i) => {
               const pageNum =
@@ -1076,10 +1104,10 @@ export default function OrdersSection({
               id="orders-next-page"
               disabled={page >= totalPages}
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              aria-label="Next page"
+              aria-label={t("orders.next_page")}
               className="p-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:text-orange-500 hover:border-orange-400 disabled:opacity-30 transition-all"
             >
-              <ChevronRight className="w-4 h-4" />
+              <ChevronRight className="w-4 h-4 rtl:rotate-180" />
             </button>
           </div>
         </nav>
@@ -1092,7 +1120,7 @@ export default function OrdersSection({
         maxWidth="max-w-2xl"
         title={
           selectedOrder
-            ? `${orderRef(selectedOrder)} · ${restaurantName(selectedOrder) || "Order detail"}`
+            ? `${orderRef(selectedOrder)} · ${restaurantName(selectedOrder) || t("orders.detail_fallback")}`
             : ""
         }
         description={
@@ -1121,7 +1149,7 @@ export default function OrdersSection({
             {detailLoading && (
               <div className="flex items-center justify-center gap-2 py-4 text-zinc-500 dark:text-zinc-400 text-xs">
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Loading full details…
+                {t("orders.loading_detail")}
               </div>
             )}
 
@@ -1129,13 +1157,14 @@ export default function OrdersSection({
             <div className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-xl bg-zinc-50 dark:bg-zinc-900/30 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <div className="space-y-1.5">
                 <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
-                  Current Status
+                  {t("orders.current_status")}
                 </p>
                 <StatusPill status={selectedOrder.status} />
               </div>
               <WorkflowControls
                 order={selectedOrder}
                 busy={updatingId === selectedOrder.id}
+                isOwnerView={isOwnerView}
                 onConfirm={() => handleUpdateStatus(selectedOrder, "confirmed")}
                 onDispatch={() =>
                   handleUpdateStatus(selectedOrder, "out_for_delivery")
@@ -1150,7 +1179,7 @@ export default function OrdersSection({
             {selectedOrder.items && selectedOrder.items.length > 0 && (
               <div className="space-y-3">
                 <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">
-                  Basket Breakdown
+                  {t("orders.basket")}
                 </h4>
                 <div className="border border-zinc-100 dark:border-zinc-800 rounded-xl divide-y divide-zinc-100 dark:divide-zinc-800 overflow-hidden">
                   {(selectedOrder.items as OrderItemLike[]).map((item, idx) => (
@@ -1160,14 +1189,19 @@ export default function OrdersSection({
                     >
                       <div className="flex-1">
                         <p className="font-bold text-zinc-800 dark:text-zinc-200 text-sm">
-                          <span className="text-orange-500 font-black mr-2">
+                          <span className="text-orange-500 font-black me-2">
                             {item.quantity}x
                           </span>
                           {item.name ?? item.menuItemId}
                         </p>
                         {(item.unitPrice != null || item.price != null) && (
                           <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1">
-                            Unit: {formatMoney(item.unitPrice ?? item.price)}
+                            {t("orders.unit", {
+                              price: formatMoney(
+                                item.unitPrice ?? item.price,
+                                orderCurrency(selectedOrder),
+                              ),
+                            })}
                           </p>
                         )}
                         {item.notes && (
@@ -1178,11 +1212,12 @@ export default function OrdersSection({
                       </div>
                       <span className="font-extrabold text-zinc-900 dark:text-white shrink-0 mt-0.5">
                         {item.subtotal != null
-                          ? formatMoney(item.subtotal)
+                          ? formatMoney(item.subtotal, orderCurrency(selectedOrder))
                           : item.unitPrice != null || item.price != null
                             ? formatMoney(
                                 Number(item.unitPrice ?? item.price) *
                                   (item.quantity || 1),
+                                orderCurrency(selectedOrder),
                               )
                             : "—"}
                       </span>
@@ -1197,59 +1232,59 @@ export default function OrdersSection({
               {/* Billing */}
               <div className="space-y-3">
                 <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">
-                  Billing Invoice
+                  {t("orders.invoice")}
                 </h4>
                 <div className="p-4 rounded-xl border border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/20 text-xs space-y-2.5 text-zinc-600 dark:text-zinc-400">
                   {selectedOrder.subtotal != null && (
                     <div className="flex justify-between">
-                      <span>Subtotal</span>
+                      <span>{t("orders.subtotal")}</span>
                       <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                        {formatMoney(selectedOrder.subtotal)}
+                        {formatMoney(selectedOrder.subtotal, orderCurrency(selectedOrder))}
                       </span>
                     </div>
                   )}
                   {selectedOrder.deliveryFee != null && (
                     <div className="flex justify-between">
-                      <span>Delivery Fee</span>
+                      <span>{t("common.delivery_fee")}</span>
                       <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                        {formatMoney(selectedOrder.deliveryFee)}
+                        {formatMoney(selectedOrder.deliveryFee, orderCurrency(selectedOrder))}
                       </span>
                     </div>
                   )}
                   {selectedOrder.serviceFee != null && (
                     <div className="flex justify-between">
-                      <span>Service Fee</span>
+                      <span>{t("orders.service_fee")}</span>
                       <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                        {formatMoney(selectedOrder.serviceFee)}
+                        {formatMoney(selectedOrder.serviceFee, orderCurrency(selectedOrder))}
                       </span>
                     </div>
                   )}
                   {selectedOrder.discount != null &&
                     selectedOrder.discount > 0 && (
                       <div className="flex justify-between text-red-600 dark:text-red-400 font-semibold">
-                        <span>Discount</span>
-                        <span>-{formatMoney(selectedOrder.discount)}</span>
+                        <span>{t("orders.discount")}</span>
+                        <span>-{formatMoney(selectedOrder.discount, orderCurrency(selectedOrder))}</span>
                       </div>
                     )}
                   <div className="flex justify-between pt-2.5 border-t border-zinc-200 dark:border-zinc-700 text-sm font-black text-zinc-900 dark:text-white">
-                    <span>Total</span>
+                    <span>{t("orders.total")}</span>
                     <span className="text-orange-500">
-                      {formatMoney(selectedOrder.total)}
+                      {formatMoney(selectedOrder.total, orderCurrency(selectedOrder))}
                     </span>
                   </div>
                   <div className="flex justify-between text-[10px] pt-1">
-                    <span>Payment Method</span>
+                    <span>{t("orders.payment_method")}</span>
                     <span className="font-bold capitalize">
                       {selectedOrder.paymentMethod ?? "—"}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-[10px] gap-2">
-                    <span>Payment Status</span>
+                    <span>{t("orders.payment_status")}</span>
                     <StatusPill status={selectedOrder.paymentStatus} />
                   </div>
                   <div className="flex justify-between items-center text-[10px] gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
-                    <span>Order ID</span>
-                    <span className="font-mono text-[9px] text-zinc-500 dark:text-zinc-400 break-all text-right">
+                    <span>{t("orders.order_id")}</span>
+                    <span className="font-mono text-[9px] text-zinc-500 dark:text-zinc-400 break-all text-end">
                       {selectedOrder.id}
                     </span>
                   </div>
@@ -1259,7 +1294,7 @@ export default function OrdersSection({
               {/* Participants */}
               <div className="space-y-3">
                 <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">
-                  Participants
+                  {t("orders.participants")}
                 </h4>
                 <div className="space-y-2.5">
                   {customerName(selectedOrder) && (
@@ -1270,7 +1305,7 @@ export default function OrdersSection({
                           {customerName(selectedOrder)}
                         </p>
                         <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                          Customer
+                          {t("orders.customer")}
                         </p>
                       </div>
                     </div>
@@ -1283,7 +1318,7 @@ export default function OrdersSection({
                           {restaurantName(selectedOrder)}
                         </p>
                         <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                          Restaurant partner
+                          {t("orders.restaurant_partner")}
                         </p>
                       </div>
                     </div>
@@ -1293,12 +1328,12 @@ export default function OrdersSection({
                     <div>
                       <p className="font-bold text-xs text-zinc-800 dark:text-zinc-200">
                         {selectedOrder.driverName ??
-                          "Awaiting dispatch assignment"}
+t("orders.awaiting_dispatch")}
                       </p>
                       <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
                         {selectedOrder.driverId
-                          ? "On-trip tracking active"
-                          : "No rider assigned yet"}
+                          ? t("orders.tracking_active")
+                          : t("orders.no_rider")}
                       </p>
                     </div>
                   </div>
@@ -1310,7 +1345,7 @@ export default function OrdersSection({
             {selectedOrder.deliveryAddress && (
               <div className="space-y-3">
                 <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">
-                  Delivery Details
+                  {t("orders.delivery_details")}
                 </h4>
                 <div className="flex flex-col gap-3 p-4 rounded-xl border border-zinc-100 dark:border-zinc-800/80">
                   <div className="flex gap-3">
@@ -1338,7 +1373,7 @@ export default function OrdersSection({
                       )}
                       {selectedOrder.deliveryAddress.deliveryInstructions && (
                         <p className="mt-2 p-2 bg-orange-500/10 text-orange-600 dark:text-orange-400 rounded border border-orange-500/20 italic">
-                          Note: &ldquo;
+                          {t("orders.note")} &ldquo;
                           {selectedOrder.deliveryAddress.deliveryInstructions}
                           &rdquo;
                         </p>
@@ -1368,7 +1403,7 @@ export default function OrdersSection({
             {selectedOrder.customerNotes && (
               <div className="p-3.5 rounded-xl border border-amber-200/60 dark:border-amber-800/30 bg-amber-50/50 dark:bg-amber-900/10 text-xs text-amber-700 dark:text-amber-400">
                 <p className="font-bold mb-1 flex items-center gap-1.5">
-                  <MapPin className="w-3.5 h-3.5" /> Customer Note
+                  <MapPin className="w-3.5 h-3.5" /> {t("orders.customer_note")}
                 </p>
                 <p>{selectedOrder.customerNotes}</p>
               </div>
@@ -1378,9 +1413,9 @@ export default function OrdersSection({
             {selectedOrder.timeline && selectedOrder.timeline.length > 0 && (
               <div className="space-y-4 border-t border-zinc-100 dark:border-zinc-800 pt-5">
                 <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">
-                  Order Timeline
+                  {t("orders.timeline")}
                 </h4>
-                <div className="space-y-4 relative before:absolute before:left-3 before:top-2 before:bottom-2 before:w-[1px] before:bg-zinc-200 dark:before:bg-zinc-800">
+                <div className="space-y-4 relative before:absolute before:start-3 before:top-2 before:bottom-2 before:w-[1px] before:bg-zinc-200 dark:before:bg-zinc-800">
                   {selectedOrder.timeline.map((event, idx) => (
                     <div key={idx} className="flex gap-4 relative">
                       <div className="w-6 h-6 rounded-full bg-zinc-50 dark:bg-zinc-800 border-2 border-zinc-300 dark:border-zinc-700 flex items-center justify-center shrink-0 z-10">
@@ -1419,9 +1454,16 @@ export default function OrdersSection({
  * new identity on every keystroke, so React unmounted and remounted the whole
  * control strip (and its focus) each time.
  */
+/**
+ * A restaurant owner and an admin do not have the same powers over an order.
+ * The API gives owners accept / reject / out-for-delivery and nothing else —
+ * "Mark Delivered" and "Cancel Order" belong to the driver and the customer.
+ * Rendering them for owners offered two buttons that could only ever fail.
+ */
 function WorkflowControls({
   order,
   busy,
+  isOwnerView,
   onConfirm,
   onDispatch,
   onDeliver,
@@ -1430,16 +1472,19 @@ function WorkflowControls({
 }: {
   order: OrderResponse;
   busy: boolean;
+  isOwnerView: boolean;
   onConfirm: () => void;
   onDispatch: () => void;
   onDeliver: () => void;
   onReject: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useI18n();
+
   if (busy)
     return (
       <span className="flex items-center gap-1.5 text-[10px] text-zinc-500 dark:text-zinc-400 font-bold">
-        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Updating…
+        <Loader2 className="w-3.5 h-3.5 animate-spin" /> {t("orders.updating")}
       </span>
     );
 
@@ -1451,13 +1496,13 @@ function WorkflowControls({
             onClick={onConfirm}
             className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] px-3.5 py-2 rounded-lg flex items-center gap-1 transition-all"
           >
-            <Check className="w-3.5 h-3.5" /> Confirm Order
+            <Check className="w-3.5 h-3.5" /> {t("orders.confirm_order")}
           </button>
           <button
             onClick={onReject}
             className="bg-zinc-100 hover:bg-red-500 hover:text-white text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 font-bold text-[10px] px-3.5 py-2 rounded-lg transition-all"
           >
-            Reject
+            {t("orders.reject")}
           </button>
         </>
       )}
@@ -1467,27 +1512,35 @@ function WorkflowControls({
           onClick={onDispatch}
           className="bg-blue-500 hover:bg-blue-600 text-white font-bold text-[10px] px-3.5 py-2 rounded-lg flex items-center gap-1 transition-all"
         >
-          <Bike className="w-3.5 h-3.5" /> Dispatch Rider
+          <Bike className="w-3.5 h-3.5" /> {t("orders.dispatch_rider")}
         </button>
       )}
 
-      {order.status === "out_for_delivery" && (
+      {order.status === "out_for_delivery" && !isOwnerView && (
         <button
           onClick={onDeliver}
           className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] px-3.5 py-2 rounded-lg flex items-center gap-1 transition-all"
         >
-          <CheckCircle2 className="w-3.5 h-3.5" /> Mark Delivered
+          <CheckCircle2 className="w-3.5 h-3.5" /> {t("orders.mark_delivered")}
         </button>
       )}
 
       {/* Cancel fallback for any active order that isn't done */}
-      {!DONE_STATUSES.includes(order.status) && order.status !== "pending" && (
-        <button
-          onClick={onCancel}
-          className="text-[10px] text-zinc-500 dark:text-zinc-400 hover:text-red-500 font-bold pl-2 border-l border-zinc-200 dark:border-zinc-800 transition-colors"
-        >
-          Cancel Order
-        </button>
+      {!isOwnerView &&
+        !DONE_STATUSES.includes(order.status) &&
+        order.status !== "pending" && (
+          <button
+            onClick={onCancel}
+            className="text-[10px] text-zinc-500 dark:text-zinc-400 hover:text-red-500 font-bold ps-2 border-s border-zinc-200 dark:border-zinc-800 transition-colors"
+          >
+            {t("orders.cancel_order")}
+          </button>
+        )}
+
+      {isOwnerView && order.status === "out_for_delivery" && (
+        <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold">
+          {t("orders.driver_confirms")}
+        </span>
       )}
     </div>
   );

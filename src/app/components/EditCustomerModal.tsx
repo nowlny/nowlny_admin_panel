@@ -3,8 +3,13 @@
 import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
-import { customersService, CustomerUpdateData } from "../../services/customers";
+import {
+  customersService,
+  CustomerUpdateData,
+  CustomerStatus,
+} from "../../services/customers";
 import Modal from "./ui/Modal";
+import { useI18n } from "../../lib/i18n";
 
 interface EditCustomerModalProps {
   isOpen: boolean;
@@ -21,6 +26,7 @@ export default function EditCustomerModal({
   customerId,
   customerData,
 }: EditCustomerModalProps) {
+  const { t } = useI18n();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [formData, setFormData] = useState({
@@ -60,18 +66,18 @@ export default function EditCustomerModal({
       fullName: formData.fullName,
       phoneNumber: formData.phoneNumber,
       nickname: formData.nickname || undefined,
-      status: formData.status,
+      status: formData.status as CustomerStatus,
     };
 
     try {
       await customersService.updateCustomer(customerId, payload);
-      toast.success("Customer updated successfully!");
+      toast.success(t("customers.updated"));
       onSuccess();
       onClose();
     } catch (err: any) {
       console.error("Failed to update customer", err);
       toast.error(
-        err.message || "An error occurred while updating the customer.",
+        err.message || t("customers.update_failed"),
       );
     } finally {
       setIsSubmitting(false);
@@ -87,7 +93,7 @@ export default function EditCustomerModal({
     <Modal
       isOpen={isOpen && !!customerId}
       onClose={onClose}
-      title="Edit Customer"
+      title={t("customers.edit_title")}
       description={customerData?.name}
       // Backdrop click / Escape must not silently discard edits.
       dismissable={false}
@@ -98,7 +104,7 @@ export default function EditCustomerModal({
             onClick={onClose}
             className="px-4 py-2 text-sm font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
           >
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             type="submit"
@@ -109,10 +115,10 @@ export default function EditCustomerModal({
             {isSubmitting ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Updating...
+                {t("customers.saving")}
               </>
             ) : (
-              "Save Changes"
+              t("customers.save")
             )}
           </button>
         </>
@@ -125,7 +131,7 @@ export default function EditCustomerModal({
       >
         <div className="space-y-1.5">
           <label htmlFor="edit-customer-fullName" className={labelClass}>
-            Full Name
+            {t("customers.full_name")}
           </label>
           <input
             id="edit-customer-fullName"
@@ -139,7 +145,7 @@ export default function EditCustomerModal({
 
         <div className="space-y-1.5">
           <label htmlFor="edit-customer-phoneNumber" className={labelClass}>
-            Phone Number
+            {t("customers.phone")}
           </label>
           <input
             id="edit-customer-phoneNumber"
@@ -155,7 +161,7 @@ export default function EditCustomerModal({
 
         <div className="space-y-1.5">
           <label htmlFor="edit-customer-nickname" className={labelClass}>
-            Nickname (Optional)
+            {t("customers.nickname")}
           </label>
           <input
             id="edit-customer-nickname"
@@ -168,7 +174,7 @@ export default function EditCustomerModal({
 
         <div className="space-y-1.5">
           <label htmlFor="edit-customer-status" className={labelClass}>
-            Status
+            {t("customers.status")}
           </label>
           {/* Only the two states the customer list can actually render — an
               `inactive` customer showed up as a red "Suspended" pill. */}
@@ -177,10 +183,10 @@ export default function EditCustomerModal({
             name="status"
             value={formData.status}
             onChange={handleChange}
-            className={`${inputClass} pr-8`}
+            className={`${inputClass} pe-8`}
           >
-            <option value="active">Active</option>
-            <option value="suspended">Suspended</option>
+            <option value="active">{t("status.active")}</option>
+            <option value="suspended">{t("status.suspended")}</option>
           </select>
         </div>
       </form>

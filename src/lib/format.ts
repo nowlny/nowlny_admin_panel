@@ -10,6 +10,33 @@
 
 const EM_DASH = "—";
 
+/* ---------------------------------------------------------------------------
+   Active display locale.
+
+   Dates were pinned to `en-GB` so the server and client render identical
+   strings (a mismatch is a hydration error). That still holds — the locale
+   only ever changes in the browser, after hydration, when the operator picks
+   a language.
+
+   Arabic uses the `-u-nu-latn` extension so month and day names localise but
+   digits stay Western. An ops panel showing order totals in Arabic-Indic
+   numerals next to IDs and phone numbers in Latin ones is harder to scan, not
+   easier.
+--------------------------------------------------------------------------- */
+
+const LOCALE_TAGS = {
+  en: "en-GB",
+  ar: "ar-u-nu-latn",
+} as const;
+
+let activeLocale: "en" | "ar" = "en";
+
+export function setFormatterLocale(locale: "en" | "ar") {
+  activeLocale = locale;
+}
+
+const tag = () => LOCALE_TAGS[activeLocale];
+
 /** Formats money with the record's own currency. Falls back to a plain number. */
 export function formatMoney(
   value: unknown,
@@ -58,7 +85,7 @@ export function formatDate(value: unknown): string {
   if (!value) return EM_DASH;
   const d = new Date(value as string);
   if (Number.isNaN(d.getTime())) return EM_DASH;
-  return new Intl.DateTimeFormat("en-GB", {
+  return new Intl.DateTimeFormat(tag(), {
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -70,7 +97,7 @@ export function formatDateTime(value: unknown): string {
   if (!value) return EM_DASH;
   const d = new Date(value as string);
   if (Number.isNaN(d.getTime())) return EM_DASH;
-  return new Intl.DateTimeFormat("en-GB", {
+  return new Intl.DateTimeFormat(tag(), {
     day: "2-digit",
     month: "short",
     hour: "2-digit",
@@ -84,7 +111,7 @@ export function formatTime(value: unknown): string {
   if (!value) return EM_DASH;
   const d = new Date(value as string);
   if (Number.isNaN(d.getTime())) return EM_DASH;
-  return new Intl.DateTimeFormat("en-GB", {
+  return new Intl.DateTimeFormat(tag(), {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,

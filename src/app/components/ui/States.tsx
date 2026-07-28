@@ -2,6 +2,7 @@
 
 import React from "react";
 import { AlertTriangle, RefreshCw, SearchX } from "lucide-react";
+import { useI18n } from "../../../lib/i18n";
 
 /* ---------------------------------------------------------------------------
    Empty, error and loading states.
@@ -43,12 +44,14 @@ export function EmptyState({
 export function ErrorState({
   message,
   onRetry,
-  title = "Couldn't load this data",
+  title,
 }: {
   message?: string | null;
   onRetry?: () => void;
   title?: string;
 }) {
+  const { t } = useI18n();
+  const heading = title ?? t("states.error_title");
   return (
     <div
       role="alert"
@@ -58,10 +61,10 @@ export function ErrorState({
         <AlertTriangle className="w-5 h-5" />
       </div>
       <h3 className="text-sm font-bold text-zinc-900 dark:text-white">
-        {title}
+        {heading}
       </h3>
       <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1.5 max-w-sm break-words">
-        {message || "The server didn't respond as expected."}
+        {message || t("states.error_body")}
       </p>
       {onRetry && (
         <button
@@ -70,7 +73,7 @@ export function ErrorState({
           className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-xs font-bold hover:bg-orange-500 dark:hover:bg-orange-500 dark:hover:text-white transition-colors"
         >
           <RefreshCw className="w-3.5 h-3.5" />
-          Try again
+          {t("common.try_again")}
         </button>
       )}
     </div>
@@ -85,6 +88,7 @@ export function ErrorBanner({
   message: string;
   onRetry?: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div
       role="alert"
@@ -100,7 +104,7 @@ export function ErrorBanner({
           onClick={onRetry}
           className="text-xs font-bold underline hover:no-underline shrink-0"
         >
-          Retry
+          {t("common.retry")}
         </button>
       )}
     </div>

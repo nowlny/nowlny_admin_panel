@@ -1,76 +1,72 @@
-import { apiClient } from './apiClient';
+import { apiClient, buildQuery, toPaginated } from "./apiClient";
 
+export type CustomerStatus = "active" | "inactive" | "suspended";
+
+/** The list joins the customer row to its `user` record. */
 export interface CustomerResponse {
   id: string;
-  name?: string;
-  email?: string;
-  phone?: string;
-  status?: string;
+  userId?: string;
+  nickname?: string | null;
+  status?: CustomerStatus;
   createdAt?: string;
-  avatar?: string;
-  [key: string]: any;
+  updatedAt?: string;
+  user?: {
+    id?: string;
+    fullName?: string | null;
+    nickname?: string | null;
+    phoneNumber?: string | null;
+    email?: string | null;
+    profileImage?: string | null;
+    createdAt?: string;
+  } | null;
+  addresses?: unknown[];
+  [key: string]: unknown;
 }
 
 export interface CustomerCreateData {
   phoneNumber: string;
   fullName: string;
   nickname?: string;
-  status?: string;
+  status?: CustomerStatus;
 }
 
 export type CustomerUpdateData = Partial<CustomerCreateData>;
 
+export interface ListCustomersParams {
+  search?: string;
+  status?: CustomerStatus | "all" | "";
+  page?: number;
+  limit?: number;
+}
+
 export const customersService = {
-  getCustomers: () => {
-    return apiClient<CustomerResponse[]>('/api/v1/customers');
+  /**
+   * `GET /api/v1/customers` — paginated, with server-side `search` and
+   * `status`. The panel used to pull one unfiltered page and filter it in the
+   * browser, so searching only ever looked at the first 20 accounts.
+   */
+  getCustomers: async (params?: ListCustomersParams) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/customers${buildQuery({ ...params })}`,
+    );
+    return toPaginated<CustomerResponse>(payload, params?.limit ?? 20);
   },
-  
-  getCustomerById: (id: string) => {
-    return apiClient<CustomerResponse>(`/api/v1/customers/${id}`);
-  },
-  
-  createCustomer: (data: CustomerCreateData) => {
-    return apiClient<CustomerResponse>('/api/v1/customers', {
-      method: 'POST',
+
+  getCustomerById: (id: string) =>
+    apiClient<CustomerResponse>(`/api/v1/customers/${id}`),
+
+  createCustomer: (data: CustomerCreateData) =>
+    apiClient<CustomerResponse>("/api/v1/customers", {
+      method: "POST",
       body: JSON.stringify(data),
-    });
-  },
-  
-  updateCustomer: (id: string, data: CustomerUpdateData) => {
-    return apiClient<CustomerResponse>(`/api/v1/customers/${id}`, {
-      method: 'PATCH',
+    }),
+
+  updateCustomer: (id: string, data: CustomerUpdateData) =>
+    apiClient<CustomerResponse>(`/api/v1/customers/${id}`, {
+      method: "PATCH",
       body: JSON.stringify(data),
-    });
-  },
-  
-  deleteCustomer: (id: string) => {
-    return apiClient<void>(`/api/v1/customers/${id}`, {
-      method: 'DELETE',
-    });
-  },
+    }),
 
-  /**
-   * Get my favorite restaurants
-   */
-  getMyFavorites: () => {
-    return apiClient<any[]>('/api/v1/customers/me/favorites');
-  },
-
-  /**
-   * Add a restaurant to favorites
-   */
-  addFavorite: (restaurantId: string) => {
-    return apiClient<void>(`/api/v1/customers/me/favorites/${restaurantId}`, {
-      method: 'POST',
-    });
-  },
-
-  /**
-   * Remove a restaurant from favorites
-   */
-  removeFavorite: (restaurantId: string) => {
-    return apiClient<void>(`/api/v1/customers/me/favorites/${restaurantId}`, {
-      method: 'DELETE',
-    });
-  }
+  deleteCustomer: (id: string) =>
+    apiClient<void>(`/api/v1/customers/${id}`, { method: "DELETE" }),
 };

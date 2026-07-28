@@ -53,9 +53,6 @@ body {
      toasts (which render outside the `font-sans` app shell) fell back to Arial
      while the rest of the app rendered in Geist. */
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  transition:
-    background-color 200ms ease,
-    color 200ms ease;
 }
 
 /* Custom styling for native select dropdowns */
@@ -69,8 +66,35 @@ select {
   padding-right: 2.5rem !important;
 }
 
+/* In Arabic the chevron and its padding belong on the other edge, otherwise
+   the arrow sits on top of the first characters of the selected option. */
+[dir="rtl"] select {
+  background-position: left 0.75rem center;
+  padding-right: 0.625rem !important;
+  padding-left: 2.5rem !important;
+}
+
 .dark select {
   background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+}
+
+/* ---------------------------------------------------------------------------
+   Right-to-left
+   ---------------------------------------------------------------------------
+   Most of the layout is flex/grid and mirrors itself once `dir="rtl"` is on
+   <html>. These are the cases that don't: physical-property utilities that the
+   markup uses deliberately, plus the shimmer, which sweeps left-to-right.
+--------------------------------------------------------------------------- */
+
+[dir="rtl"] .skeleton::after {
+  animation-direction: reverse;
+}
+
+/* The `slide-in-from-*` utilities resolve to a physical X translation, so a
+   panel that should fly in from the trailing edge flies in from the wrong side
+   under RTL. Negating the sign preserves the intent. */
+[dir="rtl"] .animate-in {
+  --nowlny-enter-x-sign: -1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -92,7 +116,9 @@ select {
   from {
     opacity: var(--nowlny-enter-opacity, 1);
     transform: translate3d(
-        var(--nowlny-enter-translate-x, 0),
+        calc(
+          var(--nowlny-enter-translate-x, 0px) * var(--nowlny-enter-x-sign, 1)
+        ),
         var(--nowlny-enter-translate-y, 0),
         0
       )

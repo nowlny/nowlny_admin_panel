@@ -13,8 +13,7 @@ import {
   Loader2,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { Customer, loadDb } from "../data/mockData";
-import { customersService } from "../../services/customers";
+import { customersService, CustomerStatus } from "../../services/customers";
 import { ordersService, OrderResponse } from "../../services/orders";
 import AddCustomerModal from "./AddCustomerModal";
 import EditCustomerModal from "./EditCustomerModal";
@@ -23,82 +22,117 @@ import StatusPill from "./ui/StatusPill";
 import { useConfirm } from "./ui/ConfirmDialog";
 import { CardSkeletonGrid, EmptyState, ErrorState } from "./ui/States";
 import { formatAddress, formatDate, formatMoney } from "../../lib/format";
+import { useI18n, type MessageKey } from "../../lib/i18n";
 
-/** The list row carries a nickname the shared mock `Customer` type doesn't. */
-type CustomerRow = Customer & { nickname?: string };
+/** The flattened shape this screen renders — the API nests the user record. */
+interface CustomerRow {
+  id: string;
+  name: string;
+  nickname?: string;
+  email: string;
+  phone: string;
+  avatar: string;
+  status: CustomerStatus;
+  joinedDate: string;
+  addresses: string[];
+}
 
 interface CustomersSectionProps {
-  db: ReturnType<typeof loadDb>;
   searchQuery: string;
 }
+
+const PAGE_SIZE = 12;
+
+const STATUS_FILTERS: { value: CustomerStatus | "all"; key: MessageKey }[] = [
+  { value: "all", key: "common.all" },
+  { value: "active", key: "status.active" },
+  { value: "inactive", key: "status.inactive" },
+  { value: "suspended", key: "status.suspended" },
+];
 
 export default function CustomersSection({
   searchQuery,
 }: CustomersSectionProps) {
+  const { t } = useI18n();
   const confirm = useConfirm();
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [selectedCustId, setSelectedCustId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<
-    "All" | "Active" | "Suspended"
-  >("All");
+  const [statusFilter, setStatusFilter] = useState<CustomerStatus | "all">(
+    "all",
+  );
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<
     "status" | "delete" | null
   >(null);
 
+  // The header's search box drives the API's own `search` parameter.
+  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery);
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(searchQuery.trim()), 300);
+    return () => clearTimeout(id);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, statusFilter]);
+
   // Order history for the inspected customer, fetched per customer.
   const [customerOrders, setCustomerOrders] = useState<OrderResponse[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
 
+  /**
+   * The list endpoint takes `search`, `status`, `page` and `limit`. The panel
+   * used to request one unfiltered page and filter it in the browser, so the
+   * header's search box only ever looked at the first 20 accounts and the
+   * status chips could not reach anyone past them.
+   */
   const fetchCustomers = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
-      const response = await customersService.getCustomers();
+      const res = await customersService.getCustomers({
+        search: debouncedSearch || undefined,
+        status: statusFilter,
+        page,
+        limit: PAGE_SIZE,
+      });
 
-      // Handle both direct array responses and paginated responses (e.g., { data: [...] })
-      const apiCustomers = Array.isArray(response)
-        ? response
-        : (response as any)?.data || (response as any)?.customers;
-
-      if (apiCustomers && Array.isArray(apiCustomers)) {
-        const mapped: CustomerRow[] = apiCustomers.map((c: any) => ({
-          id: c.id,
-          name: c.user?.fullName || c.user?.nickname || "Unknown",
-          nickname: c.user?.nickname || c.nickname || "",
-          email: c.user?.email || "No email",
-          phone: c.user?.phoneNumber || c.phoneNumber || "No phone",
-          avatar: "👤",
-          status: (c.status === "active" ? "Active" : "Suspended") as
-            | "Active"
-            | "Suspended",
-          joinedDate: formatDate(c.user?.createdAt || c.createdAt),
-          totalSpent: Number(c.totalSpent) || 0,
-          ordersCount: Number(c.ordersCount) || 0,
-          // The API returns each address as an object; rendering one directly
-          // threw "Objects are not valid as a React child" and blanked the page.
-          addresses: Array.isArray(c.addresses)
-            ? c.addresses.map(formatAddress).filter(Boolean)
-            : [],
-        }));
-        setCustomers(mapped);
-      } else {
-        // Empty state from API or invalid response
-        setCustomers([]);
-      }
-    } catch (err: any) {
+      const mapped: CustomerRow[] = res.data.map((c) => ({
+        id: c.id,
+        name: c.user?.fullName || c.user?.nickname || c.nickname || "Unknown",
+        nickname: c.user?.nickname || c.nickname || "",
+        email: c.user?.email || "No email",
+        phone: c.user?.phoneNumber || "No phone",
+        avatar: "👤",
+        status: (c.status ?? "active") as CustomerStatus,
+        joinedDate: formatDate(c.user?.createdAt || c.createdAt),
+        // The API returns each address as an object; rendering one directly
+        // threw "Objects are not valid as a React child" and blanked the page.
+        addresses: Array.isArray(c.addresses)
+          ? c.addresses.map(formatAddress).filter(Boolean)
+          : [],
+      }));
+      setCustomers(mapped);
+      setTotal(res.total);
+      setTotalPages(Math.max(1, res.totalPages ?? 1));
+    } catch (err) {
       console.error("Failed to fetch customers:", err);
-      setError(err?.message || "Failed to load customers.");
+      setError(
+        err instanceof Error ? err.message : "Failed to load customers.",
+      );
       setCustomers([]);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [debouncedSearch, statusFilter, page]);
 
   useEffect(() => {
     fetchCustomers();
@@ -135,52 +169,42 @@ export default function CustomersSection({
     fetchCustomerOrders(selectedCustId);
   }, [selectedCustId, fetchCustomerOrders]);
 
-  // Filter customers
-  const filteredCustomers = customers.filter((c) => {
-    const query = searchQuery.toLowerCase();
-    const matchesSearch =
-      c.name.toLowerCase().includes(query) ||
-      c.email.toLowerCase().includes(query) ||
-      c.phone.toLowerCase().includes(query);
-
-    const matchesStatus = statusFilter === "All" || c.status === statusFilter;
-
-    return matchesSearch && matchesStatus;
-  });
+  // Filtering happens server side; this page is already the filtered slice.
+  const filteredCustomers = customers;
 
   const handleToggleStatus = async (cust: CustomerRow) => {
-    const newStatus = cust.status === "Active" ? "Suspended" : "Active";
-    const apiStatus = newStatus === "Active" ? "active" : "suspended";
+    const suspending = cust.status === "active";
+    const newStatus: CustomerStatus = suspending ? "suspended" : "active";
 
     const ok = await confirm({
-      title:
-        newStatus === "Suspended"
-          ? `Suspend ${cust.name}?`
-          : `Reactivate ${cust.name}?`,
-      description:
-        newStatus === "Suspended"
-          ? "The customer will be blocked from placing new orders until reactivated."
-          : "The customer will be able to place orders again.",
-      confirmLabel: newStatus === "Suspended" ? "Suspend" : "Reactivate",
-      variant: newStatus === "Suspended" ? "danger" : "default",
+      title: suspending
+        ? t("customers.suspend_title", { name: cust.name })
+        : t("customers.reactivate_title", { name: cust.name }),
+      description: suspending
+        ? t("customers.suspend_body")
+        : t("customers.reactivate_body"),
+      confirmLabel: suspending
+        ? t("customers.suspend_cta")
+        : t("customers.reactivate_cta"),
+      variant: suspending ? "danger" : "default",
     });
     if (!ok) return;
 
     try {
       setPendingAction("status");
-      await customersService.updateCustomer(cust.id, { status: apiStatus });
+      await customersService.updateCustomer(cust.id, { status: newStatus });
       // Only mirror the change locally once the server has accepted it.
       setCustomers((prev) =>
         prev.map((c) => (c.id === cust.id ? { ...c, status: newStatus } : c)),
       );
       toast.success(
-        newStatus === "Suspended"
-          ? `${cust.name} suspended.`
-          : `${cust.name} reactivated.`,
+        suspending
+          ? t("customers.suspended_toast", { name: cust.name })
+          : t("customers.reactivated_toast", { name: cust.name }),
       );
     } catch (err: any) {
       console.error("Failed to update status:", err);
-      toast.error(err?.message || "Failed to update status on server.");
+      toast.error(err?.message || t("customers.status_failed"));
     } finally {
       setPendingAction(null);
     }
@@ -188,10 +212,9 @@ export default function CustomersSection({
 
   const handleDeleteCustomer = async (cust: CustomerRow) => {
     const ok = await confirm({
-      title: `Permanently delete ${cust.name}?`,
-      description:
-        "This removes the customer account and cannot be undone. Their order history will no longer be reachable from this panel.",
-      confirmLabel: "Delete customer",
+      title: t("customers.delete_title", { name: cust.name }),
+      description: t("customers.delete_body"),
+      confirmLabel: t("customers.delete_cta"),
       variant: "danger",
       confirmPhrase: cust.name,
     });
@@ -202,11 +225,11 @@ export default function CustomersSection({
       await customersService.deleteCustomer(cust.id);
       setCustomers((prev) => prev.filter((c) => c.id !== cust.id));
       if (selectedCustId === cust.id) setSelectedCustId(null);
-      toast.success(`${cust.name} deleted.`);
+      toast.success(t("customers.deleted_toast", { name: cust.name }));
     } catch (err: any) {
       console.error("Failed to delete customer:", err);
       // Deliberately NOT removing the card — the record still exists server-side.
-      toast.error(err?.message || "Failed to delete customer on server.");
+      toast.error(err?.message || t("customers.delete_failed"));
     } finally {
       setPendingAction(null);
     }
@@ -219,7 +242,7 @@ export default function CustomersSection({
       return (
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
           <ErrorState
-            title="Couldn't load customers"
+            title={t("customers.load_failed")}
             message={error}
             onRetry={fetchCustomers}
           />
@@ -228,16 +251,20 @@ export default function CustomersSection({
     }
 
     if (filteredCustomers.length === 0) {
-      const isFiltered = customers.length > 0;
+      const isFiltered = !!debouncedSearch || statusFilter !== "all";
       return (
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
           <EmptyState
             icon={Users}
-            title={isFiltered ? "No matching customers" : "No customers yet"}
+            title={
+              isFiltered
+                ? t("customers.no_match_title")
+                : t("customers.none_title")
+            }
             hint={
               isFiltered
-                ? "Try relaxing the status filter or updating your search terms."
-                : "Customers appear here once they register, or you can add one manually."
+                ? t("customers.no_match_hint")
+                : t("customers.none_hint")
             }
             action={
               !isFiltered ? (
@@ -245,7 +272,7 @@ export default function CustomersSection({
                   onClick={() => setIsAddModalOpen(true)}
                   className="text-xs font-bold px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all shadow-sm"
                 >
-                  Add Customer
+                  {t("customers.add")}
                 </button>
               ) : undefined
             }
@@ -306,32 +333,27 @@ export default function CustomersSection({
               </div>
             </div>
 
-            {/* stats row & details action */}
+            {/*
+              The "Spend" and "Orders" tiles that used to sit here read
+              `totalSpent` and `ordersCount`, neither of which the customers
+              endpoint returns — so every card advertised $0.00 and 0 orders
+              for every customer on the platform. The real order history is one
+              click away in "Inspect Account", where it is actually fetched.
+            */}
             <div className="mt-5 pt-3.5 border-t border-zinc-100 dark:border-zinc-800 flex justify-between items-center gap-3">
-              <div className="flex gap-4">
-                <div>
-                  <p className="text-[9px] font-bold text-zinc-500 dark:text-zinc-400 uppercase">
-                    Spend
-                  </p>
-                  <p className="text-xs font-black text-zinc-900 dark:text-white mt-0.5">
-                    {formatMoney(cust.totalSpent, "USD")}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[9px] font-bold text-zinc-500 dark:text-zinc-400 uppercase">
-                    Orders
-                  </p>
-                  <p className="text-xs font-black text-zinc-900 dark:text-white mt-0.5">
-                    {cust.ordersCount}
-                  </p>
-                </div>
-              </div>
+              {cust.nickname ? (
+                <p className="text-[10px] text-zinc-500 dark:text-zinc-400 font-semibold truncate">
+                  “{cust.nickname}”
+                </p>
+              ) : (
+                <span />
+              )}
 
               <button
                 onClick={() => setSelectedCustId(cust.id)}
                 className="bg-zinc-900 hover:bg-orange-500 hover:text-white active:scale-95 text-[10px] font-bold text-white dark:bg-zinc-800 px-3 py-2 rounded-lg transition-all"
               >
-                Inspect Account
+                {t("customers.inspect")}
               </button>
             </div>
           </div>
@@ -346,39 +368,64 @@ export default function CustomersSection({
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         {/* Status Tab buttons */}
         <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/80">
-          {(["All", "Active", "Suspended"] as const).map((filter) => (
+          {STATUS_FILTERS.map((filter) => (
             <button
-              key={filter}
-              onClick={() => setStatusFilter(filter)}
-              aria-pressed={statusFilter === filter}
+              key={filter.value}
+              onClick={() => setStatusFilter(filter.value)}
+              aria-pressed={statusFilter === filter.value}
               className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 ${
-                statusFilter === filter
+                statusFilter === filter.value
                   ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800"
                   : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
               }`}
             >
-              {filter}
+              {t(filter.key)}
             </button>
           ))}
         </div>
 
         <div className="flex items-center gap-4">
           <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-            {filteredCustomers.length === customers.length
-              ? `${customers.length} customers`
-              : `Showing ${filteredCustomers.length} of ${customers.length} customers`}
+            {total === customers.length
+              ? t("customers.count", { count: total })
+              : t("customers.showing", {
+                  shown: customers.length,
+                  total,
+                })}
           </span>
           <button
             onClick={() => setIsAddModalOpen(true)}
             className="text-xs font-bold px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all shadow-sm"
           >
-            Add Customer
+            {t("customers.add")}
           </button>
         </div>
       </div>
 
       {/* Customer Grid List */}
       {renderList()}
+
+      {!isLoading && !error && totalPages > 1 && (
+        <div className="flex justify-center items-center gap-2">
+          <button
+            disabled={page === 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
+          >
+            {t("common.previous")}
+          </button>
+          <span className="text-xs font-semibold text-zinc-500">
+            Page {page} of {totalPages}
+          </span>
+          <button
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
+          >
+            {t("common.next")}
+          </button>
+        </div>
+      )}
 
       {/* Customer Inspect Modal */}
       {/* Hidden while the edit dialog is up: two stacked <Modal>s both listen
@@ -388,7 +435,7 @@ export default function CustomersSection({
         onClose={() => setSelectedCustId(null)}
         maxWidth="max-w-2xl"
         title={selectedCust?.name ?? ""}
-        description={`Account Registry ID: ${selectedCust?.id ?? ""}`}
+        description={t("customers.registry_id", { id: selectedCust?.id ?? "" })}
         icon={
           <span className="text-3xl p-1 bg-white dark:bg-zinc-800 rounded-xl shadow-sm">
             {selectedCust?.avatar}
@@ -401,13 +448,13 @@ export default function CustomersSection({
               {/* Account details */}
               <div className="space-y-4">
                 <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">
-                  Customer Profile
+                  {t("customers.profile")}
                 </h4>
 
                 <div className="space-y-2.5 text-xs text-zinc-600 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800/40 p-4 rounded-xl border border-zinc-100 dark:border-zinc-800">
                   <div className="flex justify-between gap-3">
                     <span className="font-semibold text-zinc-500 dark:text-zinc-400">
-                      Email Address
+                      {t("customers.email")}
                     </span>
                     <span className="font-bold text-zinc-800 dark:text-zinc-200 truncate">
                       {selectedCust.email}
@@ -415,7 +462,7 @@ export default function CustomersSection({
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="font-semibold text-zinc-500 dark:text-zinc-400">
-                      Phone Contact
+                      {t("customers.phone_contact")}
                     </span>
                     <span className="font-bold text-zinc-800 dark:text-zinc-200">
                       {selectedCust.phone}
@@ -423,7 +470,7 @@ export default function CustomersSection({
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="font-semibold text-zinc-500 dark:text-zinc-400">
-                      Registration Date
+                      {t("customers.registered_on")}
                     </span>
                     <span className="font-bold text-zinc-800 dark:text-zinc-200">
                       {selectedCust.joinedDate}
@@ -431,7 +478,7 @@ export default function CustomersSection({
                   </div>
                   <div className="flex justify-between items-center gap-3">
                     <span className="font-semibold text-zinc-500 dark:text-zinc-400">
-                      Account Status
+                      {t("customers.account_status")}
                     </span>
                     <StatusPill status={selectedCust.status} />
                   </div>
@@ -443,14 +490,14 @@ export default function CustomersSection({
                     onClick={() => setIsEditModalOpen(true)}
                     className="text-xs font-bold px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-all flex items-center justify-center gap-1.5"
                   >
-                    <span>Edit Customer Profile</span>
+                    <span>{t("customers.edit_profile")}</span>
                   </button>
                   <div className="flex gap-2">
                     <button
                       onClick={() => handleToggleStatus(selectedCust)}
                       disabled={pendingAction !== null}
                       className={`flex-1 text-xs font-bold px-3 py-2.5 rounded-lg border transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed ${
-                        selectedCust.status === "Active"
+                        selectedCust.status === "active"
                           ? "border-red-200 dark:border-red-500/30 text-red-600 dark:text-red-400 bg-red-500/5 hover:bg-red-500/10"
                           : "border-emerald-200 dark:border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 hover:bg-emerald-500/10"
                       }`}
@@ -461,9 +508,9 @@ export default function CustomersSection({
                         <Ban className="w-3.5 h-3.5" />
                       )}
                       <span>
-                        {selectedCust.status === "Active"
-                          ? "Suspend/Ban Account"
-                          : "Activate/Unban Account"}
+                        {selectedCust.status === "active"
+                          ? t("customers.suspend")
+                          : t("customers.activate")}
                       </span>
                     </button>
                     <button
@@ -476,7 +523,7 @@ export default function CustomersSection({
                       ) : (
                         <Trash2 className="w-3.5 h-3.5" />
                       )}
-                      <span>Delete</span>
+                      <span>{t("customers.delete")}</span>
                     </button>
                   </div>
                 </div>
@@ -485,11 +532,11 @@ export default function CustomersSection({
               {/* Addresses */}
               <div className="space-y-4">
                 <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider">
-                  Registered Locations
+                  {t("customers.locations")}
                 </h4>
                 {selectedCust.addresses.length === 0 ? (
                   <p className="text-[11px] text-zinc-500 dark:text-zinc-400 p-3 rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800">
-                    No delivery addresses saved on this account yet.
+                    {t("customers.no_addresses")}
                   </p>
                 ) : (
                   <div className="space-y-2">
@@ -510,26 +557,26 @@ export default function CustomersSection({
             {/* Past Transactions Log */}
             <div className="space-y-4 border-t border-zinc-100 dark:border-zinc-800 pt-5">
               <h4 className="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
-                <History className="w-4 h-4 text-orange-500" /> Order History Log
+                <History className="w-4 h-4 text-orange-500" /> {t("customers.history")}
                 {!ordersLoading &&
                   !ordersError &&
-                  ` (${customerOrders.length} transactions)`}
+                  ` ${t("customers.history_count", { count: customerOrders.length })}`}
               </h4>
 
               {ordersLoading ? (
                 <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400 py-4">
                   <Loader2 className="w-4 h-4 animate-spin text-orange-500" />
-                  Loading order history...
+                  {t("customers.history_loading")}
                 </div>
               ) : ordersError ? (
                 <ErrorState
-                  title="Couldn't load order history"
+                  title={t("customers.history_failed")}
                   message={ordersError}
                   onRetry={() => fetchCustomerOrders(selectedCust.id)}
                 />
               ) : customerOrders.length === 0 ? (
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 italic">
-                  No past orders found for this customer.
+                  {t("customers.history_empty")}
                 </p>
               ) : (
                 <div className="space-y-3">
@@ -547,7 +594,7 @@ export default function CustomersSection({
                           <span className="text-[10px] font-semibold text-orange-500 truncate">
                             {order.restaurantName ||
                               order.restaurant?.name ||
-                              "Unknown restaurant"}
+  t("customers.unknown_rest")}
                           </span>
                         </div>
                         <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1">
@@ -556,11 +603,11 @@ export default function CustomersSection({
                             (s, i) => s + (Number(i.quantity) || 0),
                             0,
                           )}{" "}
-                          items
+                          {t("customers.items_count", { count: "" }).trim()}
                         </p>
                       </div>
 
-                      <div className="text-right shrink-0">
+                      <div className="text-end shrink-0">
                         <span className="text-xs font-black text-zinc-900 dark:text-white">
                           {formatMoney(order.total, "USD")}
                         </span>

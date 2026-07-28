@@ -19,6 +19,7 @@ import Modal from "./ui/Modal";
 import { useConfirm } from "./ui/ConfirmDialog";
 import { EmptyState, ErrorState, TableSkeleton } from "./ui/States";
 
+import { useI18n } from "../../lib/i18n";
 const inputClass =
   "w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm text-zinc-900 dark:text-white rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500";
 const labelClass =
@@ -43,6 +44,7 @@ function pageWindow(current: number, total: number, span = 5): number[] {
 }
 
 export default function RestaurantCategoriesSection() {
+  const { t } = useI18n();
   const confirm = useConfirm();
 
   const getImageUrl = (path: string) => {
@@ -82,28 +84,21 @@ export default function RestaurantCategoriesSection() {
   const fetchCategories = async () => {
     setLoading(true);
     try {
-      const data = await restaurantCategoriesService.getAllCategories(
-        currentPage,
-        itemsPerPage,
-        searchQuery,
-      );
-      if (data && typeof data === "object" && Array.isArray((data as any).data)) {
-        setCategories((data as any).data);
-        setTotalItems((data as any).total || 0);
-      } else if (Array.isArray(data)) {
-        setCategories(data);
-        setTotalItems(data.length);
-      } else {
-        setCategories([]);
-        setTotalItems(0);
-        console.warn("API returned non-array data for categories:", data);
-      }
+      // The admin list filters on `name`; it has no `search` parameter, so the
+      // search box used to be sent under a key the API ignores.
+      const res = await restaurantCategoriesService.getAllCategories({
+        page: currentPage,
+        limit: itemsPerPage,
+        name: searchQuery.trim() || undefined,
+      });
+      setCategories(res.data);
+      setTotalItems(res.total);
       setLoadError(null);
     } catch (error: any) {
       console.error("Failed to fetch categories:", error);
       // Without this the list rendered the "no categories" empty state on an
       // outage, so an operator could not tell the two apart.
-      setLoadError(error?.message || "Could not load restaurant categories.");
+      setLoadError(error?.message || t("categories.load_failed"));
       setCategories([]);
       setTotalItems(0);
     } finally {
@@ -164,7 +159,7 @@ export default function RestaurantCategoriesSection() {
       fetchCategories();
     } catch (error: any) {
       console.error("Failed to save category:", error);
-      toast.error(error?.message || "Failed to save category.");
+      toast.error(error?.message || t("categories.save_failed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -174,8 +169,8 @@ export default function RestaurantCategoriesSection() {
     const confirmed = await confirm({
       title: `Delete “${category.name}”?`,
       description:
-        "This permanently removes the category. Restaurants grouped under it will no longer appear in this category.",
-      confirmLabel: "Delete category",
+        t("categories.delete_body2"),
+      confirmLabel: t("categories.delete_cta"),
       variant: "danger",
     });
     if (!confirmed) return;
@@ -187,7 +182,7 @@ export default function RestaurantCategoriesSection() {
       fetchCategories();
     } catch (error: any) {
       console.error("Failed to delete category:", error);
-      toast.error(error?.message || "Failed to delete category.");
+      toast.error(error?.message || t("categories.delete_failed"));
     } finally {
       setDeletingId(null);
     }
@@ -208,7 +203,7 @@ export default function RestaurantCategoriesSection() {
       onClick={() => openModal()}
       className="bg-zinc-900 hover:bg-orange-500 text-white dark:bg-zinc-800 text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 self-stretch sm:self-auto justify-center"
     >
-      <Plus className="w-4 h-4" /> Add Category
+      <Plus className="w-4 h-4" /> {t("categories.add_cta")}
     </button>
   );
 
@@ -218,10 +213,10 @@ export default function RestaurantCategoriesSection() {
         <div>
           <h2 className="text-lg font-bold text-zinc-900 dark:text-white flex items-center gap-2">
             <LayoutGrid className="w-5 h-5 text-orange-500" />
-            Restaurant Categories
+            {t("categories.page_title")}
           </h2>
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-semibold mt-1">
-            Manage the categories used to group restaurants.
+            {t("categories.page_subtitle")}
           </p>
         </div>
         {addButton}
@@ -233,16 +228,16 @@ export default function RestaurantCategoriesSection() {
         <div className="flex items-center gap-2 mb-6">
           <div className="relative flex-1 max-w-md">
             <label htmlFor="category-search" className="sr-only">
-              Search categories
+              {t("categories.search_label")}
             </label>
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
+            <Search className="w-4 h-4 absolute start-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
             <input
               id="category-search"
               type="search"
-              placeholder="Search categories..."
+              placeholder={t("categories.search")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className={`${inputClass} pl-10`}
+              className={`${inputClass} ps-10`}
             />
           </div>
         </div>
@@ -255,34 +250,36 @@ export default function RestaurantCategoriesSection() {
           <EmptyState
             icon={isSearching ? SearchX : LayoutGrid}
             title={
-              isSearching ? "No matching categories" : "No categories yet"
+              isSearching
+                ? t("categories.no_match")
+                : t("categories.none_yet")
             }
             hint={
               isSearching
                 ? `Nothing matches “${searchQuery}”. Try a different name.`
-                : "Categories group restaurants in the customer app. Create the first one to get started."
+                : t("categories.none_yet_hint")
             }
             action={isSearching ? undefined : addButton}
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full text-start border-collapse">
               <thead>
                 <tr className="border-b border-zinc-100 dark:border-zinc-800">
                   <th className="py-3 px-4 text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                    Icon
+                    {t("tags.icon")}
                   </th>
                   <th className="py-3 px-4 text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                    Name
+                    {t("common.name")}
                   </th>
                   <th className="py-3 px-4 text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                    Description
+                    {t("common.description")}
                   </th>
                   <th className="py-3 px-4 text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                    Status
+                    {t("common.status")}
                   </th>
-                  <th className="py-3 px-4 text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider text-right">
-                    Actions
+                  <th className="py-3 px-4 text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider text-end">
+                    {t("common.actions")}
                   </th>
                 </tr>
               </thead>
@@ -322,10 +319,12 @@ export default function RestaurantCategoriesSection() {
                             : "bg-zinc-500/10 text-zinc-600 dark:text-zinc-300"
                         }`}
                       >
-                        {category.isActive ? "Active" : "Inactive"}
+                        {category.isActive
+                          ? t("status.active")
+                          : t("status.inactive")}
                       </span>
                     </td>
-                    <td className="py-3 px-4 text-right">
+                    <td className="py-3 px-4 text-end">
                       <div className="flex items-center justify-end gap-2">
                         <button
                           onClick={() => openModal(category)}
@@ -361,7 +360,7 @@ export default function RestaurantCategoriesSection() {
         {/* Pagination */}
         {!loading && !loadError && totalPages > 1 && (
           <nav
-            aria-label="Category pages"
+            aria-label={t("categories.pages_aria")}
             className="flex items-center justify-between mt-6 pt-6 border-t border-zinc-100 dark:border-zinc-800"
           >
             <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">
@@ -374,7 +373,7 @@ export default function RestaurantCategoriesSection() {
                 disabled={currentPage === 1}
                 className="px-3 py-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
-                Previous
+                {t("common.previous")}
               </button>
               <div className="flex items-center gap-1">
                 {pageWindow(currentPage, totalPages).map((page) => (
@@ -400,7 +399,7 @@ export default function RestaurantCategoriesSection() {
                 disabled={currentPage === totalPages}
                 className="px-3 py-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
-                Next
+                {t("common.next")}
               </button>
             </div>
           </nav>
@@ -410,8 +409,12 @@ export default function RestaurantCategoriesSection() {
       <Modal
         isOpen={isModalOpen}
         onClose={closeModal}
-        title={editingCategory ? "Edit Category" : "Add Category"}
-        description="Categories are how customers browse restaurants in the app."
+        title={
+          editingCategory
+            ? t("categories.edit_title")
+            : t("categories.add_cta")
+        }
+        description={t("categories.modal_desc")}
         maxWidth="max-w-md"
         dismissable={!isSubmitting && !isDirty}
         icon={
@@ -426,7 +429,7 @@ export default function RestaurantCategoriesSection() {
               onClick={closeModal}
               className="flex-1 px-4 py-2.5 text-xs font-bold text-zinc-900 dark:text-white bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-lg transition-colors"
             >
-              Cancel
+              {t("common.cancel")}
             </button>
             <button
               type="submit"
@@ -435,7 +438,7 @@ export default function RestaurantCategoriesSection() {
               className="flex-1 px-4 py-2.5 text-xs font-bold text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-2"
             >
               {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              {editingCategory ? "Save Changes" : "Create"}
+              {editingCategory ? t("common.save_changes") : t("common.create")}
             </button>
           </>
         }
@@ -443,7 +446,7 @@ export default function RestaurantCategoriesSection() {
         <form id="category-form" onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="category-name" className={labelClass}>
-              Name
+              {t("common.name")}
               <RequiredMark />
             </label>
             <input
@@ -453,12 +456,12 @@ export default function RestaurantCategoriesSection() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               className={inputClass}
-              placeholder="e.g. Burgers"
+              placeholder={t("categories.name_placeholder")}
             />
           </div>
           <div>
             <label htmlFor="category-description" className={labelClass}>
-              Description
+              {t("common.description")}
             </label>
             <textarea
               id="category-description"
@@ -466,19 +469,19 @@ export default function RestaurantCategoriesSection() {
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
               className={`${inputClass} resize-none`}
-              placeholder="Optional — shown under the category name."
+              placeholder={t("categories.desc_placeholder")}
             />
           </div>
           <div>
             <label htmlFor="category-icon" className={labelClass}>
-              Icon URL
+              {t("categories.icon_url")}
             </label>
             <div className="flex gap-3 items-center">
               {icon && (
                 <div className="w-10 h-10 shrink-0 bg-zinc-100 dark:bg-zinc-800 rounded overflow-hidden">
                   <img
                     src={getImageUrl(icon)}
-                    alt="Category icon preview"
+                    alt={t("categories.icon_preview")}
                     className="w-full h-full object-cover"
                   />
                 </div>
@@ -506,7 +509,7 @@ export default function RestaurantCategoriesSection() {
                 className="w-4 h-4 accent-orange-500 rounded border-zinc-300 dark:border-zinc-700"
               />
               <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-200">
-                Active
+                {t("status.active")}
               </span>
             </label>
           </div>

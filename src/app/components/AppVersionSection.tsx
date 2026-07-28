@@ -6,6 +6,7 @@ import toast from "react-hot-toast";
 import { appVersionService, AppVersionConfig } from "../../services/appVersion";
 import { ErrorState, Skeleton } from "./ui/States";
 
+import { useI18n } from "../../lib/i18n";
 const inputClass =
   "w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm text-zinc-900 dark:text-white rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500";
 const labelClass =
@@ -16,9 +17,10 @@ const labelClass =
  * could ever have — the switches were completely invisible to keyboard users.
  */
 const switchTrackClass =
-  "w-10 h-6 bg-zinc-200 dark:bg-zinc-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500 transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-orange-500 peer-focus-visible:ring-offset-2 dark:peer-focus-visible:ring-offset-zinc-900";
+  "w-10 h-6 bg-zinc-200 dark:bg-zinc-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500 transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-orange-500 peer-focus-visible:ring-offset-2 dark:peer-focus-visible:ring-offset-zinc-900";
 
 export default function AppVersionSection() {
+  const { t } = useI18n();
   const [config, setConfig] = useState<AppVersionConfig>({
     latestVersionIos: "",
     minSupportedVersionIos: "",
@@ -61,7 +63,7 @@ export default function AppVersionSection() {
          settings for every mobile client. The form is now replaced by an error
          state, and Save is disabled while `loadError` is set. */
       setLoadError(
-        err?.message || "Could not load the current app version configuration.",
+        err?.message || t("appver.load_failed"),
       );
     } finally {
       setIsLoading(false);
@@ -110,10 +112,10 @@ export default function AppVersionSection() {
       };
 
       await appVersionService.updateAppVersion(payload);
-      toast.success("App version configuration updated successfully.");
+      toast.success(t("appver.saved"));
     } catch (err: any) {
       console.error("Failed to update config:", err);
-      toast.error(err?.message || "Failed to save configuration.");
+      toast.error(err?.message || t("appver.save_failed"));
     } finally {
       setIsSaving(false);
     }
@@ -128,10 +130,10 @@ export default function AppVersionSection() {
           </div>
           <div>
             <h2 className="text-lg font-bold text-zinc-900 dark:text-white">
-              App Version Control
+              {t("appver.title")}
             </h2>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-semibold mt-1">
-              Force updates or notify users of new versions.
+              {t("appver.subtitle")}
             </p>
           </div>
         </div>
@@ -141,7 +143,7 @@ export default function AppVersionSection() {
           disabled={isSaving || isLoading || !!loadError}
           title={
             loadError
-              ? "Saving is disabled until the current configuration loads."
+              ? t("appver.save_disabled")
               : undefined
           }
           className="bg-zinc-900 hover:bg-orange-500 text-white dark:bg-zinc-800 text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -151,7 +153,7 @@ export default function AppVersionSection() {
           ) : (
             <Save className="w-4 h-4" />
           )}
-          Save Configuration
+          {t("appver.save")}
         </button>
       </div>
 
@@ -193,14 +195,14 @@ export default function AppVersionSection() {
                 <Apple className="w-4 h-4" />
               </div>
               <h3 className="font-bold text-sm text-zinc-900 dark:text-white">
-                iOS App Settings
+                {t("appver.ios")}
               </h3>
             </div>
             <div className="p-6 space-y-5 flex-1">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label htmlFor="latestVersionIos" className={labelClass}>
-                    Latest Version
+                    {t("appver.latest")}
                   </label>
                   <input
                     id="latestVersionIos"
@@ -214,7 +216,7 @@ export default function AppVersionSection() {
                 </div>
                 <div>
                   <label htmlFor="minSupportedVersionIos" className={labelClass}>
-                    Min Supported
+                    {t("appver.min_supported")}
                   </label>
                   <input
                     id="minSupportedVersionIos"
@@ -245,7 +247,7 @@ export default function AppVersionSection() {
                     <div className={switchTrackClass} />
                   </div>
                   <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white">
-                    Mandatory Update
+                    {t("appver.mandatory")}
                   </span>
                 </label>
 
@@ -265,14 +267,14 @@ export default function AppVersionSection() {
                     <div className={switchTrackClass} />
                   </div>
                   <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white">
-                    Allow Dismiss
+                    {t("appver.allow_dismiss")}
                   </span>
                 </label>
               </div>
 
               <div>
                 <label htmlFor="titleIos" className={labelClass}>
-                  Dialog Title
+                  {t("appver.dialog_title")}
                 </label>
                 <input
                   id="titleIos"
@@ -287,7 +289,7 @@ export default function AppVersionSection() {
 
               <div>
                 <label htmlFor="messageIos" className={labelClass}>
-                  Dialog Message
+                  {t("appver.dialog_message")}
                 </label>
                 <textarea
                   id="messageIos"
@@ -295,14 +297,14 @@ export default function AppVersionSection() {
                   value={config.messageIos}
                   onChange={handleChange}
                   rows={3}
-                  placeholder="Message displayed to user..."
+                  placeholder={t("appver.message_placeholder")}
                   className={`${inputClass} resize-none`}
                 />
               </div>
 
               <div>
                 <label htmlFor="storeUrlIos" className={labelClass}>
-                  App Store URL
+                  {t("appver.app_store")}
                 </label>
                 <input
                   id="storeUrlIos"
@@ -324,14 +326,14 @@ export default function AppVersionSection() {
                 <Smartphone className="w-4 h-4" />
               </div>
               <h3 className="font-bold text-sm text-zinc-900 dark:text-white">
-                Android App Settings
+                {t("appver.android")}
               </h3>
             </div>
             <div className="p-6 space-y-5 flex-1">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label htmlFor="latestVersionAndroid" className={labelClass}>
-                    Latest Version
+                    {t("appver.latest")}
                   </label>
                   <input
                     id="latestVersionAndroid"
@@ -348,7 +350,7 @@ export default function AppVersionSection() {
                     htmlFor="minSupportedVersionAndroid"
                     className={labelClass}
                   >
-                    Min Supported
+                    {t("appver.min_supported")}
                   </label>
                   <input
                     id="minSupportedVersionAndroid"
@@ -379,7 +381,7 @@ export default function AppVersionSection() {
                     <div className={switchTrackClass} />
                   </div>
                   <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white">
-                    Mandatory Update
+                    {t("appver.mandatory")}
                   </span>
                 </label>
 
@@ -399,14 +401,14 @@ export default function AppVersionSection() {
                     <div className={switchTrackClass} />
                   </div>
                   <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white">
-                    Allow Dismiss
+                    {t("appver.allow_dismiss")}
                   </span>
                 </label>
               </div>
 
               <div>
                 <label htmlFor="titleAndroid" className={labelClass}>
-                  Dialog Title
+                  {t("appver.dialog_title")}
                 </label>
                 <input
                   id="titleAndroid"
@@ -421,7 +423,7 @@ export default function AppVersionSection() {
 
               <div>
                 <label htmlFor="messageAndroid" className={labelClass}>
-                  Dialog Message
+                  {t("appver.dialog_message")}
                 </label>
                 <textarea
                   id="messageAndroid"
@@ -429,14 +431,14 @@ export default function AppVersionSection() {
                   value={config.messageAndroid}
                   onChange={handleChange}
                   rows={3}
-                  placeholder="Message displayed to user..."
+                  placeholder={t("appver.message_placeholder")}
                   className={`${inputClass} resize-none`}
                 />
               </div>
 
               <div>
                 <label htmlFor="storeUrlAndroid" className={labelClass}>
-                  Play Store URL
+                  {t("appver.play_store")}
                 </label>
                 <input
                   id="storeUrlAndroid"

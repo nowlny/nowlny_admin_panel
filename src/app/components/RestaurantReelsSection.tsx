@@ -15,7 +15,7 @@ import {
   Loader2,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { reelsService, Reel } from "../../services/reels";
+import { reelsService, Reel, ReelStatus } from "../../services/reels";
 import { restaurantsService } from "../../services/restaurants";
 import { menuService } from "../../services/menu";
 import Modal from "./ui/Modal";
@@ -23,6 +23,7 @@ import { useConfirm } from "./ui/ConfirmDialog";
 import { EmptyState, ErrorState, Skeleton } from "./ui/States";
 import { statusLabel } from "./ui/StatusPill";
 
+import { useI18n } from "../../lib/i18n";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_PATTERN =
@@ -52,9 +53,10 @@ function ReelMedia({
 }: {
   videoUrl?: string;
   thumbnailUrl?: string;
-  caption?: string;
+  caption?: string | null;
   onOpen: () => void;
 }) {
+  const { t } = useI18n();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoFailed, setVideoFailed] = useState(false);
   const [thumbFailed, setThumbFailed] = useState(false);
@@ -82,7 +84,9 @@ function ReelMedia({
       onMouseLeave={stopPreview}
       onFocus={startPreview}
       onBlur={stopPreview}
-      aria-label={caption ? `Play reel: ${caption}` : "Play reel"}
+      aria-label={
+        caption ? t("reels.play_aria", { caption }) : t("reels.play_plain")
+      }
       className="absolute inset-0 w-full h-full group/media cursor-pointer"
     >
       {showVideo ? (
@@ -100,7 +104,7 @@ function ReelMedia({
       ) : showThumb ? (
         <img
           src={thumbnailUrl}
-          alt={caption || "Reel thumbnail"}
+          alt={caption || t("reels.thumbnail_alt")}
           onError={() => setThumbFailed(true)}
           className="w-full h-full object-cover"
         />
@@ -108,7 +112,7 @@ function ReelMedia({
         <span className="w-full h-full flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-500">
           <VideoOff className="w-8 h-8 mb-2 opacity-60" />
           <span className="text-[10px] uppercase font-bold">
-            {videoUrl ? "Video unavailable" : "No media"}
+            {videoUrl ? t("reels.video_unavailable") : t("reels.no_media")}
           </span>
         </span>
       )}
@@ -123,6 +127,7 @@ function ReelMedia({
 }
 
 export default function RestaurantReelsSection() {
+  const { t } = useI18n();
   const confirm = useConfirm();
 
   const [reels, setReels] = useState<Reel[]>([]);
@@ -139,7 +144,7 @@ export default function RestaurantReelsSection() {
   const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [caption, setCaption] = useState("");
   const [menuItemId, setMenuItemId] = useState("");
-  const [status, setStatus] = useState("active");
+  const [status, setStatus] = useState<ReelStatus>("active");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   // Menu item picker — beats hand-pasting a raw UUID.
@@ -162,7 +167,7 @@ export default function RestaurantReelsSection() {
       // Leaving this as `[]` rendered the "No reels yet" empty state, so an
       // outage looked exactly like having published nothing.
       console.error("Failed to fetch reels:", err);
-      setError(err?.message || "Couldn't load your reels.");
+      setError(err?.message || t("reels.my_load_failed"));
       setReels([]);
     } finally {
       setIsLoading(false);
@@ -235,7 +240,7 @@ export default function RestaurantReelsSection() {
       setThumbnailUrl(reel.thumbnailUrl || "");
       setCaption(reel.caption || "");
       setMenuItemId(reel.menuItemId || "");
-      setStatus(reel.status || "active");
+      setStatus((reel.status as ReelStatus) || "active");
     } else {
       setEditingReelId(null);
       setVideoUrl("");
@@ -254,11 +259,11 @@ export default function RestaurantReelsSection() {
     if (!videoUrl.trim()) errors.videoUrl = "A video URL is required.";
     if (!caption.trim()) errors.caption = "A caption is required.";
     if (!UUID_RE.test(menuItemId.trim()))
-      errors.menuItemId = "Select a menu item, or paste a valid menu item UUID.";
+      errors.menuItemId = t("reels.select_item_error");
 
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) {
-      toast.error("Please fix the highlighted fields.");
+      toast.error(t("reels.fix_fields"));
       return;
     }
 
@@ -281,11 +286,11 @@ export default function RestaurantReelsSection() {
         });
       }
       setIsModalOpen(false);
-      toast.success(editingReelId ? "Reel updated." : "Reel created.");
+      toast.success(editingReelId ? t("reels.updated") : t("reels.created"));
       fetchReels();
     } catch (err: any) {
       console.error("Failed to save reel:", err);
-      toast.error(err?.message || "Failed to save reel.");
+      toast.error(err?.message || t("reels.save_failed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -294,9 +299,9 @@ export default function RestaurantReelsSection() {
   const handleDelete = async (reel: Reel) => {
     const label = reel.caption?.trim() || "this reel";
     const ok = await confirm({
-      title: "Delete this reel?",
+      title: t("reels.delete_title"),
       description: `“${label}” will be permanently removed, along with its views, likes and comments. This cannot be undone.`,
-      confirmLabel: "Delete",
+      confirmLabel: t("common.delete"),
       variant: "danger",
     });
     if (!ok) return;
@@ -305,10 +310,10 @@ export default function RestaurantReelsSection() {
       setPendingId(reel.id);
       await reelsService.deleteOwnReel(reel.id);
       setReels((prev) => prev.filter((r) => r.id !== reel.id));
-      toast.success("Reel deleted.");
+      toast.success(t("reels.deleted_toast"));
     } catch (err: any) {
       console.error("Failed to delete reel:", err);
-      toast.error(err?.message || "Failed to delete reel.");
+      toast.error(err?.message || t("reels.delete_failed"));
     } finally {
       setPendingId(null);
     }
@@ -321,7 +326,7 @@ export default function RestaurantReelsSection() {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
-      {/* Header — stays mounted while loading so the Add Reel button never
+      {/* Header — stays mounted while loading so the {t("reels.add")} button never
           disappears mid-refetch. */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div className="flex items-center gap-3">
@@ -330,10 +335,10 @@ export default function RestaurantReelsSection() {
           </div>
           <div>
             <h2 className="text-sm font-bold text-zinc-900 dark:text-white">
-              My Reels
+              {t("reels.my_title")}
             </h2>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Manage your promotional vertical videos.
+              {t("reels.my_subtitle2")}
             </p>
           </div>
         </div>
@@ -342,7 +347,7 @@ export default function RestaurantReelsSection() {
           onClick={() => handleOpenModal()}
           className="text-xs font-bold px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all shadow-sm flex items-center gap-2"
         >
-          <Plus className="w-4 h-4" aria-hidden="true" /> Add Reel
+          <Plus className="w-4 h-4" aria-hidden="true" /> {t("reels.add")}
         </button>
       </div>
 
@@ -367,14 +372,14 @@ export default function RestaurantReelsSection() {
         <div className={panelClass}>
           <EmptyState
             icon={Video}
-            title="No reels yet"
-            hint="Create your first promotional video to engage customers."
+            title={t("reels.my_none")}
+            hint={t("reels.my_none_hint2")}
             action={
               <button
                 onClick={() => handleOpenModal()}
                 className="text-xs font-bold px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl transition-colors flex items-center gap-2"
               >
-                <Plus className="w-4 h-4" aria-hidden="true" /> Add Reel
+                <Plus className="w-4 h-4" aria-hidden="true" /> {t("reels.add")}
               </button>
             }
           />
@@ -399,7 +404,7 @@ export default function RestaurantReelsSection() {
                   />
 
                   {/* Status Badge */}
-                  <div className="absolute top-3 left-3 z-10 pointer-events-none">
+                  <div className="absolute top-3 start-3 z-10 pointer-events-none">
                     <span
                       className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full backdrop-blur-md ${
                         reel.status === "active"
@@ -412,9 +417,9 @@ export default function RestaurantReelsSection() {
                   </div>
 
                   {/* Stats Overlay at Bottom */}
-                  <div className="absolute bottom-0 left-0 right-0 z-10 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3 pt-8 pointer-events-none">
+                  <div className="absolute bottom-0 start-0 end-0 z-10 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3 pt-8 pointer-events-none">
                     <p className="text-white text-xs font-bold line-clamp-2 leading-tight drop-shadow-md mb-2">
-                      {reel.caption || "Untitled reel"}
+                      {reel.caption || t("reels.untitled")}
                     </p>
                     <div className="flex items-center gap-3 text-white">
                       <div className="flex items-center gap-1">
@@ -443,7 +448,7 @@ export default function RestaurantReelsSection() {
                     aria-label={`Edit reel${reel.caption ? `: ${reel.caption}` : ""}`}
                     className="flex-1 min-w-0 px-3 py-2.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-100 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <Edit2 className="w-3.5 h-3.5" aria-hidden="true" /> Edit
+                    <Edit2 className="w-3.5 h-3.5" aria-hidden="true" /> {t("common.edit")}
                   </button>
                   <button
                     onClick={() => handleDelete(reel)}
@@ -468,7 +473,7 @@ export default function RestaurantReelsSection() {
       <Modal
         isOpen={!!previewReel}
         onClose={() => setPreviewReel(null)}
-        title="Reel preview"
+        title={t("reels.preview_title")}
         description={previewReel?.caption || undefined}
         maxWidth="max-w-sm"
       >
@@ -484,7 +489,7 @@ export default function RestaurantReelsSection() {
           />
         ) : (
           <p className="text-sm text-zinc-500 dark:text-zinc-400 py-8 text-center">
-            This reel has no video URL attached.
+            {t("reels.no_video")}
           </p>
         )}
       </Modal>
@@ -493,7 +498,7 @@ export default function RestaurantReelsSection() {
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title={editingReelId ? "Edit Reel" : "Create New Reel"}
+        title={editingReelId ? t("reels.edit_title") : t("reels.create_new")}
         maxWidth="max-w-md"
         dismissable={false}
         footer={
@@ -503,7 +508,7 @@ export default function RestaurantReelsSection() {
               onClick={() => setIsModalOpen(false)}
               className="px-4 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-700 font-bold text-xs text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
             >
-              Cancel
+              {t("common.cancel")}
             </button>
             <button
               type="submit"
@@ -513,10 +518,10 @@ export default function RestaurantReelsSection() {
             >
               {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
               {isSubmitting
-                ? "Saving…"
+                ? t("common.saving")
                 : editingReelId
-                  ? "Save Changes"
-                  : "Create Reel"}
+                  ? t("common.save_changes")
+                  : t("reels.create_reel")}
             </button>
           </>
         }
@@ -524,7 +529,7 @@ export default function RestaurantReelsSection() {
         <form id="own-reel-form" onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="own-reel-video-url" className={LABEL_CLASS}>
-              Video URL (MP4) *
+              {t("reels.f_video")}
             </label>
             <input
               id="own-reel-video-url"
@@ -532,7 +537,7 @@ export default function RestaurantReelsSection() {
               required
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
-              placeholder="https://cdn.example.com/video.mp4"
+              placeholder={t("reels.video_placeholder")}
               aria-invalid={!!fieldErrors.videoUrl}
               className={FIELD_CLASS}
             />
@@ -564,8 +569,8 @@ export default function RestaurantReelsSection() {
                   }`}
                 >
                   {previewFailed
-                    ? "This URL didn't load. Check the address and that the file is publicly reachable."
-                    : "Live preview of the pasted URL."}
+                    ? t("reels.preview_failed")
+                    : t("reels.preview_live")}
                 </p>
               </div>
             )}
@@ -573,21 +578,21 @@ export default function RestaurantReelsSection() {
 
           <div>
             <label htmlFor="own-reel-thumbnail-url" className={LABEL_CLASS}>
-              Thumbnail URL (Optional)
+              {t("reels.f_thumb")}
             </label>
             <input
               id="own-reel-thumbnail-url"
               type="url"
               value={thumbnailUrl}
               onChange={(e) => setThumbnailUrl(e.target.value)}
-              placeholder="https://cdn.example.com/thumb.jpg"
+              placeholder={t("reels.thumb_placeholder")}
               className={FIELD_CLASS}
             />
           </div>
 
           <div>
             <label htmlFor="own-reel-caption" className={LABEL_CLASS}>
-              Caption *
+              {t("reels.f_caption")}
             </label>
             <textarea
               id="own-reel-caption"
@@ -595,7 +600,7 @@ export default function RestaurantReelsSection() {
               rows={3}
               value={caption}
               onChange={(e) => setCaption(e.target.value)}
-              placeholder="Describe your reel..."
+              placeholder={t("reels.caption_placeholder_own")}
               aria-invalid={!!fieldErrors.caption}
               className={`${FIELD_CLASS} resize-none`}
             />
@@ -608,7 +613,7 @@ export default function RestaurantReelsSection() {
 
           <div>
             <label htmlFor="own-reel-menu-item" className={LABEL_CLASS}>
-              Menu Item *
+              {t("reels.f_item")}
             </label>
             {menuItemOptions.length > 0 ? (
               <select
@@ -618,7 +623,7 @@ export default function RestaurantReelsSection() {
                 onChange={(e) => setMenuItemId(e.target.value)}
                 className={FIELD_CLASS}
               >
-                <option value="">Select a menu item…</option>
+                <option value="">{t("reels.select_item")}</option>
                 {/* Keep an existing reel's item selectable even if it is no
                     longer in the live menu, so editing doesn't silently blank it. */}
                 {menuItemId && !menuItemOptions.some((i) => i.id === menuItemId) && (
@@ -644,7 +649,7 @@ export default function RestaurantReelsSection() {
                 pattern={UUID_PATTERN}
                 value={menuItemId}
                 onChange={(e) => setMenuItemId(e.target.value)}
-                placeholder="Paste UUID of the menu item"
+                placeholder={t("reels.paste_item")}
                 aria-invalid={!!fieldErrors.menuItemId}
                 aria-describedby={fieldErrors.menuItemId ? "own-reel-menu-item-error" : undefined}
                 className={FIELD_CLASS}
@@ -652,7 +657,7 @@ export default function RestaurantReelsSection() {
             )}
             {isLoadingMenuItems && (
               <p className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mt-1.5 flex items-center gap-1.5">
-                <Loader2 className="w-3 h-3 animate-spin" /> Loading your menu…
+                <Loader2 className="w-3 h-3 animate-spin" /> {t("reels.loading_own_menu")}
               </p>
             )}
             {fieldErrors.menuItemId && (
@@ -665,16 +670,16 @@ export default function RestaurantReelsSection() {
           {editingReelId && (
             <div>
               <label htmlFor="own-reel-status" className={LABEL_CLASS}>
-                Status
+                {t("common.status")}
               </label>
               <select
                 id="own-reel-status"
                 value={status}
-                onChange={(e) => setStatus(e.target.value)}
+                onChange={(e) => setStatus(e.target.value as ReelStatus)}
                 className={`${FIELD_CLASS} appearance-none`}
               >
-                <option value="active">Active</option>
-                <option value="hidden">Hidden</option>
+                <option value="active">{t("status.active")}</option>
+                <option value="hidden">{t("status.hidden")}</option>
               </select>
             </div>
           )}

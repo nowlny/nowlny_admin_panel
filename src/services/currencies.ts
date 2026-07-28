@@ -1,4 +1,4 @@
-import { apiClient } from './apiClient';
+import { apiClient, buildQuery, toList, toPaginated } from "./apiClient";
 
 export interface Currency {
   code: string;
@@ -9,81 +9,113 @@ export interface Currency {
   updatedAt?: string;
 }
 
-export interface MarketRate {
+/**
+ * One row of the `exchange_rates` table. `restaurantId` / `deliveryCompanyId`
+ * are null on a system default and set on an override — which is how the
+ * admin "all rates" view tells the two apart.
+ */
+export interface ExchangeRate {
   id: string;
   fromCurrencyId: string;
   toCurrencyId: string;
-  rate: number;
+  /** Serialised as a string with six decimals, e.g. `"89500.000000"`. */
+  rate: string | number;
+  restaurantId?: string | null;
+  restaurantName?: string | null;
+  deliveryCompanyId?: string | null;
+  deliveryCompanyName?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
 
+/** Kept for the legacy `market-rates` endpoints, which share the row shape. */
+export type MarketRate = ExchangeRate;
+
+export interface ExchangeRatePayload {
+  fromCurrencyId: string;
+  toCurrencyId: string;
+  rate: number;
+}
+
 export const currenciesService = {
-  // --- Currencies ---
-  createCurrency: (data: Partial<Currency>) => {
-    return apiClient<Currency>('/api/v1/currencies', {
-      method: 'POST',
+  // ─── Currencies ────────────────────────────────────────────────────────────
+
+  createCurrency: (data: Partial<Currency>) =>
+    apiClient<Currency>("/api/v1/currencies", {
+      method: "POST",
       body: JSON.stringify(data),
-    });
+    }),
+
+  /** Public list — active currencies only. Returns a bare array. */
+  getActiveCurrencies: async () => {
+    const payload = await apiClient<unknown>("/api/v1/currencies");
+    return toList<Currency>(payload);
   },
 
-  getActiveCurrencies: () => {
-    return apiClient<Currency[]>('/api/v1/currencies');
+  getAllCurrencies: async (params?: {
+    search?: string;
+    isActive?: boolean;
+    page?: number;
+    limit?: number;
+  }) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/currencies/admin/all${buildQuery({ ...params })}`,
+    );
+    return toPaginated<Currency>(payload, params?.limit ?? 50);
   },
 
-  getAllCurrencies: (params?: { search?: string; isActive?: boolean; page?: number; limit?: number }) => {
-    const query = new URLSearchParams();
-    if (params?.search) query.append('search', params.search);
-    if (params?.isActive !== undefined) query.append('isActive', String(params.isActive));
-    if (params?.page) query.append('page', String(params.page));
-    if (params?.limit) query.append('limit', String(params.limit));
+  getCurrencyByCode: (code: string) =>
+    apiClient<Currency>(`/api/v1/currencies/${code}`),
 
-    return apiClient<Currency[]>(`/api/v1/currencies/admin/all?${query.toString()}`);
-  },
-
-  getCurrencyByCode: (code: string) => {
-    return apiClient<Currency>(`/api/v1/currencies/${code}`);
-  },
-
-  updateCurrency: (code: string, data: Partial<Currency>) => {
-    return apiClient<Currency>(`/api/v1/currencies/${code}`, {
-      method: 'PATCH',
+  updateCurrency: (code: string, data: Partial<Currency>) =>
+    apiClient<Currency>(`/api/v1/currencies/${code}`, {
+      method: "PATCH",
       body: JSON.stringify(data),
-    });
+    }),
+
+  deleteCurrency: (code: string) =>
+    apiClient<void>(`/api/v1/currencies/${code}`, { method: "DELETE" }),
+
+  // ─── Exchange rates ────────────────────────────────────────────────────────
+  //
+  // The `market-rates/*` routes are the legacy spelling and only ever see the
+  // system defaults. `exchange-rates/*` is the current API and is the only way
+  // to see, or clear, the per-restaurant and per-company overrides that decide
+  // what a customer is actually charged.
+
+  /** System defaults only (public). */
+  getDefaultExchangeRates: async () => {
+    const payload = await apiClient<unknown>(
+      "/api/v1/currencies/exchange-rates/default",
+    );
+    return toList<ExchangeRate>(payload);
   },
 
-  deleteCurrency: (code: string) => {
-    return apiClient<void>(`/api/v1/currencies/${code}`, {
-      method: 'DELETE',
-    });
+  /** Defaults *and* every restaurant/company override (admin). */
+  getAllExchangeRates: async () => {
+    const payload = await apiClient<unknown>(
+      "/api/v1/currencies/exchange-rates/all",
+    );
+    return toList<ExchangeRate>(payload);
   },
 
-  // --- Market Rates ---
-  createMarketRate: (data: Partial<MarketRate>) => {
-    return apiClient<MarketRate>('/api/v1/currencies/market-rates', {
-      method: 'POST',
+  /** Creates or updates the system default for a currency pair. */
+  upsertDefaultExchangeRate: (data: ExchangeRatePayload) =>
+    apiClient<ExchangeRate>("/api/v1/currencies/exchange-rates/default", {
+      method: "PUT",
       body: JSON.stringify(data),
-    });
-  },
+    }),
 
-  getAllMarketRates: () => {
-    return apiClient<MarketRate[]>('/api/v1/currencies/market-rates/all');
-  },
+  /** Deletes any rate row by id — default or override. */
+  deleteExchangeRate: (id: string) =>
+    apiClient<void>(`/api/v1/currencies/exchange-rates/${id}`, {
+      method: "DELETE",
+    }),
 
-  getMarketRateById: (id: string) => {
-    return apiClient<MarketRate>(`/api/v1/currencies/market-rates/${id}`);
-  },
-
-  updateMarketRate: (id: string, data: Partial<MarketRate>) => {
-    return apiClient<MarketRate>(`/api/v1/currencies/market-rates/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    });
-  },
-
-  deleteMarketRate: (id: string) => {
-    return apiClient<void>(`/api/v1/currencies/market-rates/${id}`, {
-      method: 'DELETE',
-    });
-  }
+  /** Legacy alias retained for the default-rate edit form. */
+  updateDefaultExchangeRate: (id: string, rate: number) =>
+    apiClient<ExchangeRate>(`/api/v1/currencies/market-rates/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ rate }),
+    }),
 };

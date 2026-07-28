@@ -20,6 +20,7 @@ import { formatAddress, humanizeEnum } from "../../lib/format";
 import { EmptyState, ErrorState, ErrorBanner, Skeleton } from "./ui/States";
 import { useConfirm } from "./ui/ConfirmDialog";
 
+import { useI18n } from "../../lib/i18n";
 /**
  * Every figure on this dashboard used to come from `loadDb()` — a localStorage
  * fixture seeded with invented merchants and invented money. The page then
@@ -53,16 +54,6 @@ interface OrderCounts {
   byStatus: Record<string, number>;
 }
 
-/** The submissions endpoint returns either a paginated envelope or a bare array. */
-function normaliseSubmissions(payload: unknown): RestaurantSubmission[] {
-  if (Array.isArray(payload)) return payload as RestaurantSubmission[];
-  if (payload && typeof payload === "object") {
-    const data = (payload as { data?: unknown }).data;
-    if (Array.isArray(data)) return data as RestaurantSubmission[];
-  }
-  return [];
-}
-
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
@@ -70,6 +61,7 @@ function errorMessage(err: unknown, fallback: string): string {
 export default function OverviewSection({
   setActiveTab,
 }: OverviewProps) {
+  const { t } = useI18n();
   const confirm = useConfirm();
 
   // Platform counters
@@ -104,7 +96,11 @@ export default function OverviewSection({
             limit: 1,
           }),
           ordersService.getOrders({ status: "delivered", page: 1, limit: 1 }),
-          restaurantsService.getRestaurants(),
+          // Every page, not just the first: the merchant tile and the category
+          // breakdown are both platform-wide figures. The previous call kept
+          // the paginated envelope and ran `Array.isArray()` over it, which is
+          // always false — so the dashboard reported 0 merchants, forever.
+          restaurantsService.getAllRestaurants(),
         ]);
 
       const byStatus: Record<string, number> = {
@@ -119,9 +115,9 @@ export default function OverviewSection({
         live: LIVE_STATUSES.reduce((sum, s) => sum + (byStatus[s] ?? 0), 0),
         byStatus,
       });
-      setRestaurants(Array.isArray(rests) ? rests : []);
+      setRestaurants(rests);
     } catch (err: unknown) {
-      setStatsError(errorMessage(err, "Could not load platform figures."));
+      setStatsError(errorMessage(err, t("overview.stats_failed")));
     } finally {
       setStatsLoading(false);
     }
@@ -136,10 +132,10 @@ export default function OverviewSection({
         page: 1,
         limit: 5,
       });
-      setSubmissions(normaliseSubmissions(res));
+      setSubmissions(res.data);
     } catch (err: unknown) {
       setQueueError(
-        errorMessage(err, "Could not load the merchant verification queue."),
+        errorMessage(err, t("overview.queue_failed")),
       );
     } finally {
       setQueueLoading(false);
@@ -160,10 +156,9 @@ export default function OverviewSection({
    */
   const handleApprove = async (submission: RestaurantSubmission) => {
     const ok = await confirm({
-      title: `Approve “${submission.name}”?`,
-      description:
-        "The merchant goes live on the customer apps immediately and can start receiving orders.",
-      confirmLabel: "Approve merchant",
+      title: t("overview.approve_title", { name: submission.name }),
+      description: t("overview.approve_body"),
+      confirmLabel: t("overview.approve_cta"),
     });
     if (!ok) return;
 
@@ -172,10 +167,10 @@ export default function OverviewSection({
       await restaurantsService.reviewSubmission(submission.id, {
         decision: "approve",
       });
-      toast.success(`${submission.name} approved.`);
+      toast.success(t("overview.approved_toast", { name: submission.name }));
       await Promise.all([fetchQueue(), fetchStats()]);
     } catch (err: unknown) {
-      toast.error(errorMessage(err, "Approval failed. Please retry."));
+      toast.error(errorMessage(err, t("overview.approve_failed")));
     } finally {
       setApprovingId(null);
     }
@@ -187,20 +182,28 @@ export default function OverviewSection({
     (r) => (r.status ?? "").toLowerCase() === "active",
   ).length;
 
-  // Real counts, grouped from the merchant list. This is *merchants* per
-  // cuisine — the panel that used to sit here claimed to show orders per
-  // cuisine and was a hardcoded array.
-  const cuisineBreakdown = (() => {
+  /*
+   * Merchants per category, grouped from the live merchant list.
+   *
+   * This used to tally a `cuisineType` string that the API does not return, so
+   * every merchant landed in "uncategorised" and the panel hid itself
+   * permanently. Cuisine is modelled as a `categories[]` relation, and a
+   * merchant can hold several — each of its categories gets a count.
+   */
+  const categoryBreakdown = (() => {
     const list = restaurants ?? [];
     if (list.length === 0) return [];
     const tally = new Map<string, number>();
     for (const r of list) {
-      const key = (r.cuisineType || "").trim() || "uncategorised";
-      tally.set(key, (tally.get(key) ?? 0) + 1);
+      const names = (r.categories ?? [])
+        .map((c) => c.name?.trim())
+        .filter((name): name is string => !!name);
+      if (names.length === 0) {
+        tally.set("uncategorised", (tally.get("uncategorised") ?? 0) + 1);
+        continue;
+      }
+      for (const name of names) tally.set(name, (tally.get(name) ?? 0) + 1);
     }
-    // The API models cuisine as a `categories[]` relation; `cuisineType` is
-    // only populated on some endpoints. If nothing carries one, a single
-    // "Uncategorised 100%" bar is noise, not insight — hide the panel.
     if (tally.size === 1 && tally.has("uncategorised")) return [];
     return [...tally.entries()]
       .sort((a, b) => b[1] - a[1])
@@ -218,14 +221,13 @@ export default function OverviewSection({
     <div className="space-y-8 animate-in fade-in duration-200">
       {/* Banner */}
       <div className="bg-gradient-to-r from-zinc-900 via-zinc-800 to-zinc-900 rounded-2xl p-6 border border-zinc-700/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden shadow-xl">
-        <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-radial-gradient from-orange-500/10 to-transparent pointer-events-none" />
+        <div className="absolute end-0 top-0 bottom-0 w-1/3 bg-radial-gradient from-orange-500/10 to-transparent pointer-events-none" />
         <div className="space-y-1">
           <h3 className="text-xl font-bold text-white tracking-tight">
-            Nowlny Delivery Hub Portal
+            {t("overview.banner_title")}
           </h3>
           <p className="text-xs text-zinc-400 max-w-lg leading-relaxed">
-            Review pending merchant applications, work the live dispatch board
-            and inspect customer orders.
+            {t("overview.banner_body")}
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -233,8 +235,8 @@ export default function OverviewSection({
             onClick={() => setActiveTab("orders")}
             className="flex items-center gap-2 text-xs font-bold bg-orange-500 hover:bg-orange-600 active:scale-95 transition-all text-white px-4 py-2.5 rounded-lg shadow-lg shadow-orange-500/20"
           >
-            <span>Live Order Room</span>
-            <ArrowRight className="w-4 h-4" />
+            <span>{t("overview.live_room")}</span>
+            <ArrowRight className="w-4 h-4 rtl:rotate-180" />
           </button>
         </div>
       </div>
@@ -264,57 +266,63 @@ export default function OverviewSection({
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <StatCard
-              label="Total Orders"
+              label={t("overview.total_orders")}
               value={(counts?.total ?? 0).toLocaleString("en-US")}
               icon={<ShoppingBag className="w-5 h-5" />}
               accent="bg-blue-500/10 text-blue-600 dark:text-blue-400"
               footer={
                 <span className="text-zinc-500 dark:text-zinc-400 font-medium">
-                  All orders ever placed on the platform
+                  {t("overview.total_orders_foot")}
                 </span>
               }
             />
 
             <StatCard
-              label="Live Orders"
+              label={t("overview.live_orders")}
               value={(counts?.live ?? 0).toLocaleString("en-US")}
               icon={<Bike className="w-5 h-5" />}
               accent="bg-orange-500/10 text-orange-600 dark:text-orange-400"
               footer={
                 <span className="flex flex-wrap items-center gap-1.5">
                   <span className="text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">
-                    {counts?.byStatus.pending ?? 0} pending
+                    {t("overview.pending_n", {
+                      count: counts?.byStatus.pending ?? 0,
+                    })}
                   </span>
                   <span className="text-sky-600 dark:text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-full">
-                    {counts?.byStatus.confirmed ?? 0} confirmed
+                    {t("overview.confirmed_n", {
+                      count: counts?.byStatus.confirmed ?? 0,
+                    })}
                   </span>
                   <span className="text-blue-600 dark:text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-full">
-                    {counts?.byStatus.out_for_delivery ?? 0} on the way
+                    {t("overview.on_the_way_n", {
+                      count: counts?.byStatus.out_for_delivery ?? 0,
+                    })}
                   </span>
                 </span>
               }
             />
 
             <StatCard
-              label="Delivered"
+              label={t("overview.delivered")}
               value={(counts?.delivered ?? 0).toLocaleString("en-US")}
               icon={<CheckCircle2 className="w-5 h-5" />}
               accent="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
               footer={
                 <span className="text-zinc-500 dark:text-zinc-400 font-medium">
-                  Orders completed end to end
+                  {t("overview.delivered_foot")}
                 </span>
               }
             />
 
             <StatCard
-              label="Merchants"
+              label={t("overview.merchants")}
               value={(restaurants?.length ?? 0).toLocaleString("en-US")}
               icon={<Store className="w-5 h-5" />}
               accent="bg-purple-500/10 text-purple-600 dark:text-purple-400"
               footer={
                 <span className="text-zinc-500 dark:text-zinc-400 font-medium">
-                  {activeMerchants} active
+                  {t("overview.merchants_foot", { count: activeMerchants })}
                 </span>
               }
             />
@@ -326,12 +334,12 @@ export default function OverviewSection({
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
         <div className="flex justify-between items-center mb-4">
           <h4 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-            <Store className="w-4 h-4 text-orange-500" /> Merchant Verification
-            Queue
+            <Store className="w-4 h-4 text-orange-500" />{" "}
+            {t("overview.queue_title")}
           </h4>
           {!queueLoading && !queueError && submissions.length > 0 && (
             <span className="text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded border border-amber-500/20">
-              {submissions.length} pending
+              {t("overview.queue_pending", { count: submissions.length })}
             </span>
           )}
         </div>
@@ -347,15 +355,15 @@ export default function OverviewSection({
         ) : submissions.length === 0 ? (
           <EmptyState
             icon={CheckCircle2}
-            title="No applications waiting"
-            hint="New merchant applications land here as soon as they are submitted."
+            title={t("overview.queue_empty")}
+            hint={t("overview.queue_empty_hint")}
             action={
               <button
                 onClick={() => setActiveTab("restaurants")}
                 className="text-xs font-bold text-orange-500 hover:text-orange-600 transition-colors inline-flex items-center gap-1"
               >
-                <span>Browse all merchants</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                <span>{t("overview.browse_merchants")}</span>
+                <ArrowRight className="w-3.5 h-3.5 rtl:rotate-180" />
               </button>
             }
           />
@@ -386,12 +394,9 @@ export default function OverviewSection({
                         {sub.name}
                       </h5>
                       <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5 truncate">
-                        {[
-                          sub.cuisineType ? humanizeEnum(sub.cuisineType) : "",
-                          location,
-                        ]
+                        {[sub.phone ?? "", location]
                           .filter(Boolean)
-                          .join(" • ") || "No details provided"}
+                          .join(" • ") || t("overview.no_details")}
                       </p>
                     </div>
                   </div>
@@ -400,7 +405,7 @@ export default function OverviewSection({
                       onClick={() => setActiveTab("restaurants")}
                       className="text-[10px] font-bold bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 px-2.5 py-2 rounded-lg transition-all"
                     >
-                      Inspect docs
+                      {t("overview.inspect_docs")}
                     </button>
                     <button
                       onClick={() => handleApprove(sub)}
@@ -408,7 +413,7 @@ export default function OverviewSection({
                       className="text-[10px] font-bold bg-gradient-to-r from-orange-500 to-red-500 hover:opacity-95 text-white px-2.5 py-2 rounded-lg shadow shadow-orange-500/10 inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {busy && <Loader2 className="w-3 h-3 animate-spin" />}
-                      {busy ? "Approving…" : "Approve"}
+                      {busy ? t("overview.approving") : t("overview.approve")}
                     </button>
                   </div>
                 </div>
@@ -418,31 +423,31 @@ export default function OverviewSection({
         )}
       </div>
 
-      {/* Merchants by cuisine — grouped from the live merchant list */}
-      {!statsLoading && !statsError && cuisineBreakdown.length > 0 && (
+      {/* Merchants by category — grouped from the live merchant list */}
+      {!statsLoading && !statsError && categoryBreakdown.length > 0 && (
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
           <h4 className="text-sm font-bold text-zinc-900 dark:text-white mb-1">
-            Merchants by Cuisine
+            {t("overview.by_category")}
           </h4>
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mb-6">
-            Registered merchants grouped by their cuisine type
+            {t("overview.by_category_sub")}
           </p>
 
           <div className="space-y-4">
-            {cuisineBreakdown.map((cuisine) => (
-              <div key={cuisine.name} className="space-y-1.5">
+            {categoryBreakdown.map((category) => (
+              <div key={category.name} className="space-y-1.5">
                 <div className="flex justify-between items-center text-xs font-semibold gap-4">
                   <span className="text-zinc-800 dark:text-zinc-200 truncate">
-                    {cuisine.name}
+                    {category.name}
                   </span>
                   <span className="text-zinc-500 dark:text-zinc-400 shrink-0">
-                    {cuisine.count} ({cuisine.share}%)
+                    {category.count} ({category.share}%)
                   </span>
                 </div>
                 <div className="w-full bg-zinc-100 dark:bg-zinc-800 h-2 rounded-full overflow-hidden">
                   <div
                     className="bg-orange-500 h-full rounded-full transition-all duration-500"
-                    style={{ width: `${cuisine.share}%` }}
+                    style={{ width: `${category.share}%` }}
                   />
                 </div>
               </div>
@@ -454,8 +459,8 @@ export default function OverviewSection({
               onClick={() => setActiveTab("restaurants")}
               className="text-xs font-bold text-orange-500 hover:text-orange-600 transition-colors inline-flex items-center gap-1"
             >
-              <span>Manage all merchants</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <span>{t("overview.manage_merchants")}</span>
+              <ArrowRight className="w-3.5 h-3.5 rtl:rotate-180" />
             </button>
           </div>
         </div>
