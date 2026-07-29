@@ -6,28 +6,95 @@ import {
   Plus,
   Edit,
   Trash2,
-  X,
   Loader2,
-  AlertCircle,
   ArrowRightLeft,
   ToggleLeft,
   ToggleRight,
   TrendingUp,
-  Search,
+  SearchX,
 } from "lucide-react";
+import toast from "react-hot-toast";
 import {
   currenciesService,
   Currency,
-  MarketRate,
+  ExchangeRate,
 } from "../../services/currencies";
+import Modal from "./ui/Modal";
+import { useConfirm } from "./ui/ConfirmDialog";
+import {
+  EmptyState,
+  ErrorState,
+  TableSkeleton,
+  CardSkeletonGrid,
+} from "./ui/States";
+import { formatRate, formatDateTime } from "../../lib/format";
 
+import { useI18n, type MessageKey } from "../../lib/i18n";
 interface CurrenciesSectionProps {
   searchQuery?: string;
+}
+
+/** The house form-field tokens. Kept in one place so the two modals agree. */
+const inputClass =
+  "w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm text-zinc-900 dark:text-white rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50";
+const labelClass =
+  "block text-[10px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest mb-1.5";
+
+/**
+ * A rate row is either a platform default (`restaurantId` and
+ * `deliveryCompanyId` both null) or an override owned by one merchant or
+ * delivery company. The panel showed no difference between the two, so an
+ * admin could delete a merchant's private override believing they were
+ * editing the platform rate.
+ */
+function rateScope(rate: ExchangeRate): {
+  key: MessageKey;
+  name?: string;
+  isDefault: boolean;
+  tone: string;
+} {
+  if (rate.restaurantId) {
+    return {
+      key: rate.restaurantName
+        ? "cur.scope_restaurant"
+        : "cur.scope_restaurant_plain",
+      name: rate.restaurantName ?? undefined,
+      isDefault: false,
+      tone: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
+    };
+  }
+  if (rate.deliveryCompanyId) {
+    return {
+      key: rate.deliveryCompanyName
+        ? "cur.scope_company"
+        : "cur.scope_company_plain",
+      name: rate.deliveryCompanyName ?? undefined,
+      isDefault: false,
+      tone: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
+    };
+  }
+  return {
+    key: "cur.scope_default",
+    isDefault: true,
+    tone: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+  };
+}
+
+function RequiredMark() {
+  return (
+    <span aria-hidden="true" className="text-orange-500">
+      {" "}
+      *
+    </span>
+  );
 }
 
 export default function CurrenciesSection({
   searchQuery,
 }: CurrenciesSectionProps) {
+  const { t } = useI18n();
+  const confirm = useConfirm();
+
   // Sub-tab state
   const [activeSubTab, setActiveSubTab] = useState<"currencies" | "rates">(
     "currencies",
@@ -39,7 +106,7 @@ export default function CurrenciesSection({
   const [currenciesError, setCurrenciesError] = useState<string | null>(null);
 
   // Market Rates state
-  const [marketRates, setMarketRates] = useState<MarketRate[]>([]);
+  const [marketRates, setMarketRates] = useState<ExchangeRate[]>([]);
   const [isRatesLoading, setIsRatesLoading] = useState(true);
   const [ratesError, setRatesError] = useState<string | null>(null);
 
@@ -55,7 +122,7 @@ export default function CurrenciesSection({
 
   // Rate Modal state
   const [isRateModalOpen, setIsRateModalOpen] = useState(false);
-  const [editingRate, setEditingRate] = useState<MarketRate | null>(null);
+  const [editingRate, setEditingRate] = useState<ExchangeRate | null>(null);
   const [rateForm, setRateForm] = useState({
     fromCurrencyId: "",
     toCurrencyId: "",
@@ -71,38 +138,34 @@ export default function CurrenciesSection({
   const fetchCurrencies = async () => {
     try {
       setIsCurrenciesLoading(true);
-      const data = await currenciesService.getAllCurrencies();
-      const finalData = Array.isArray(data)
-        ? data
-        : data && (data as any).data
-          ? (data as any).data
-          : [];
-      setCurrencies(finalData);
+      const res = await currenciesService.getAllCurrencies({ limit: 100 });
+      setCurrencies(res.data);
       setCurrenciesError(null);
     } catch (err: any) {
       console.error("Failed to fetch currencies:", err);
-      setCurrenciesError("Could not fetch currencies.");
+      setCurrenciesError(err?.message || t("cur.load_failed"));
       setCurrencies([]);
     } finally {
       setIsCurrenciesLoading(false);
     }
   };
 
-  // --- Fetch Market Rates ---
+  /*
+   * --- Fetch exchange rates ---
+   *
+   * `exchange-rates/all` rather than the legacy `market-rates/all`: the legacy
+   * route only ever returns the system defaults, so every per-restaurant and
+   * per-delivery-company override — the rates customers are actually charged —
+   * was invisible from this panel.
+   */
   const fetchMarketRates = async () => {
     try {
       setIsRatesLoading(true);
-      const data = await currenciesService.getAllMarketRates();
-      const finalData = Array.isArray(data)
-        ? data
-        : data && (data as any).data
-          ? (data as any).data
-          : [];
-      setMarketRates(finalData);
+      setMarketRates(await currenciesService.getAllExchangeRates());
       setRatesError(null);
     } catch (err: any) {
-      console.error("Failed to fetch market rates:", err);
-      setRatesError("Could not fetch market rates.");
+      console.error("Failed to fetch exchange rates:", err);
+      setRatesError(err?.message || t("cur.rates_load_failed"));
       setMarketRates([]);
     } finally {
       setIsRatesLoading(false);
@@ -113,6 +176,16 @@ export default function CurrenciesSection({
     fetchCurrencies();
     fetchMarketRates();
   }, []);
+
+  const closeCurrencyModal = () => {
+    setIsCurrencyModalOpen(false);
+    setEditingCurrency(null);
+  };
+
+  const closeRateModal = () => {
+    setIsRateModalOpen(false);
+    setEditingRate(null);
+  };
 
   // --- Currency CRUD ---
   const handleCreateCurrency = async (e: React.FormEvent) => {
@@ -125,11 +198,14 @@ export default function CurrenciesSection({
         symbol: currencyForm.symbol,
         isActive: currencyForm.isActive,
       });
-      setIsCurrencyModalOpen(false);
+      closeCurrencyModal();
       resetCurrencyForm();
+      toast.success(
+        t("cur.created", { code: currencyForm.code.toUpperCase() }),
+      );
       fetchCurrencies();
     } catch (err: any) {
-      alert(`Failed to create currency: ${err.message}`);
+      toast.error(err?.message || t("cur.create_failed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -145,29 +221,37 @@ export default function CurrenciesSection({
         symbol: currencyForm.symbol,
         isActive: currencyForm.isActive,
       });
-      setEditingCurrency(null);
+      const savedCode = editingCurrency.code;
+      closeCurrencyModal();
       resetCurrencyForm();
+      toast.success(t("cur.updated", { code: savedCode }));
       fetchCurrencies();
     } catch (err: any) {
-      alert(`Failed to update currency: ${err.message}`);
+      toast.error(err?.message || t("cur.update_failed"));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleDeleteCurrency = async (code: string) => {
-    if (
-      !confirm(
-        `Are you sure you want to delete currency "${code}"? This action cannot be undone.`,
-      )
-    )
-      return;
+  const handleDeleteCurrency = async (currency: Currency) => {
+    const confirmed = await confirm({
+      title: t("cur.delete_title", { code: currency.code }),
+      description: t("cur.delete_body", {
+        name: currency.name,
+        symbol: currency.symbol,
+      }),
+      confirmLabel: t("cur.delete_cta"),
+      variant: "danger",
+    });
+    if (!confirmed) return;
+
     try {
-      setDeletingCode(code);
-      await currenciesService.deleteCurrency(code);
+      setDeletingCode(currency.code);
+      await currenciesService.deleteCurrency(currency.code);
+      toast.success(t("cur.deleted", { code: currency.code }));
       fetchCurrencies();
     } catch (err: any) {
-      alert(`Failed to delete currency: ${err.message}`);
+      toast.error(err?.message || t("cur.delete_failed"));
     } finally {
       setDeletingCode(null);
     }
@@ -179,9 +263,17 @@ export default function CurrenciesSection({
       await currenciesService.updateCurrency(currency.code, {
         isActive: !currency.isActive,
       });
+      toast.success(
+        t("cur.toggled", {
+          code: currency.code,
+          state: currency.isActive
+            ? t("cur.state_inactive")
+            : t("cur.state_active"),
+        }),
+      );
       fetchCurrencies();
     } catch (err: any) {
-      alert(`Failed to toggle currency: ${err.message}`);
+      toast.error(err?.message || t("cur.toggle_failed"));
     } finally {
       setTogglingCode(null);
     }
@@ -206,16 +298,17 @@ export default function CurrenciesSection({
     e.preventDefault();
     try {
       setIsSubmitting(true);
-      await currenciesService.createMarketRate({
+      await currenciesService.upsertDefaultExchangeRate({
         fromCurrencyId: rateForm.fromCurrencyId.toUpperCase(),
         toCurrencyId: rateForm.toCurrencyId.toUpperCase(),
         rate: Number(rateForm.rate),
       });
-      setIsRateModalOpen(false);
+      closeRateModal();
       resetRateForm();
+      toast.success(t("cur.rate_saved"));
       fetchMarketRates();
     } catch (err: any) {
-      alert(`Failed to create market rate: ${err.message}`);
+      toast.error(err?.message || t("cur.rate_save_failed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -226,38 +319,46 @@ export default function CurrenciesSection({
     if (!editingRate) return;
     try {
       setIsSubmitting(true);
-      await currenciesService.updateMarketRate(editingRate.id, {
-        rate: Number(rateForm.rate),
-      });
-      setEditingRate(null);
+      await currenciesService.updateDefaultExchangeRate(
+        editingRate.id,
+        Number(rateForm.rate),
+      );
+      closeRateModal();
       resetRateForm();
+      toast.success(t("cur.rate_updated"));
       fetchMarketRates();
     } catch (err: any) {
-      alert(`Failed to update market rate: ${err.message}`);
+      toast.error(err?.message || t("cur.rate_update_failed"));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleDeleteRate = async (id: string) => {
-    if (
-      !confirm(
-        `Are you sure you want to delete this market rate? This action cannot be undone.`,
-      )
-    )
-      return;
+  const handleDeleteRate = async (rate: ExchangeRate) => {
+    const confirmed = await confirm({
+      title: t("cur.rate_delete_title", {
+        from: rate.fromCurrencyId,
+        to: rate.toCurrencyId,
+      }),
+      description: t("cur.rate_delete_body", { rate: formatRate(rate.rate) }),
+      confirmLabel: t("cur.rate_delete_cta"),
+      variant: "danger",
+    });
+    if (!confirmed) return;
+
     try {
-      setDeletingRateId(id);
-      await currenciesService.deleteMarketRate(id);
+      setDeletingRateId(rate.id);
+      await currenciesService.deleteExchangeRate(rate.id);
+      toast.success(t("cur.rate_deleted"));
       fetchMarketRates();
     } catch (err: any) {
-      alert(`Failed to delete market rate: ${err.message}`);
+      toast.error(err?.message || t("cur.rate_delete_failed"));
     } finally {
       setDeletingRateId(null);
     }
   };
 
-  const openEditRateModal = (r: MarketRate) => {
+  const openEditRateModal = (r: ExchangeRate) => {
     setEditingRate(r);
     setRateForm({
       fromCurrencyId: r.fromCurrencyId,
@@ -291,19 +392,41 @@ export default function CurrenciesSection({
     );
   });
 
-  // --- Loading state ---
-  const isLoading =
-    activeSubTab === "currencies" ? isCurrenciesLoading : isRatesLoading;
-  const error = activeSubTab === "currencies" ? currenciesError : ratesError;
+  const isSearching = !!searchQuery?.trim();
 
-  if (isLoading && currencies.length === 0 && marketRates.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center p-24 text-zinc-500">
-        <Loader2 className="w-8 h-8 animate-spin mb-4 text-orange-500" />
-        <p className="text-sm font-semibold">Loading currencies...</p>
-      </div>
-    );
-  }
+  // Both modals guard against a stray backdrop click / Escape discarding typing.
+  const isCurrencyDirty = editingCurrency
+    ? currencyForm.name !== editingCurrency.name ||
+      currencyForm.symbol !== editingCurrency.symbol ||
+      currencyForm.isActive !== editingCurrency.isActive
+    : !!(currencyForm.code || currencyForm.name || currencyForm.symbol);
+
+  const isRateDirty = editingRate
+    ? rateForm.rate !== String(editingRate.rate)
+    : !!(rateForm.fromCurrencyId || rateForm.toCurrencyId || rateForm.rate);
+
+  const isCurrencyModalVisible = isCurrencyModalOpen || !!editingCurrency;
+  const isRateModalVisible = isRateModalOpen || !!editingRate;
+
+  const addButton = (
+    <button
+      onClick={() => {
+        if (activeSubTab === "currencies") {
+          resetCurrencyForm();
+          setIsCurrencyModalOpen(true);
+        } else {
+          resetRateForm();
+          setIsRateModalOpen(true);
+        }
+      }}
+      className="bg-zinc-900 hover:bg-orange-500 text-white dark:bg-zinc-800 text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-2"
+    >
+      <Plus className="w-4 h-4" />
+      {activeSubTab === "currencies"
+        ? t("cur.add_currency")
+        : t("cur.add_rate_short")}
+    </button>
+  );
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -312,96 +435,93 @@ export default function CurrenciesSection({
         <div>
           <h2 className="text-lg font-bold text-zinc-900 dark:text-white flex items-center gap-2">
             <Coins className="w-5 h-5 text-orange-500" />
-            Currencies & Exchange Rates
+            {t("cur.page_title")}
           </h2>
-          <p className="text-[11px] text-zinc-500 font-semibold mt-1">
-            Manage active currencies and market exchange rates.
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-semibold mt-1">
+            {t("cur.page_subtitle")}
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           {/* Sub-tab toggle */}
-          <div className="flex bg-zinc-100 dark:bg-zinc-800 rounded-xl p-0.5">
+          <div
+            role="group"
+            aria-label={t("cur.view_aria")}
+            className="flex bg-zinc-100 dark:bg-zinc-800 rounded-xl p-0.5"
+          >
             <button
+              aria-pressed={activeSubTab === "currencies"}
               onClick={() => setActiveSubTab("currencies")}
               className={`text-[11px] font-bold px-3.5 py-1.5 rounded-[10px] transition-all ${
                 activeSubTab === "currencies"
                   ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm"
-                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300"
               }`}
             >
-              Currencies
+              {t("cur.tab_currencies")}
             </button>
             <button
+              aria-pressed={activeSubTab === "rates"}
               onClick={() => setActiveSubTab("rates")}
               className={`text-[11px] font-bold px-3.5 py-1.5 rounded-[10px] transition-all ${
                 activeSubTab === "rates"
                   ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm"
-                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300"
               }`}
             >
-              Market Rates
+              {t("cur.tab_rates")}
             </button>
           </div>
 
-          <button
-            onClick={() => {
-              if (activeSubTab === "currencies") {
-                resetCurrencyForm();
-                setIsCurrencyModalOpen(true);
-              } else {
-                resetRateForm();
-                setIsRateModalOpen(true);
-              }
-            }}
-            className="bg-zinc-900 hover:bg-orange-500 text-white dark:bg-zinc-800 text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-2"
-          >
-            <Plus className="w-4 h-4" />
-            {activeSubTab === "currencies" ? "Add Currency" : "Add Rate"}
-          </button>
+          {addButton}
         </div>
       </div>
 
-      {/* Error */}
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold p-4 rounded-xl flex items-center gap-2">
-          <AlertCircle className="w-4 h-4" />
-          {error}
-        </div>
-      )}
-
-      {/* === Currencies Tab === */}
+      {/* === Currencies Tab ===
+          Loading / error / empty are gated per sub-tab: the old shared gate
+          waited for BOTH lists, so switching to Rates mid-fetch rendered the
+          "no rates yet" empty state over a list that was still loading. */}
       {activeSubTab === "currencies" && (
-        <>
-          {filteredCurrencies.length === 0 ? (
-            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-12 text-center rounded-2xl flex flex-col items-center justify-center">
-              <Coins className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mb-3" />
-              <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-                No currencies found
-              </p>
-              <p className="text-xs text-zinc-500 mt-1">
-                Create your first currency to get started.
-              </p>
-            </div>
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
+          {isCurrenciesLoading ? (
+            <TableSkeleton rows={6} />
+          ) : currenciesError ? (
+            <ErrorState message={currenciesError} onRetry={fetchCurrencies} />
+          ) : filteredCurrencies.length === 0 ? (
+            <EmptyState
+              icon={isSearching ? SearchX : Coins}
+              title={
+                isSearching ? t("cur.no_match") : t("cur.none_found")
+              }
+              hint={
+                isSearching
+                  ? `Nothing matches “${searchQuery}”. Try a different code, name or symbol.`
+                  : t("cur.none_found_hint")
+              }
+              action={isSearching ? undefined : addButton}
+            />
           ) : (
-            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
+            /* The card keeps `overflow-hidden` for its rounded corners, so the
+               table needs its own scroll container — otherwise the Actions
+               column is clipped and unreachable on narrow viewports. */
+            <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50">
-                    <th className="text-left text-[10px] font-black text-zinc-400 uppercase tracking-widest p-4">
-                      Code
+                    <th className="text-start text-[10px] font-black text-zinc-400 uppercase tracking-widest p-4">
+                      {t("cur.code")}
                     </th>
-                    <th className="text-left text-[10px] font-black text-zinc-400 uppercase tracking-widest p-4">
-                      Name
+                    <th className="text-start text-[10px] font-black text-zinc-400 uppercase tracking-widest p-4">
+                      {t("common.name")}
                     </th>
-                    <th className="text-left text-[10px] font-black text-zinc-400 uppercase tracking-widest p-4">
-                      Symbol
+                    <th className="text-start text-[10px] font-black text-zinc-400 uppercase tracking-widest p-4">
+                      {t("cur.symbol")}
                     </th>
                     <th className="text-center text-[10px] font-black text-zinc-400 uppercase tracking-widest p-4">
-                      Status
+                      {t("common.status")}
                     </th>
-                    <th className="text-right text-[10px] font-black text-zinc-400 uppercase tracking-widest p-4">
-                      Actions
+                    <th className="text-end text-[10px] font-black text-zinc-400 uppercase tracking-widest p-4">
+                      {t("common.actions")}
                     </th>
                   </tr>
                 </thead>
@@ -428,43 +548,53 @@ export default function CurrenciesSection({
                         <button
                           onClick={() => handleToggleCurrencyActive(c)}
                           disabled={togglingCode === c.code}
-                          title={c.isActive ? "Deactivate" : "Activate"}
-                          className="inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                          title={
+                            c.isActive ? t("cur.deactivate") : t("cur.activate")
+                          }
+                          aria-label={t("cur.toggle_aria", {
+                            action: c.isActive
+                              ? t("cur.deactivate")
+                              : t("cur.activate"),
+                            code: c.code,
+                          })}
+                          className="inline-flex items-center gap-1.5 p-1 rounded-lg transition-colors disabled:opacity-50"
                         >
                           {togglingCode === c.code ? (
                             <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
                           ) : c.isActive ? (
                             <>
                               <ToggleRight className="w-6 h-6 text-emerald-500" />
-                              <span className="text-[9px] font-black uppercase text-emerald-500">
-                                Active
+                              <span className="text-[9px] font-black uppercase text-emerald-600 dark:text-emerald-400">
+                                {t("status.active")}
                               </span>
                             </>
                           ) : (
                             <>
                               <ToggleLeft className="w-6 h-6 text-zinc-400" />
-                              <span className="text-[9px] font-black uppercase text-zinc-400">
-                                Inactive
+                              <span className="text-[9px] font-black uppercase text-zinc-500 dark:text-zinc-400">
+                                {t("status.inactive")}
                               </span>
                             </>
                           )}
                         </button>
                       </td>
-                      <td className="p-4 text-right">
+                      <td className="p-4 text-end">
                         <div className="flex justify-end gap-1.5">
                           <button
                             onClick={() => openEditCurrencyModal(c)}
                             disabled={deletingCode === c.code}
-                            className="p-1.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors disabled:opacity-50"
-                            title="Edit"
+                            className="p-2.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors disabled:opacity-50"
+                            title={t("cur.edit_aria", { code: c.code })}
+                            aria-label={t("cur.edit_aria", { code: c.code })}
                           >
                             <Edit className="w-4 h-4" />
                           </button>
                           <button
-                            onClick={() => handleDeleteCurrency(c.code)}
+                            onClick={() => handleDeleteCurrency(c)}
                             disabled={deletingCode === c.code}
-                            className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50"
-                            title="Delete"
+                            className="p-2.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50"
+                            title={t("cur.delete_aria", { code: c.code })}
+                            aria-label={t("cur.delete_aria", { code: c.code })}
                           >
                             {deletingCode === c.code ? (
                               <Loader2 className="w-4 h-4 animate-spin text-red-500" />
@@ -480,25 +610,38 @@ export default function CurrenciesSection({
               </table>
             </div>
           )}
-        </>
+        </div>
       )}
 
-      {/* === Market Rates Tab === */}
+      {/* === Exchange Rates Tab === */}
       {activeSubTab === "rates" && (
         <>
-          {filteredRates.length === 0 ? (
-            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-12 text-center rounded-2xl flex flex-col items-center justify-center">
-              <ArrowRightLeft className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mb-3" />
-              <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-                No market rates found
-              </p>
-              <p className="text-xs text-zinc-500 mt-1">
-                Create an exchange rate between two currencies.
-              </p>
+          {isRatesLoading ? (
+            <CardSkeletonGrid count={6} />
+          ) : ratesError ? (
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
+              <ErrorState message={ratesError} onRetry={fetchMarketRates} />
+            </div>
+          ) : filteredRates.length === 0 ? (
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
+              <EmptyState
+                icon={isSearching ? SearchX : ArrowRightLeft}
+                title={
+                  isSearching ? t("cur.no_rate_match") : t("cur.none_rates")
+                }
+                hint={
+                  isSearching
+                    ? `Nothing matches “${searchQuery}”. Try a currency code.`
+                    : t("cur.none_rates_hint")
+                }
+                action={isSearching ? undefined : addButton}
+              />
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredRates.map((r) => (
+              {filteredRates.map((r) => {
+                const scope = rateScope(r);
+                return (
                 <div
                   key={r.id}
                   className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 group"
@@ -522,19 +665,36 @@ export default function CurrenciesSection({
                     </div>
 
                     <div className="flex gap-1.5">
+                      {/* Only the default rate has an update endpoint; an
+                          override is edited by its own owner. */}
                       <button
                         onClick={() => openEditRateModal(r)}
-                        disabled={deletingRateId === r.id}
-                        className="p-1.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors disabled:opacity-50"
-                        title="Edit Rate"
+                        disabled={deletingRateId === r.id || !scope.isDefault}
+                        hidden={!scope.isDefault}
+                        className="p-2.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors disabled:opacity-50"
+                        title={t("cur.edit_rate_aria", {
+                          from: r.fromCurrencyId,
+                          to: r.toCurrencyId,
+                        })}
+                        aria-label={t("cur.edit_rate_aria", {
+                          from: r.fromCurrencyId,
+                          to: r.toCurrencyId,
+                        })}
                       >
                         <Edit className="w-3.5 h-3.5" />
                       </button>
                       <button
-                        onClick={() => handleDeleteRate(r.id)}
+                        onClick={() => handleDeleteRate(r)}
                         disabled={deletingRateId === r.id}
-                        className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50"
-                        title="Delete Rate"
+                        className="p-2.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50"
+                        title={t("cur.delete_rate_aria", {
+                          from: r.fromCurrencyId,
+                          to: r.toCurrencyId,
+                        })}
+                        aria-label={t("cur.delete_rate_aria", {
+                          from: r.fromCurrencyId,
+                          to: r.toCurrencyId,
+                        })}
                       >
                         {deletingRateId === r.id ? (
                           <Loader2 className="w-3.5 h-3.5 animate-spin text-red-500" />
@@ -547,291 +707,297 @@ export default function CurrenciesSection({
 
                   <div className="border-t border-zinc-100 dark:border-zinc-800 pt-3">
                     <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">
-                      Exchange Rate
+                      {t("cur.exchange_rate")}
                     </p>
+                    {/* `toLocaleString()` defaults to 3 fraction digits, which
+                        rendered a 0.00042 rate as a flat "0". */}
                     <p className="text-2xl font-black text-zinc-900 dark:text-white tabular-nums">
-                      {Number(r.rate).toLocaleString()}
+                      {formatRate(r.rate)}
                     </p>
-                    <p className="text-[11px] text-zinc-500 font-semibold mt-1">
-                      1 {r.fromCurrencyId} = {Number(r.rate).toLocaleString()}{" "}
-                      {r.toCurrencyId}
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-semibold mt-1">
+                      {t("cur.one_equals", {
+                        from: r.fromCurrencyId,
+                        rate: formatRate(r.rate),
+                        to: r.toCurrencyId,
+                      })}
                     </p>
                   </div>
 
+                  <p
+                    className={`inline-flex items-center mt-3 text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full border ${scope.tone}`}
+                  >
+                    {t(scope.key, { name: scope.name ?? "" })}
+                  </p>
+
                   {r.updatedAt && (
                     <p className="text-[9px] text-zinc-400 font-semibold mt-3">
-                      Updated:{" "}
-                      {new Date(r.updatedAt).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
+                      {t("cur.updated_at", {
+                        date: formatDateTime(r.updatedAt),
                       })}
                     </p>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </>
       )}
 
       {/* === Currency Modal === */}
-      {(isCurrencyModalOpen || editingCurrency) && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 duration-150">
-            <div className="p-5 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-900/40">
-              <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-                <Coins className="w-4 h-4 text-orange-500" />
-                {editingCurrency ? "Edit Currency" : "Add New Currency"}
-              </h3>
-              <button
-                onClick={() => {
-                  setIsCurrencyModalOpen(false);
-                  setEditingCurrency(null);
-                }}
-                className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={
-                editingCurrency ? handleUpdateCurrency : handleCreateCurrency
-              }
-              className="p-6 space-y-4"
-            >
-              <div>
-                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
-                  Currency Code
-                </label>
-                <input
-                  required
-                  type="text"
-                  maxLength={5}
-                  disabled={!!editingCurrency}
-                  value={currencyForm.code}
-                  onChange={(e) =>
-                    setCurrencyForm({
-                      ...currencyForm,
-                      code: e.target.value.toUpperCase(),
-                    })
-                  }
-                  className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50 uppercase font-bold"
-                  placeholder="e.g. USD"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
-                  Name
-                </label>
-                <input
-                  required
-                  type="text"
-                  value={currencyForm.name}
-                  onChange={(e) =>
-                    setCurrencyForm({ ...currencyForm, name: e.target.value })
-                  }
-                  className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  placeholder="e.g. US Dollar"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
-                  Symbol
-                </label>
-                <input
-                  required
-                  type="text"
-                  maxLength={5}
-                  value={currencyForm.symbol}
-                  onChange={(e) =>
-                    setCurrencyForm({ ...currencyForm, symbol: e.target.value })
-                  }
-                  className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500 text-lg font-bold"
-                  placeholder="e.g. $"
-                />
-              </div>
-
-              <div className="flex items-center gap-3 pt-1">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setCurrencyForm({
-                      ...currencyForm,
-                      isActive: !currencyForm.isActive,
-                    })
-                  }
-                  className="flex items-center gap-2"
-                >
-                  {currencyForm.isActive ? (
-                    <ToggleRight className="w-7 h-7 text-emerald-500" />
-                  ) : (
-                    <ToggleLeft className="w-7 h-7 text-zinc-400" />
-                  )}
-                  <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">
-                    {currencyForm.isActive ? "Active" : "Inactive"}
-                  </span>
-                </button>
-              </div>
-
-              <div className="pt-4 flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCurrencyModalOpen(false);
-                    setEditingCurrency(null);
-                  }}
-                  className="flex-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-white text-xs font-bold py-2.5 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold py-2.5 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {isSubmitting && (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  )}
-                  {editingCurrency ? "Save Changes" : "Create Currency"}
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={isCurrencyModalVisible}
+        onClose={closeCurrencyModal}
+        title={
+          editingCurrency ? t("cur.edit_currency") : t("cur.add_currency_title")
+        }
+        description={
+          editingCurrency
+            ? `Update how ${editingCurrency.code} is displayed across the app.`
+            : t("cur.need_currencies")
+        }
+        maxWidth="max-w-md"
+        dismissable={!isSubmitting && !isCurrencyDirty}
+        icon={
+          <div className="w-9 h-9 rounded-xl bg-orange-500/10 text-orange-500 flex items-center justify-center shrink-0">
+            <Coins className="w-4 h-4" />
           </div>
-        </div>
-      )}
+        }
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeCurrencyModal}
+              className="flex-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-white text-xs font-bold py-2.5 rounded-lg transition-colors"
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              type="submit"
+              form="currency-form"
+              disabled={isSubmitting}
+              className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold py-2.5 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {editingCurrency ? t("common.save_changes") : t("cur.create_cta")}
+            </button>
+          </>
+        }
+      >
+        <form
+          id="currency-form"
+          onSubmit={editingCurrency ? handleUpdateCurrency : handleCreateCurrency}
+          className="space-y-4"
+        >
+          <div>
+            <label htmlFor="currency-code" className={labelClass}>
+              {t("cur.currency_code")}
+              <RequiredMark />
+            </label>
+            <input
+              id="currency-code"
+              required
+              type="text"
+              maxLength={5}
+              disabled={!!editingCurrency}
+              value={currencyForm.code}
+              onChange={(e) =>
+                setCurrencyForm({
+                  ...currencyForm,
+                  code: e.target.value.toUpperCase(),
+                })
+              }
+              className={`${inputClass} uppercase font-bold`}
+              placeholder={t("cur.code_placeholder")}
+            />
+          </div>
+
+          <div>
+            <label htmlFor="currency-name" className={labelClass}>
+              {t("common.name")}
+              <RequiredMark />
+            </label>
+            <input
+              id="currency-name"
+              required
+              type="text"
+              value={currencyForm.name}
+              onChange={(e) =>
+                setCurrencyForm({ ...currencyForm, name: e.target.value })
+              }
+              className={inputClass}
+              placeholder={t("cur.name_placeholder")}
+            />
+          </div>
+
+          <div>
+            <label htmlFor="currency-symbol" className={labelClass}>
+              {t("cur.symbol")}
+              <RequiredMark />
+            </label>
+            <input
+              id="currency-symbol"
+              required
+              type="text"
+              maxLength={5}
+              value={currencyForm.symbol}
+              onChange={(e) =>
+                setCurrencyForm({ ...currencyForm, symbol: e.target.value })
+              }
+              className={`${inputClass} text-lg font-bold`}
+              placeholder={t("cur.symbol_placeholder")}
+            />
+          </div>
+
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={currencyForm.isActive}
+              onClick={() =>
+                setCurrencyForm({
+                  ...currencyForm,
+                  isActive: !currencyForm.isActive,
+                })
+              }
+              className="flex items-center gap-2 rounded-lg"
+            >
+              {currencyForm.isActive ? (
+                <ToggleRight className="w-7 h-7 text-emerald-500" />
+              ) : (
+                <ToggleLeft className="w-7 h-7 text-zinc-400" />
+              )}
+              <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">
+                {currencyForm.isActive
+                  ? t("status.active")
+                  : t("status.inactive")}
+              </span>
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* === Rate Modal === */}
-      {(isRateModalOpen || editingRate) && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 duration-150">
-            <div className="p-5 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-900/40">
-              <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-                <ArrowRightLeft className="w-4 h-4 text-orange-500" />
-                {editingRate ? "Edit Market Rate" : "Add Market Rate"}
-              </h3>
-              <button
-                onClick={() => {
-                  setIsRateModalOpen(false);
-                  setEditingRate(null);
-                }}
-                className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={editingRate ? handleUpdateRate : handleCreateRate}
-              className="p-6 space-y-4"
-            >
-              <div>
-                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
-                  From Currency
-                </label>
-                <select
-                  required
-                  disabled={!!editingRate}
-                  value={rateForm.fromCurrencyId}
-                  onChange={(e) =>
-                    setRateForm({
-                      ...rateForm,
-                      fromCurrencyId: e.target.value,
-                    })
-                  }
-                  className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50"
-                >
-                  <option value="">Select currency...</option>
-                  {currencies.map((c) => (
-                    <option key={c.code} value={c.code}>
-                      {c.code} — {c.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
-                  To Currency
-                </label>
-                <select
-                  required
-                  disabled={!!editingRate}
-                  value={rateForm.toCurrencyId}
-                  onChange={(e) =>
-                    setRateForm({ ...rateForm, toCurrencyId: e.target.value })
-                  }
-                  className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50"
-                >
-                  <option value="">Select currency...</option>
-                  {currencies
-                    .filter((c) => c.code !== rateForm.fromCurrencyId)
-                    .map((c) => (
-                      <option key={c.code} value={c.code}>
-                        {c.code} — {c.name}
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
-                  Exchange Rate
-                </label>
-                <input
-                  required
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={rateForm.rate}
-                  onChange={(e) =>
-                    setRateForm({ ...rateForm, rate: e.target.value })
-                  }
-                  className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold tabular-nums"
-                  placeholder="e.g. 89500"
-                />
-                {rateForm.fromCurrencyId &&
-                  rateForm.toCurrencyId &&
-                  rateForm.rate && (
-                    <p className="text-[11px] text-zinc-500 font-semibold mt-1.5">
-                      1 {rateForm.fromCurrencyId} ={" "}
-                      {Number(rateForm.rate).toLocaleString()}{" "}
-                      {rateForm.toCurrencyId}
-                    </p>
-                  )}
-              </div>
-
-              <div className="pt-4 flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsRateModalOpen(false);
-                    setEditingRate(null);
-                  }}
-                  className="flex-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-white text-xs font-bold py-2.5 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold py-2.5 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {isSubmitting && (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  )}
-                  {editingRate ? "Save Changes" : "Create Rate"}
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={isRateModalVisible}
+        onClose={closeRateModal}
+        title={
+          editingRate ? t("cur.edit_rate") : t("cur.add_rate")
+        }
+        description={t("cur.rate_modal_desc")}
+        maxWidth="max-w-md"
+        dismissable={!isSubmitting && !isRateDirty}
+        icon={
+          <div className="w-9 h-9 rounded-xl bg-orange-500/10 text-orange-500 flex items-center justify-center shrink-0">
+            <ArrowRightLeft className="w-4 h-4" />
           </div>
-        </div>
-      )}
+        }
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeRateModal}
+              className="flex-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-white text-xs font-bold py-2.5 rounded-lg transition-colors"
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              type="submit"
+              form="rate-form"
+              disabled={isSubmitting}
+              className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold py-2.5 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {editingRate ? t("common.save_changes") : t("cur.create_rate")}
+            </button>
+          </>
+        }
+      >
+        <form
+          id="rate-form"
+          onSubmit={editingRate ? handleUpdateRate : handleCreateRate}
+          className="space-y-4"
+        >
+          <div>
+            <label htmlFor="rate-from-currency" className={labelClass}>
+              {t("cur.from")}
+              <RequiredMark />
+            </label>
+            <select
+              id="rate-from-currency"
+              required
+              disabled={!!editingRate}
+              value={rateForm.fromCurrencyId}
+              onChange={(e) =>
+                setRateForm({
+                  ...rateForm,
+                  fromCurrencyId: e.target.value,
+                })
+              }
+              className={inputClass}
+            >
+              <option value="">{t("cur.select_currency")}</option>
+              {currencies.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.code} — {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="rate-to-currency" className={labelClass}>
+              {t("cur.to")}
+              <RequiredMark />
+            </label>
+            <select
+              id="rate-to-currency"
+              required
+              disabled={!!editingRate}
+              value={rateForm.toCurrencyId}
+              onChange={(e) =>
+                setRateForm({ ...rateForm, toCurrencyId: e.target.value })
+              }
+              className={inputClass}
+            >
+              <option value="">{t("cur.select_currency")}</option>
+              {currencies
+                .filter((c) => c.code !== rateForm.fromCurrencyId)
+                .map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.code} — {c.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="rate-value" className={labelClass}>
+              {t("cur.exchange_rate")}
+              <RequiredMark />
+            </label>
+            <input
+              id="rate-value"
+              required
+              type="number"
+              step="any"
+              min="0"
+              value={rateForm.rate}
+              onChange={(e) => setRateForm({ ...rateForm, rate: e.target.value })}
+              className={`${inputClass} font-bold tabular-nums`}
+              placeholder={t("cur.rate_placeholder")}
+            />
+            {rateForm.fromCurrencyId &&
+              rateForm.toCurrencyId &&
+              rateForm.rate && (
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-semibold mt-1.5">
+                  1 {rateForm.fromCurrencyId} = {formatRate(rateForm.rate)}{" "}
+                  {rateForm.toCurrencyId}
+                </p>
+              )}
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

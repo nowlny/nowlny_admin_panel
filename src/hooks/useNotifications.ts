@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { fetchToken, onMessageListener } from "../lib/firebase";
 import { usersService } from "../services/users";
 
@@ -11,73 +11,102 @@ export interface FCMToast {
   icon?: string;
 }
 
+export type PushPermission = "unsupported" | NotificationPermission;
+
+function currentPermission(): PushPermission {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return "unsupported";
+  }
+  return Notification.permission;
+}
+
 export function useNotifications(isAuthenticated: boolean) {
   const [fcmToken, setFcmToken] = useState<string | null>(null);
-  const [notificationToast, setNotificationToast] = useState<FCMToast | null>(null);
+  const [notificationToast, setNotificationToast] = useState<FCMToast | null>(
+    null,
+  );
+  // Lazily read the real permission. On the server this resolves to
+  // "unsupported" and no consumer of this hook renders before hydration.
+  const [permission, setPermission] =
+    useState<PushPermission>(currentPermission);
+  const [isRequesting, setIsRequesting] = useState(false);
 
+  const registerToken = useCallback(async () => {
+    const token = await fetchToken();
+    if (!token) return null;
+    setFcmToken(token);
+    try {
+      await usersService.registerDeviceToken({ token });
+    } catch (err) {
+      console.warn("Could not register device token with the server:", err);
+    }
+    return token;
+  }, []);
+
+  /**
+   * Must be called from a user gesture.
+   *
+   * Previously the hook called `Notification.requestPermission()` the instant
+   * the user authenticated — the browser prompt appeared before the dashboard
+   * had even painted, with no explanation of what it was for. Browsers treat a
+   * dismissal as a permanent block, so one reflexive click disabled order
+   * alerts forever, and the `denied` branch only logged to the console so the
+   * UI never said push was off.
+   */
+  const requestPermission = useCallback(async () => {
+    if (currentPermission() === "unsupported") return "unsupported" as const;
+
+    setIsRequesting(true);
+    try {
+      const result = await Notification.requestPermission();
+      setPermission(result);
+      if (result === "granted") await registerToken();
+      return result;
+    } catch (err) {
+      console.error("Error requesting notification permission:", err);
+      return Notification.permission;
+    } finally {
+      setIsRequesting(false);
+    }
+  }, [registerToken]);
+
+  // If permission was already granted on a previous visit, silently refresh the
+  // device token — no prompt is shown in that case.
   useEffect(() => {
     if (!isAuthenticated) return;
-
-    const requestPermissionAndToken = async () => {
-      try {
-        const permission = await Notification.requestPermission();
-        if (permission === "granted") {
-          console.log("Notification permission granted.");
-          const token = await fetchToken();
-          if (token) {
-            setFcmToken(token);
-            // Send token to backend
-            await usersService.updateFCMToken(token);
-            console.log("=========================================");
-            console.log("FCM Token successfully generated!");
-            console.log(token);
-            console.log("Copy this token and use Firebase Console to send a test message.");
-            console.log("=========================================");
-          } else {
-            console.warn("Failed to generate FCM token.");
-          }
-        } else {
-          console.log("Notification permission denied.");
-        }
-      } catch (err) {
-        console.error("Error setting up notifications:", err);
-      }
-    };
-
-    requestPermissionAndToken();
-  }, [isAuthenticated]);
+    if (currentPermission() !== "granted") return;
+    registerToken().catch((err) =>
+      console.warn("Could not refresh device token:", err),
+    );
+  }, [isAuthenticated, registerToken]);
 
   useEffect(() => {
     if (!fcmToken) return;
 
-    // Set up foreground listener
     let active = true;
+    let hideTimer: ReturnType<typeof setTimeout> | undefined;
+
     const setupListener = async () => {
       try {
         while (active) {
-          const payload: any = await onMessageListener();
+          const payload = (await onMessageListener()) as {
+            notification?: { title?: string; body?: string; image?: string };
+          };
           if (!active) break;
-          // You can show a custom toast here
-          // For now, we'll just log and use standard browser notification if supported
-          console.log("Received foreground message:", payload);
-          if (payload?.notification) {
-            new Notification(payload.notification.title || "New Notification", {
-              body: payload.notification.body,
-              icon: payload.notification.image || "/icon.png",
-            });
-            
-            setNotificationToast({
-              id: Date.now().toString(),
-              title: payload.notification.title || "New Notification",
-              body: payload.notification.body || "",
-              icon: payload.notification.image,
-            });
+          if (!payload?.notification) continue;
 
-            // Auto-hide toast after 5 seconds
-            setTimeout(() => {
-              setNotificationToast(null);
-            }, 5000);
-          }
+          // Only the in-app toast is shown. Previously this ALSO constructed a
+          // native `new Notification(...)`, so a single push produced two
+          // simultaneous alerts for the same message.
+          setNotificationToast({
+            id: `${Date.now()}`,
+            title: payload.notification.title || "New Notification",
+            body: payload.notification.body || "",
+            icon: payload.notification.image,
+          });
+
+          clearTimeout(hideTimer);
+          hideTimer = setTimeout(() => setNotificationToast(null), 6000);
         }
       } catch (e) {
         console.error("Error in onMessageListener", e);
@@ -88,8 +117,16 @@ export function useNotifications(isAuthenticated: boolean) {
 
     return () => {
       active = false;
+      clearTimeout(hideTimer);
     };
   }, [fcmToken]);
 
-  return { fcmToken, notificationToast, setNotificationToast };
+  return {
+    fcmToken,
+    notificationToast,
+    setNotificationToast,
+    permission,
+    requestPermission,
+    isRequesting,
+  };
 }

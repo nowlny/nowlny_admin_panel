@@ -1,325 +1,503 @@
 "use client";
 
-import React from "react";
-import { 
-  DollarSign, 
-  Store, 
-  Users, 
-  TrendingUp, 
-  TrendingDown, 
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  Store,
   ShoppingBag,
+  CheckCircle2,
+  Bike,
   ArrowRight,
-  PlusCircle,
-  FileText,
-  Clock,
-  Sparkles
+  Loader2,
 } from "lucide-react";
-import { loadDb } from "../data/mockData";
+import toast from "react-hot-toast";
+import { ordersService, OrderStatus } from "../../services/orders";
+import {
+  restaurantsService,
+  RestaurantResponse,
+  RestaurantSubmission,
+} from "../../services/restaurants";
+import { formatAddress, humanizeEnum } from "../../lib/format";
+import { EmptyState, ErrorState, ErrorBanner, Skeleton } from "./ui/States";
+import { useConfirm } from "./ui/ConfirmDialog";
+
+import { useI18n } from "../../lib/i18n";
+/**
+ * Every figure on this dashboard used to come from `loadDb()` — a localStorage
+ * fixture seeded with invented merchants and invented money. The page then
+ * described itself as "real-time operations". The revenue sparkline, the
+ * month-over-month deltas and the cuisine-share counts were hardcoded literals.
+ *
+ * Everything below is now read from the API, and any panel that could not be
+ * sourced from an endpoint (GMV, platform net earnings, the monthly revenue
+ * trend) was deleted rather than faked — there is no aggregate/analytics
+ * endpoint exposed through `src/services`.
+ */
+
+const LIVE_STATUSES: OrderStatus[] = [
+  "pending",
+  "confirmed",
+  "out_for_delivery",
+];
 
 interface OverviewProps {
-  db: ReturnType<typeof loadDb>;
+  /** @deprecated localStorage fixtures — no longer read. Kept so page.tsx typechecks. */
+  db?: unknown;
   setActiveTab: (tab: string) => void;
-  onApproveRestaurant: (id: string) => void;
+  /** @deprecated only mutated localStorage; approval now calls the API directly. */
+  onApproveRestaurant?: (id: string) => void;
+}
+
+interface OrderCounts {
+  total: number;
+  delivered: number;
+  live: number;
+  byStatus: Record<string, number>;
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
 }
 
 export default function OverviewSection({
-  db,
   setActiveTab,
-  onApproveRestaurant
 }: OverviewProps) {
-  const { restaurants, customers, orders, settings } = db;
+  const { t } = useI18n();
+  const confirm = useConfirm();
 
-  // 1. Calculate stats
-  const completedOrders = orders.filter(o => o.status === "Delivered");
-  const activeOrdersCount = orders.filter(o => !["Delivered", "Cancelled"].includes(o.status)).length;
-  
-  // Total Gross Sales (subtotals of all non-cancelled orders)
-  const nonCancelledOrders = orders.filter(o => o.status !== "Cancelled");
-  const totalSales = nonCancelledOrders.reduce((sum, o) => sum + o.subtotal, 0);
-  
-  // Platform Commission Revenue (commission rate % of subtotal + service fees of completed orders)
-  const totalCommission = completedOrders.reduce((sum, o) => {
-    const comm = o.subtotal * (settings.commissionRate / 100);
-    return sum + comm + o.serviceFee;
-  }, 0);
+  // Platform counters
+  const [counts, setCounts] = useState<OrderCounts | null>(null);
+  const [restaurants, setRestaurants] = useState<RestaurantResponse[] | null>(
+    null,
+  );
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState<string | null>(null);
 
-  const pendingRestaurants = restaurants.filter(r => r.status === "Pending");
+  // Merchant verification queue
+  const [submissions, setSubmissions] = useState<RestaurantSubmission[]>([]);
+  const [queueLoading, setQueueLoading] = useState(true);
+  const [queueError, setQueueError] = useState<string | null>(null);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
-  // Mock charts data points (revenue per month in $)
-  const monthlyRevenue = [
-    { label: "Dec", val: 5400 },
-    { label: "Jan", val: 7800 },
-    { label: "Feb", val: 8900 },
-    { label: "Mar", val: 11200 },
-    { label: "Apr", val: 14500 },
-    { label: "May", val: totalSales }
-  ];
+  // ─── Fetch ────────────────────────────────────────────────────────────────
 
-  const maxChartVal = Math.max(...monthlyRevenue.map(m => m.val)) * 1.15;
+  const fetchStats = useCallback(async () => {
+    setStatsLoading(true);
+    setStatsError(null);
+    try {
+      // `limit: 1` — we only need the server's `total` for each slice, not rows.
+      const [all, pending, confirmed, outForDelivery, delivered, rests] =
+        await Promise.all([
+          ordersService.getOrders({ page: 1, limit: 1 }),
+          ordersService.getOrders({ status: "pending", page: 1, limit: 1 }),
+          ordersService.getOrders({ status: "confirmed", page: 1, limit: 1 }),
+          ordersService.getOrders({
+            status: "out_for_delivery",
+            page: 1,
+            limit: 1,
+          }),
+          ordersService.getOrders({ status: "delivered", page: 1, limit: 1 }),
+          // Every page, not just the first: the merchant tile and the category
+          // breakdown are both platform-wide figures. The previous call kept
+          // the paginated envelope and ran `Array.isArray()` over it, which is
+          // always false — so the dashboard reported 0 merchants, forever.
+          restaurantsService.getAllRestaurants(),
+        ]);
+
+      const byStatus: Record<string, number> = {
+        pending: pending.total ?? 0,
+        confirmed: confirmed.total ?? 0,
+        out_for_delivery: outForDelivery.total ?? 0,
+      };
+
+      setCounts({
+        total: all.total ?? 0,
+        delivered: delivered.total ?? 0,
+        live: LIVE_STATUSES.reduce((sum, s) => sum + (byStatus[s] ?? 0), 0),
+        byStatus,
+      });
+      setRestaurants(rests);
+    } catch (err: unknown) {
+      setStatsError(errorMessage(err, t("overview.stats_failed")));
+    } finally {
+      setStatsLoading(false);
+    }
+  }, []);
+
+  const fetchQueue = useCallback(async () => {
+    setQueueLoading(true);
+    setQueueError(null);
+    try {
+      const res = await restaurantsService.getSubmissions({
+        status: "pending",
+        page: 1,
+        limit: 5,
+      });
+      setSubmissions(res.data);
+    } catch (err: unknown) {
+      setQueueError(
+        errorMessage(err, t("overview.queue_failed")),
+      );
+    } finally {
+      setQueueLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStats();
+    fetchQueue();
+  }, [fetchStats, fetchQueue]);
+
+  // ─── Approve a merchant application ───────────────────────────────────────
+
+  /**
+   * This used to call `onApproveRestaurant()`, which only flipped a field in
+   * localStorage: the admin saw the row disappear and nothing ever reached the
+   * backend. It now hits the real review endpoint and refetches.
+   */
+  const handleApprove = async (submission: RestaurantSubmission) => {
+    const ok = await confirm({
+      title: t("overview.approve_title", { name: submission.name }),
+      description: t("overview.approve_body"),
+      confirmLabel: t("overview.approve_cta"),
+    });
+    if (!ok) return;
+
+    setApprovingId(submission.id);
+    try {
+      await restaurantsService.reviewSubmission(submission.id, {
+        decision: "approve",
+      });
+      toast.success(t("overview.approved_toast", { name: submission.name }));
+      await Promise.all([fetchQueue(), fetchStats()]);
+    } catch (err: unknown) {
+      toast.error(errorMessage(err, t("overview.approve_failed")));
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
+  // ─── Derived ──────────────────────────────────────────────────────────────
+
+  const activeMerchants = (restaurants ?? []).filter(
+    (r) => (r.status ?? "").toLowerCase() === "active",
+  ).length;
+
+  /*
+   * Merchants per category, grouped from the live merchant list.
+   *
+   * This used to tally a `cuisineType` string that the API does not return, so
+   * every merchant landed in "uncategorised" and the panel hid itself
+   * permanently. Cuisine is modelled as a `categories[]` relation, and a
+   * merchant can hold several — each of its categories gets a count.
+   */
+  const categoryBreakdown = (() => {
+    const list = restaurants ?? [];
+    if (list.length === 0) return [];
+    const tally = new Map<string, number>();
+    for (const r of list) {
+      const names = (r.categories ?? [])
+        .map((c) => c.name?.trim())
+        .filter((name): name is string => !!name);
+      if (names.length === 0) {
+        tally.set("uncategorised", (tally.get("uncategorised") ?? 0) + 1);
+        continue;
+      }
+      for (const name of names) tally.set(name, (tally.get(name) ?? 0) + 1);
+    }
+    if (tally.size === 1 && tally.has("uncategorised")) return [];
+    return [...tally.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name, count]) => ({
+        name: humanizeEnum(name),
+        count,
+        share: Math.round((count / list.length) * 100),
+      }));
+  })();
+
+  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-8 animate-in fade-in duration-200">
-      {/* Banner / Intro */}
+      {/* Banner */}
       <div className="bg-gradient-to-r from-zinc-900 via-zinc-800 to-zinc-900 rounded-2xl p-6 border border-zinc-700/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden shadow-xl">
-        <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-radial-gradient from-orange-500/10 to-transparent pointer-events-none" />
+        <div className="absolute end-0 top-0 bottom-0 w-1/3 bg-radial-gradient from-orange-500/10 to-transparent pointer-events-none" />
         <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <span className="bg-orange-500/20 text-orange-400 border border-orange-500/30 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center gap-1">
-              <Sparkles className="w-3 h-3" /> Operations Active
-            </span>
-          </div>
-          <h3 className="text-xl font-bold text-white tracking-tight">Nowlny Delivery Hub Portal</h3>
+          <h3 className="text-xl font-bold text-white tracking-tight">
+            {t("overview.banner_title")}
+          </h3>
           <p className="text-xs text-zinc-400 max-w-lg leading-relaxed">
-            Welcome back! You are viewing real-time operations for both Customer and Restaurant platforms. 
-            Review pending merchant contracts, track live drivers, and inspect active customer baskets.
+            {t("overview.banner_body")}
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <button 
+          <button
             onClick={() => setActiveTab("orders")}
             className="flex items-center gap-2 text-xs font-bold bg-orange-500 hover:bg-orange-600 active:scale-95 transition-all text-white px-4 py-2.5 rounded-lg shadow-lg shadow-orange-500/20"
           >
-            <span>Live Order Room</span>
-            <ArrowRight className="w-4 h-4" />
+            <span>{t("overview.live_room")}</span>
+            <ArrowRight className="w-4 h-4 rtl:rotate-180" />
           </button>
         </div>
       </div>
 
       {/* KPI Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {/* Sales Card */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 group">
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 tracking-wide uppercase">Gross Merchandise Value (GMV)</p>
-              <h4 className="text-2xl font-black text-zinc-900 dark:text-white mt-2">${totalSales.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h4>
+      {statsError && !counts ? (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm">
+          <ErrorState message={statsError} onRetry={fetchStats} />
+        </div>
+      ) : statsLoading && !counts ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div
+              key={i}
+              className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm space-y-4"
+            >
+              <Skeleton className="h-3 w-2/3" />
+              <Skeleton className="h-7 w-1/2" />
+              <Skeleton className="h-3 w-3/4" />
             </div>
-            <div className="p-3 bg-orange-500/10 text-orange-600 dark:text-orange-400 rounded-xl">
-              <DollarSign className="w-5 h-5" />
-            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+          {statsError && (
+            <ErrorBanner message={statsError} onRetry={fetchStats} />
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <StatCard
+              label={t("overview.total_orders")}
+              value={(counts?.total ?? 0).toLocaleString("en-US")}
+              icon={<ShoppingBag className="w-5 h-5" />}
+              accent="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+              footer={
+                <span className="text-zinc-500 dark:text-zinc-400 font-medium">
+                  {t("overview.total_orders_foot")}
+                </span>
+              }
+            />
+
+            <StatCard
+              label={t("overview.live_orders")}
+              value={(counts?.live ?? 0).toLocaleString("en-US")}
+              icon={<Bike className="w-5 h-5" />}
+              accent="bg-orange-500/10 text-orange-600 dark:text-orange-400"
+              footer={
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">
+                    {t("overview.pending_n", {
+                      count: counts?.byStatus.pending ?? 0,
+                    })}
+                  </span>
+                  <span className="text-sky-600 dark:text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-full">
+                    {t("overview.confirmed_n", {
+                      count: counts?.byStatus.confirmed ?? 0,
+                    })}
+                  </span>
+                  <span className="text-blue-600 dark:text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-full">
+                    {t("overview.on_the_way_n", {
+                      count: counts?.byStatus.out_for_delivery ?? 0,
+                    })}
+                  </span>
+                </span>
+              }
+            />
+
+            <StatCard
+              label={t("overview.delivered")}
+              value={(counts?.delivered ?? 0).toLocaleString("en-US")}
+              icon={<CheckCircle2 className="w-5 h-5" />}
+              accent="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              footer={
+                <span className="text-zinc-500 dark:text-zinc-400 font-medium">
+                  {t("overview.delivered_foot")}
+                </span>
+              }
+            />
+
+            <StatCard
+              label={t("overview.merchants")}
+              value={(restaurants?.length ?? 0).toLocaleString("en-US")}
+              icon={<Store className="w-5 h-5" />}
+              accent="bg-purple-500/10 text-purple-600 dark:text-purple-400"
+              footer={
+                <span className="text-zinc-500 dark:text-zinc-400 font-medium">
+                  {t("overview.merchants_foot", { count: activeMerchants })}
+                </span>
+              }
+            />
           </div>
-          <div className="flex items-center gap-1.5 mt-4 text-xs font-bold text-emerald-600 dark:text-emerald-400">
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>+14.2%</span>
-            <span className="text-zinc-400 font-medium ml-1">vs. last month</span>
-          </div>
+        </>
+      )}
+
+      {/* Merchant Verification Queue */}
+      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
+        <div className="flex justify-between items-center mb-4">
+          <h4 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+            <Store className="w-4 h-4 text-orange-500" />{" "}
+            {t("overview.queue_title")}
+          </h4>
+          {!queueLoading && !queueError && submissions.length > 0 && (
+            <span className="text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded border border-amber-500/20">
+              {t("overview.queue_pending", { count: submissions.length })}
+            </span>
+          )}
         </div>
 
-        {/* Commissions Card */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 group">
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 tracking-wide uppercase">Platform Net Earnings</p>
-              <h4 className="text-2xl font-black text-zinc-900 dark:text-white mt-2">${totalCommission.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h4>
-            </div>
-            <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl">
-              <TrendingUp className="w-5 h-5" />
-            </div>
+        {queueLoading ? (
+          <div className="space-y-3">
+            {Array.from({ length: 3 }, (_, i) => (
+              <Skeleton key={i} className="h-16 w-full rounded-xl" />
+            ))}
           </div>
-          <div className="flex items-center gap-1.5 mt-4 text-xs font-bold text-emerald-600 dark:text-emerald-400">
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>+18.5%</span>
-            <span className="text-zinc-400 font-medium ml-1">commission + fees</span>
+        ) : queueError ? (
+          <ErrorState message={queueError} onRetry={fetchQueue} />
+        ) : submissions.length === 0 ? (
+          <EmptyState
+            icon={CheckCircle2}
+            title={t("overview.queue_empty")}
+            hint={t("overview.queue_empty_hint")}
+            action={
+              <button
+                onClick={() => setActiveTab("restaurants")}
+                className="text-xs font-bold text-orange-500 hover:text-orange-600 transition-colors inline-flex items-center gap-1"
+              >
+                <span>{t("overview.browse_merchants")}</span>
+                <ArrowRight className="w-3.5 h-3.5 rtl:rotate-180" />
+              </button>
+            }
+          />
+        ) : (
+          <div className="space-y-3">
+            {submissions.map((sub) => {
+              const busy = approvingId === sub.id;
+              const location = formatAddress(sub.address);
+              return (
+                <div
+                  key={sub.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {sub.logo ? (
+                      <img
+                        src={sub.logo}
+                        alt={`${sub.name} logo`}
+                        className="w-10 h-10 rounded-xl object-contain bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 p-0.5 shrink-0"
+                      />
+                    ) : (
+                      <span className="w-10 h-10 rounded-xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center shrink-0">
+                        <Store className="w-4 h-4 text-zinc-400" />
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      <h5 className="text-xs font-bold text-zinc-900 dark:text-white truncate">
+                        {sub.name}
+                      </h5>
+                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5 truncate">
+                        {[sub.phone ?? "", location]
+                          .filter(Boolean)
+                          .join(" • ") || t("overview.no_details")}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => setActiveTab("restaurants")}
+                      className="text-[10px] font-bold bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 px-2.5 py-2 rounded-lg transition-all"
+                    >
+                      {t("overview.inspect_docs")}
+                    </button>
+                    <button
+                      onClick={() => handleApprove(sub)}
+                      disabled={busy}
+                      className="text-[10px] font-bold bg-gradient-to-r from-orange-500 to-red-500 hover:opacity-95 text-white px-2.5 py-2 rounded-lg shadow shadow-orange-500/10 inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+                      {busy ? t("overview.approving") : t("overview.approve")}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </div>
-
-        {/* Orders Card */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 group">
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 tracking-wide uppercase">Total Volume</p>
-              <h4 className="text-2xl font-black text-zinc-900 dark:text-white mt-2">{orders.length} Orders</h4>
-            </div>
-            <div className="p-3 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl">
-              <ShoppingBag className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="flex items-center gap-2 mt-4 text-xs font-bold">
-            <span className="text-orange-500 bg-orange-500/10 px-2 py-0.5 rounded-full">{activeOrdersCount} Live</span>
-            <span className="text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">{completedOrders.length} Filled</span>
-          </div>
-        </div>
-
+        )}
       </div>
 
-      {/* Charts & Graphs Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Chart Column (2/3 width) */}
-        <div className="lg:col-span-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <h4 className="text-sm font-bold text-zinc-900 dark:text-white">Gross Sales Growth Trend</h4>
-              <p className="text-[11px] text-zinc-400">Monthly GMV ($) metrics compiled automatically</p>
-            </div>
-            <span className="text-xs font-bold text-orange-500 bg-orange-500/10 px-2.5 py-1 rounded-lg">Real-time Sync</span>
-          </div>
+      {/* Merchants by category — grouped from the live merchant list */}
+      {!statsLoading && !statsError && categoryBreakdown.length > 0 && (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
+          <h4 className="text-sm font-bold text-zinc-900 dark:text-white mb-1">
+            {t("overview.by_category")}
+          </h4>
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mb-6">
+            {t("overview.by_category_sub")}
+          </p>
 
-          {/* SVG Custom Premium Chart */}
-          <div className="h-64 relative w-full pt-4">
-            <svg className="w-full h-full" viewBox="0 0 600 220" preserveAspectRatio="none">
-              <defs>
-                <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#f97316" stopOpacity="0.4" />
-                  <stop offset="100%" stopColor="#f97316" stopOpacity="0.0" />
-                </linearGradient>
-              </defs>
-
-              {/* Grid Lines */}
-              <line x1="40" y1="20" x2="580" y2="20" stroke="#f4f4f5" strokeWidth="1" strokeDasharray="4 4" className="dark:stroke-zinc-800" />
-              <line x1="40" y1="70" x2="580" y2="70" stroke="#f4f4f5" strokeWidth="1" strokeDasharray="4 4" className="dark:stroke-zinc-800" />
-              <line x1="40" y1="120" x2="580" y2="120" stroke="#f4f4f5" strokeWidth="1" strokeDasharray="4 4" className="dark:stroke-zinc-800" />
-              <line x1="40" y1="170" x2="580" y2="170" stroke="#f4f4f5" strokeWidth="1" strokeDasharray="4 4" className="dark:stroke-zinc-800" />
-
-              {/* Plot Coordinates & Curve Path */}
-              {/* x goes from 40 to 580 (interval 108) */}
-              {/* y goes from 170 (val = 0) to 20 (val = maxChartVal) */}
-              {(() => {
-                const getCoords = (idx: number, val: number) => {
-                  const x = 50 + idx * 102;
-                  const ratio = val / maxChartVal;
-                  const y = 170 - ratio * 140;
-                  return { x, y };
-                };
-
-                const pts = monthlyRevenue.map((m, i) => getCoords(i, m.val));
-                
-                // Construct smooth cubic bezier curve
-                let pathD = `M ${pts[0].x} ${pts[0].y}`;
-                for (let i = 0; i < pts.length - 1; i++) {
-                  const p0 = pts[i];
-                  const p1 = pts[i + 1];
-                  const cpX1 = p0.x + 50;
-                  const cpY1 = p0.y;
-                  const cpX2 = p1.x - 50;
-                  const cpY2 = p1.y;
-                  pathD += ` C ${cpX1} ${cpY1}, ${cpX2} ${cpY2}, ${p1.x} ${p1.y}`;
-                }
-
-                const areaD = `${pathD} L ${pts[pts.length - 1].x} 170 L ${pts[0].x} 170 Z`;
-
-                return (
-                  <>
-                    {/* Area Under Curve */}
-                    <path d={areaD} fill="url(#chartGrad)" />
-
-                    {/* Main Line */}
-                    <path d={pathD} fill="none" stroke="url(#lineGrad)" strokeWidth="3" strokeLinecap="round" />
-                    
-                    <linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor="#f97316" />
-                      <stop offset="100%" stopColor="#ef4444" />
-                    </linearGradient>
-
-                    {/* Dots & Labels */}
-                    {pts.map((pt, i) => (
-                      <g key={i} className="group/dot cursor-pointer">
-                        <circle cx={pt.x} cy={pt.y} r="5" fill="#ffffff" stroke="#f97316" strokeWidth="3" className="transition-all duration-150 hover:r-7" />
-                        <text x={pt.x} y={pt.y - 12} textAnchor="middle" fill="#f97316" className="text-[10px] font-black opacity-0 group-hover/dot:opacity-100 transition-opacity bg-zinc-950 p-1">
-                          ${monthlyRevenue[i].val.toFixed(0)}
-                        </text>
-                      </g>
-                    ))}
-                  </>
-                );
-              })()}
-
-              {/* X Axis Labels */}
-              {monthlyRevenue.map((m, i) => (
-                <text key={i} x={50 + i * 102} y="195" textAnchor="middle" fill="#71717a" className="text-[10px] font-semibold dark:fill-zinc-400">
-                  {m.label}
-                </text>
-              ))}
-            </svg>
-          </div>
-        </div>
-
-        {/* Right Distribution Sidebar (1/3 width) */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm flex flex-col">
-          <h4 className="text-sm font-bold text-zinc-900 dark:text-white mb-1">Cuisine Performance</h4>
-          <p className="text-[11px] text-zinc-400 mb-6">Popular food segments by registered orders</p>
-
-          <div className="flex-1 space-y-4">
-            {[
-              { name: "Burgers & Fast Food", share: 45, count: 242, color: "bg-orange-500" },
-              { name: "Middle Eastern & Grills", share: 30, count: 165, color: "bg-red-500" },
-              { name: "Italian & Pizza", share: 15, count: 88, color: "bg-amber-500" },
-              { name: "Japanese & Sushi", share: 10, count: 52, color: "bg-blue-500" }
-            ].map((cuisine, idx) => (
-              <div key={idx} className="space-y-1.5">
-                <div className="flex justify-between items-center text-xs font-semibold">
-                  <span className="text-zinc-800 dark:text-zinc-200">{cuisine.name}</span>
-                  <span className="text-zinc-500 dark:text-zinc-400">{cuisine.share}% ({cuisine.count})</span>
+          <div className="space-y-4">
+            {categoryBreakdown.map((category) => (
+              <div key={category.name} className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs font-semibold gap-4">
+                  <span className="text-zinc-800 dark:text-zinc-200 truncate">
+                    {category.name}
+                  </span>
+                  <span className="text-zinc-500 dark:text-zinc-400 shrink-0">
+                    {category.count} ({category.share}%)
+                  </span>
                 </div>
                 <div className="w-full bg-zinc-100 dark:bg-zinc-800 h-2 rounded-full overflow-hidden">
-                  <div 
-                    className={`${cuisine.color} h-full rounded-full transition-all duration-500`}
-                    style={{ width: `${cuisine.share}%` }}
+                  <div
+                    className="bg-orange-500 h-full rounded-full transition-all duration-500"
+                    style={{ width: `${category.share}%` }}
                   />
                 </div>
               </div>
             ))}
           </div>
-          
+
           <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 text-center">
-            <button 
+            <button
               onClick={() => setActiveTab("restaurants")}
               className="text-xs font-bold text-orange-500 hover:text-orange-600 transition-colors inline-flex items-center gap-1"
             >
-              <span>Manage all active cuisines</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <span>{t("overview.manage_merchants")}</span>
+              <ArrowRight className="w-3.5 h-3.5 rtl:rotate-180" />
             </button>
           </div>
         </div>
-      </div>
+      )}
+    </div>
+  );
+}
 
-      {/* Operational Task Center */}
-      <div className="grid grid-cols-1 gap-6">
-        {/* Left Column: Pending Approvals */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
-          <div className="flex justify-between items-center mb-4">
-            <h4 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-              <Store className="w-4 h-4 text-orange-500" /> Merchant Verification Queue
-            </h4>
-            <span className="text-[10px] font-bold bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded border border-amber-500/20">
-              {pendingRestaurants.length} Pending
-            </span>
-          </div>
+// ─── Presentational ─────────────────────────────────────────────────────────
 
-          <div className="space-y-3">
-            {pendingRestaurants.length === 0 ? (
-              <div className="text-center py-8 text-zinc-400 text-xs font-medium">
-                No restaurants waiting in the queue! All approved.
-              </div>
-            ) : (
-              pendingRestaurants.map((rest) => (
-                <div key={rest.id} className="flex items-center justify-between p-3.5 rounded-xl border border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30">
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl p-1 bg-white dark:bg-zinc-800 rounded-xl shadow-sm">{rest.logo}</span>
-                    <div>
-                      <h5 className="text-xs font-bold text-zinc-900 dark:text-white">{rest.name}</h5>
-                      <p className="text-[10px] text-zinc-400 mt-0.5">{rest.cuisine} • {rest.address}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setActiveTab("restaurants")}
-                      className="text-[10px] font-bold bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 px-2.5 py-1.5 rounded-lg transition-all"
-                    >
-                      Inspect docs
-                    </button>
-                    <button
-                      onClick={() => onApproveRestaurant(rest.id)}
-                      className="text-[10px] font-bold bg-gradient-to-r from-orange-500 to-red-500 hover:opacity-95 text-white px-2.5 py-1.5 rounded-lg shadow shadow-orange-500/10"
-                    >
-                      Approve
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+function StatCard({
+  label,
+  value,
+  icon,
+  accent,
+  footer,
+}: {
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+  accent: string;
+  footer: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm hover:shadow-md transition-all duration-200">
+      <div className="flex justify-between items-start gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 tracking-wide uppercase">
+            {label}
+          </p>
+          <h4 className="text-2xl font-black text-zinc-900 dark:text-white mt-2">
+            {value}
+          </h4>
         </div>
+        <div className={`p-3 rounded-xl shrink-0 ${accent}`}>{icon}</div>
       </div>
+      <div className="mt-4 text-xs font-bold">{footer}</div>
     </div>
   );
 }

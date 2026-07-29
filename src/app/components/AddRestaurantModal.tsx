@@ -1,332 +1,202 @@
-import React, { useState } from "react";
-import { X, Loader2 } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
+import Modal from "./ui/Modal";
 import {
   restaurantsService,
   RestaurantCreate,
+  OpeningHourEntry,
+  WEEK_DAYS,
 } from "../../services/restaurants";
+import { currenciesService, Currency } from "../../services/currencies";
 
+import { useI18n } from "../../lib/i18n";
 interface AddRestaurantModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }
 
+/**
+ * The form used to collect `email`, `cuisineType`, `coverImage` and
+ * `estimatedDeliveryMinutes` — none of which exist on `CreateRestaurantDto` —
+ * while omitting `currencyId` and the min/max delivery window, which do. It
+ * also sent capitalised weekday names against an enum that only accepts
+ * lowercase. Every one of those made the request a 400.
+ */
+const EMPTY_FORM = {
+  name: "",
+  description: "",
+  phone: "",
+  website: "",
+  ownerFullName: "",
+  ownerPhoneNumber: "",
+  city: "",
+  address: "",
+  deliveryFee: "",
+  deliveryTimeMinMinutes: "20",
+  deliveryTimeMaxMinutes: "45",
+  latitude: "",
+  longitude: "",
+  logo: "",
+  backgroundImageUrl: "",
+  currencyId: "",
+};
+
+const DEFAULT_HOURS: OpeningHourEntry[] = WEEK_DAYS.map((day) => ({
+  day,
+  is24Hours: false,
+  openTime: "08:00",
+  closeTime: "23:00",
+}));
+
+const FIELD_CLASS =
+  "w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors";
+const LABEL_CLASS = "text-xs font-semibold text-zinc-700 dark:text-zinc-300";
+
+/** Red asterisk that isn't announced twice — the input already has `required`. */
+function Req() {
+  return (
+    <span aria-hidden="true" className="text-red-500 ms-0.5">
+      *
+    </span>
+  );
+}
+
+/** Blank stays blank so an untouched numeric field isn't submitted as 0. */
+const numeric = (value: string): number | undefined => {
+  if (value.trim() === "") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+};
+
 export default function AddRestaurantModal({
   isOpen,
   onClose,
   onSuccess,
 }: AddRestaurantModalProps) {
+  const { t } = useI18n();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [formData, setFormData] = useState(EMPTY_FORM);
+  const [currencies, setCurrencies] = useState<Currency[]>([]);
 
-  const [formData, setFormData] = useState({
-    name: "",
-    description: "",
-    email: "",
-    phone: "",
-    cuisineType: "",
-    city: "",
-    address: "",
-    deliveryFee: "",
-    estimatedDeliveryMinutes: "",
-    latitude: "",
-    longitude: "",
-    logo: "",
-    coverImage: "",
-  });
-
-  if (!isOpen) return null;
+  // Merchants price in their own currency (LBP for most of the platform), so
+  // the operator has to be able to pick one at creation time.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    currenciesService
+      .getActiveCurrencies()
+      .then((list) => {
+        if (cancelled) return;
+        setCurrencies(list);
+        setFormData((prev) =>
+          prev.currencyId || list.length === 0
+            ? prev
+            : { ...prev, currencyId: list[0].code },
+        );
+      })
+      .catch((err) =>
+        console.warn("Could not load currencies:", err?.message ?? err),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+    >,
   ) => {
+    setIsDirty(true);
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const min = numeric(formData.deliveryTimeMinMinutes);
+    const max = numeric(formData.deliveryTimeMaxMinutes);
+    if (min !== undefined && max !== undefined && min > max) {
+      toast.error(t("rest.time_invalid"));
+      return;
+    }
+
     setIsSubmitting(true);
 
     const payload: RestaurantCreate = {
-      name: formData.name,
-      description: formData.description,
-      email: formData.email,
-      phone: formData.phone,
-      cuisineType: formData.cuisineType,
-      city: formData.city,
-      address: formData.address,
-      deliveryFee: parseFloat(formData.deliveryFee) || 0,
-      estimatedDeliveryMinutes:
-        parseInt(formData.estimatedDeliveryMinutes) || 0,
-      latitude: parseFloat(formData.latitude) || 0,
-      longitude: parseFloat(formData.longitude) || 0,
-      logo: formData.logo,
-      coverImage: formData.coverImage,
-      status: "active", // default to active if admin is creating
-      openingHours: {
-        entries: [
-          {
-            day: "Monday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Tuesday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Wednesday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Thursday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Friday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Saturday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-          {
-            day: "Sunday",
-            is24Hours: false,
-            openTime: "08:00",
-            closeTime: "23:00",
-          },
-        ],
-      },
+      name: formData.name.trim(),
+      status: "active", // an admin-created merchant goes live immediately
+      openingHours: { entries: DEFAULT_HOURS },
+      ...(formData.description.trim()
+        ? { description: formData.description.trim() }
+        : {}),
+      ...(formData.phone.trim() ? { phone: formData.phone.trim() } : {}),
+      ...(formData.website.trim() ? { website: formData.website.trim() } : {}),
+      ...(formData.ownerFullName.trim()
+        ? { ownerFullName: formData.ownerFullName.trim() }
+        : {}),
+      ...(formData.ownerPhoneNumber.trim()
+        ? { ownerPhoneNumber: formData.ownerPhoneNumber.trim() }
+        : {}),
+      ...(formData.city.trim() ? { city: formData.city.trim() } : {}),
+      ...(formData.address.trim() ? { address: formData.address.trim() } : {}),
+      ...(formData.logo.trim() ? { logo: formData.logo.trim() } : {}),
+      ...(formData.backgroundImageUrl.trim()
+        ? { backgroundImageUrl: formData.backgroundImageUrl.trim() }
+        : {}),
+      ...(formData.currencyId ? { currencyId: formData.currencyId } : {}),
     };
+
+    const latitude = numeric(formData.latitude);
+    const longitude = numeric(formData.longitude);
+    const deliveryFee = numeric(formData.deliveryFee);
+    if (latitude !== undefined) payload.latitude = latitude;
+    if (longitude !== undefined) payload.longitude = longitude;
+    if (deliveryFee !== undefined) payload.deliveryFee = deliveryFee;
+    if (min !== undefined) payload.deliveryTimeMinMinutes = min;
+    if (max !== undefined) payload.deliveryTimeMaxMinutes = max;
 
     try {
       await restaurantsService.createRestaurant(payload);
-      toast.success("Restaurant created successfully!");
+      toast.success(t("rest.created"));
+      // Without this the next "Add Restaurant" reopens on the previous
+      // merchant's data and quietly creates a near-duplicate.
+      setFormData(EMPTY_FORM);
+      setIsDirty(false);
       onSuccess();
       onClose();
-    } catch (err: any) {
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : t("rest.create_failed");
       console.error("Failed to create restaurant", err);
-      toast.error(
-        err.message || "An error occurred while creating the restaurant.",
-      );
+      toast.error(message);
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
-        <div className="p-5 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-900/40">
-          <h3 className="text-lg font-bold text-zinc-900 dark:text-white">
-            Add New Restaurant
-          </h3>
-          <button
-            onClick={onClose}
-            className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="p-6 overflow-y-auto flex-1">
-          <form
-            id="add-restaurant-form"
-            onSubmit={handleSubmit}
-            className="space-y-4"
-          >
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Name
-                </label>
-                <input
-                  required
-                  name="name"
-                  value={formData.name}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Cuisine Type
-                </label>
-                <input
-                  required
-                  name="cuisineType"
-                  value={formData.cuisineType}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5 md:col-span-2">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Description
-                </label>
-                <textarea
-                  required
-                  name="description"
-                  value={formData.description}
-                  onChange={handleChange}
-                  rows={2}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Email
-                </label>
-                <input
-                  required
-                  type="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Phone
-                </label>
-                <input
-                  required
-                  name="phone"
-                  value={formData.phone}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  City
-                </label>
-                <input
-                  required
-                  name="city"
-                  value={formData.city}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Street Address
-                </label>
-                <input
-                  required
-                  name="address"
-                  value={formData.address}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Latitude
-                </label>
-                <input
-                  required
-                  type="number"
-                  step="any"
-                  name="latitude"
-                  value={formData.latitude}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Longitude
-                </label>
-                <input
-                  required
-                  type="number"
-                  step="any"
-                  name="longitude"
-                  value={formData.longitude}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Delivery Fee ($)
-                </label>
-                <input
-                  required
-                  type="number"
-                  step="0.01"
-                  name="deliveryFee"
-                  value={formData.deliveryFee}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Estimated Delivery (Mins)
-                </label>
-                <input
-                  required
-                  type="number"
-                  name="estimatedDeliveryMinutes"
-                  value={formData.estimatedDeliveryMinutes}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5 md:col-span-2">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Logo URL
-                </label>
-                <input
-                  name="logo"
-                  value={formData.logo}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-1.5 md:col-span-2">
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Cover Image URL
-                </label>
-                <input
-                  name="coverImage"
-                  value={formData.coverImage}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
-                />
-              </div>
-            </div>
-          </form>
-        </div>
-
-        <div className="p-5 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/40 flex justify-end gap-3">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={t("rest.add_title")}
+      description={t("rest.add_desc")}
+      maxWidth="max-w-2xl"
+      // Escape / backdrop stay live until there is typing to lose.
+      dismissable={!isDirty && !isSubmitting}
+      footer={
+        <>
           <button
             type="button"
             onClick={onClose}
             className="px-4 py-2 text-sm font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
           >
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             type="submit"
@@ -337,14 +207,263 @@ export default function AddRestaurantModal({
             {isSubmitting ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Creating...
+                {t("common.creating")}
               </>
             ) : (
-              "Create Restaurant"
+              t("rest.create_cta")
             )}
           </button>
+        </>
+      }
+    >
+      <form
+        id="add-restaurant-form"
+        onSubmit={handleSubmit}
+        className="space-y-4"
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5 md:col-span-2">
+            <label htmlFor="add-rest-name" className={LABEL_CLASS}>
+              {t("rest.name")}
+              <Req />
+            </label>
+            <input
+              required
+              id="add-rest-name"
+              name="name"
+              value={formData.name}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5 md:col-span-2">
+            <label htmlFor="add-rest-description" className={LABEL_CLASS}>
+              {t("common.description")}
+            </label>
+            <textarea
+              id="add-rest-description"
+              name="description"
+              value={formData.description}
+              onChange={handleChange}
+              rows={2}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-phone" className={LABEL_CLASS}>
+              {t("rest.phone")}
+            </label>
+            <input
+              id="add-rest-phone"
+              name="phone"
+              inputMode="tel"
+              placeholder="+961 71 000 000"
+              value={formData.phone}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-website" className={LABEL_CLASS}>
+              {t("common.website")}
+            </label>
+            <input
+              id="add-rest-website"
+              name="website"
+              type="url"
+              placeholder="https://"
+              value={formData.website}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-owner-name" className={LABEL_CLASS}>
+              {t("rest.owner_name")}
+            </label>
+            <input
+              id="add-rest-owner-name"
+              name="ownerFullName"
+              value={formData.ownerFullName}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-owner-phone" className={LABEL_CLASS}>
+              {t("rest.owner_phone")}
+            </label>
+            <input
+              id="add-rest-owner-phone"
+              name="ownerPhoneNumber"
+              inputMode="tel"
+              value={formData.ownerPhoneNumber}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+            <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+              {t("rest.owner_hint")}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-city" className={LABEL_CLASS}>
+              {t("common.city")}
+            </label>
+            <input
+              id="add-rest-city"
+              name="city"
+              value={formData.city}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-address" className={LABEL_CLASS}>
+              {t("rest.street_address")}
+            </label>
+            <input
+              id="add-rest-address"
+              name="address"
+              value={formData.address}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-latitude" className={LABEL_CLASS}>
+              {t("common.latitude")}
+            </label>
+            <input
+              type="number"
+              step="any"
+              min={-90}
+              max={90}
+              id="add-rest-latitude"
+              name="latitude"
+              value={formData.latitude}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-longitude" className={LABEL_CLASS}>
+              {t("common.longitude")}
+            </label>
+            <input
+              type="number"
+              step="any"
+              min={-180}
+              max={180}
+              id="add-rest-longitude"
+              name="longitude"
+              value={formData.longitude}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-currency" className={LABEL_CLASS}>
+              {t("rest.pricing_currency")}
+            </label>
+            <select
+              id="add-rest-currency"
+              name="currencyId"
+              value={formData.currencyId}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            >
+              <option value="">{t("rest.platform_default")}</option>
+              {currencies.map((currency) => (
+                <option key={currency.code} value={currency.code}>
+                  {currency.code} — {currency.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-fee" className={LABEL_CLASS}>
+              {t("common.delivery_fee")}
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              min={0}
+              id="add-rest-fee"
+              name="deliveryFee"
+              value={formData.deliveryFee}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+            <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+              {t("rest.fee_hint")}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-eta-min" className={LABEL_CLASS}>
+              {t("rest.time_min")}
+            </label>
+            <input
+              type="number"
+              min={0}
+              id="add-rest-eta-min"
+              name="deliveryTimeMinMinutes"
+              value={formData.deliveryTimeMinMinutes}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-rest-eta-max" className={LABEL_CLASS}>
+              {t("rest.time_max")}
+            </label>
+            <input
+              type="number"
+              min={0}
+              id="add-rest-eta-max"
+              name="deliveryTimeMaxMinutes"
+              value={formData.deliveryTimeMaxMinutes}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+
+          <div className="space-y-1.5 md:col-span-2">
+            <label htmlFor="add-rest-logo" className={LABEL_CLASS}>
+              {t("common.logo_url")}
+            </label>
+            <input
+              id="add-rest-logo"
+              name="logo"
+              type="url"
+              placeholder="https://"
+              value={formData.logo}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
+          <div className="space-y-1.5 md:col-span-2">
+            <label htmlFor="add-rest-background" className={LABEL_CLASS}>
+              {t("common.background_url")}
+            </label>
+            <input
+              id="add-rest-background"
+              name="backgroundImageUrl"
+              type="url"
+              placeholder="https://"
+              value={formData.backgroundImageUrl}
+              onChange={handleChange}
+              className={FIELD_CLASS}
+            />
+          </div>
         </div>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 }

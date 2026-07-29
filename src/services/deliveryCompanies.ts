@@ -1,18 +1,53 @@
-import { apiClient } from "./apiClient";
+import { apiClient, buildQuery, toList, toPaginated } from "./apiClient";
+import type { ExchangeRateRef } from "./restaurants";
+
+export type DeliveryCompanyStatus =
+  | "pending"
+  | "active"
+  | "rejected"
+  | "suspended"
+  | "inactive";
 
 export interface DeliveryCompany {
   id: string;
   name: string;
-  description?: string;
-  logo?: string;
-  phone: string;
-  deliveryCharge: number;
-  currencyId: string;
-  allowDriverVisibility: boolean;
-  status: "pending" | "active" | "rejected" | "suspended" | "inactive";
+  description?: string | null;
+  logo?: string | null;
+  phone?: string | null;
+  deliveryCharge?: number | null;
+  currencyId?: string | null;
+  currency?: { code?: string; symbol?: string } | null;
+  allowDriverVisibility?: boolean;
+  status: DeliveryCompanyStatus;
+  rating?: number;
+  totalRatings?: number;
+  /** Fleet / coverage stats returned by the detail and list endpoints. */
+  driversCount?: number;
+  activeDriversCount?: number;
+  zonesCount?: number;
+  ownerFullName?: string | null;
+  ownerPhoneNumber?: string | null;
+  rejectionReason?: string | null;
   createdAt?: string;
   updatedAt?: string;
-  rejectionReason?: string;
+}
+
+export interface DeliveryCompanyZone {
+  id: string;
+  name: string;
+  polygon: { lat: number; lng: number }[];
+  minEstimatedTimeMinutes?: number;
+  maxEstimatedTimeMinutes?: number;
+  isActive?: boolean;
+}
+
+export interface DeliveryCompanyRating {
+  id: string;
+  rating: number;
+  comment?: string | null;
+  createdAt?: string;
+  restaurantName?: string | null;
+  restaurant?: { id?: string; name?: string } | null;
 }
 
 export interface DeliveryCompanyReview {
@@ -21,38 +56,48 @@ export interface DeliveryCompanyReview {
 }
 
 export const deliveryCompaniesService = {
-  /**
-   * Get all delivery companies
-   */
-  getDeliveryCompanies: (params?: {
-    status?: string;
+  getDeliveryCompanies: async (params?: {
+    status?: DeliveryCompanyStatus | "all" | "";
     search?: string;
     page?: number;
     limit?: number;
   }) => {
-    let query = "";
-    if (params) {
-      const searchParams = new URLSearchParams();
-      if (params.status && params.status !== "all")
-        searchParams.append("status", params.status);
-      if (params.search) searchParams.append("search", params.search);
-      if (params.page) searchParams.append("page", params.page.toString());
-      if (params.limit) searchParams.append("limit", params.limit.toString());
-      const str = searchParams.toString();
-      if (str) query = `?${str}`;
-    }
-    return apiClient<any>(`/api/v1/delivery-companies${query}`, {
-      method: "GET",
-    });
+    const payload = await apiClient<unknown>(
+      `/api/v1/delivery-companies${buildQuery({ ...params })}`,
+    );
+    return toPaginated<DeliveryCompany>(payload, params?.limit ?? 20);
   },
 
-  /**
-   * Admin reviews a pending delivery company
-   */
-  reviewCompany: (id: string, data: DeliveryCompanyReview) => {
-    return apiClient<void>(`/api/v1/delivery-companies/${id}/review`, {
+  /** Full profile with fleet and coverage stats. */
+  getDeliveryCompanyById: (id: string) =>
+    apiClient<DeliveryCompany>(`/api/v1/delivery-companies/${id}`),
+
+  getZones: async (id: string) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/delivery-companies/${id}/zones`,
+    );
+    return toList<DeliveryCompanyZone>(payload);
+  },
+
+  getRatings: async (id: string) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/delivery-companies/${id}/ratings`,
+    );
+    return toList<DeliveryCompanyRating>(payload);
+  },
+
+  /** Defaults merged with the company's own overrides. */
+  getExchangeRates: async (id: string) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/delivery-companies/${id}/exchange-rates`,
+    );
+    return toList<ExchangeRateRef>(payload);
+  },
+
+  /** `PATCH /api/v1/delivery-companies/{id}/review` (admin). */
+  reviewCompany: (id: string, data: DeliveryCompanyReview) =>
+    apiClient<DeliveryCompany>(`/api/v1/delivery-companies/${id}/review`, {
       method: "PATCH",
       body: JSON.stringify(data),
-    });
-  },
+    }),
 };

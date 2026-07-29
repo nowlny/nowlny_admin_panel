@@ -1,9 +1,12 @@
 import { apiClient } from "./apiClient";
 import { SystemUser } from "./users";
 
+/** `RequestOtpDto.channel` — the API also delivers codes over WhatsApp/email. */
+export type OtpChannel = "sms" | "whatsapp" | "email";
+
 export interface SendOtpPayload {
   phoneNumber: string;
-  channel: "sms";
+  channel: OtpChannel;
 }
 
 export interface VerifyOtpPayload {
@@ -102,10 +105,19 @@ export const authService = {
   restaurantCompleteSignup: (data: {
     fullName: string;
     signupToken: string;
-    name: string;
+    /** `CompleteRestaurantSignupDto` names it `restaurantName`. */
+    restaurantName: string;
     description?: string;
-    city?: string;
-    address?: string;
+    phone?: string;
+    currencyId?: string;
+    categoryIds?: string[];
+    address?: {
+      city: string;
+      street: string;
+      building?: string;
+      latitude: number;
+      longitude: number;
+    };
   }) => {
     return apiClient<AuthResponse>("/api/v1/auth/restaurant/complete-signup", {
       method: "POST",

@@ -1,23 +1,21 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import {
   Store,
-  Search,
   Star,
   MapPin,
   Calendar,
   DollarSign,
-  ShoppingBag,
-  AlertTriangle,
   ArrowLeft,
   Loader2,
   Clock,
-  Mail,
   Phone,
-  FileText,
-  User,
+  Globe,
+  Truck,
+  Coins,
+  Search,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import {
@@ -25,51 +23,152 @@ import {
   RestaurantResponse,
   RestaurantSubmission,
   RestaurantFullResponse,
+  RestaurantStatus,
+  ExchangeRateRef,
 } from "../../services/restaurants";
 import AddRestaurantModal from "./AddRestaurantModal";
 import EditRestaurantModal from "./EditRestaurantModal";
 import RestaurantMenuSection from "./RestaurantMenuSection";
+import RestaurantReviewsPanel from "./RestaurantReviewsPanel";
+import RestaurantStoriesPanel from "./RestaurantStoriesPanel";
 import OrdersSection from "./OrdersSection";
 import StoriesViewerModal from "./StoriesViewerModal";
+import StatusPill from "./ui/StatusPill";
+import { useConfirm } from "./ui/ConfirmDialog";
+import {
+  CardSkeletonGrid,
+  EmptyState,
+  ErrorBanner,
+  ErrorState,
+  Skeleton,
+} from "./ui/States";
+import {
+  formatAddress,
+  formatDate,
+  formatMoney,
+  formatRate,
+  formatRating,
+  orDash,
+  searchable,
+} from "../../lib/format";
 
+import { useI18n, type MessageKey } from "../../lib/i18n";
 const DeliveryZoneMap = dynamic(() => import("./DeliveryZoneMapClient"), {
   ssr: false,
+  // Without this the 400px map slot is a blank grey box until the leaflet
+  // chunk lands, which reads as a broken panel rather than a loading one.
+  loading: () => <Skeleton className="h-full w-full rounded-xl" />,
 });
 
 interface RestaurantsSectionProps {
-  db?: any;
-  onUpdateRestaurant?: any;
   searchQuery: string;
-  currentRole?: any;
+  currentRole?: { type?: string; restaurantId?: string };
 }
+
+/** Which single mutation is in flight — one shared flag spun every button. */
+type PendingAction =
+  | null
+  | "status"
+  | "delete"
+  | "feature"
+  | "approve"
+  | "reject";
+
+type InnerTab =
+  | "overview"
+  | "profile"
+  | "menu"
+  | "orders"
+  | "reviews"
+  | "stories"
+  | "delivery";
+
+const INNER_TABS: [InnerTab, MessageKey][] = [
+  ["overview", "rests.tab_overview"],
+  ["profile", "rests.tab_profile"],
+  ["menu", "rests.tab_menu"],
+  ["orders", "rests.tab_orders"],
+  ["reviews", "rests.tab_reviews"],
+  ["stories", "rests.tab_stories"],
+  ["delivery", "rests.tab_delivery"],
+];
+
+/**
+ * Merchant filters that the API can actually answer. The old "all / active /
+ * suspended" chips filtered client side over a single page of a list endpoint
+ * that only ever returns *active* merchants, so "suspended" was always empty
+ * and "all" was never all.
+ */
+type MerchantFilter = "all" | "featured" | "hasOffer" | "topRated" | "freeDelivery";
+
+const MERCHANT_FILTERS: { value: MerchantFilter; key: MessageKey }[] = [
+  { value: "all", key: "common.all" },
+  { value: "featured", key: "rests.filter_featured" },
+  { value: "hasOffer", key: "rests.filter_offer" },
+  { value: "topRated", key: "rests.filter_top" },
+  { value: "freeDelivery", key: "rests.filter_free" },
+];
+
+const APP_STATUS_FILTERS = [
+  "all",
+  "pending",
+  "approved",
+  "rejected",
+  "cancelled",
+] as const;
+
+const PAGE_SIZE = 12;
+
+const currencyOf = (r?: RestaurantResponse | null) =>
+  r?.currency?.code ?? r?.currencyId ?? undefined;
+
+const deliveryWindow = (r?: {
+  deliveryTimeRange?: string | null;
+  deliveryTimeMinMinutes?: number | null;
+  deliveryTimeMaxMinutes?: number | null;
+}) => {
+  if (!r) return "—";
+  if (r.deliveryTimeRange) return r.deliveryTimeRange;
+  const { deliveryTimeMinMinutes: min, deliveryTimeMaxMinutes: max } = r;
+  if (min != null && max != null) return `${min}–${max} min`;
+  if (min != null) return `${min}+ min`;
+  if (max != null) return `up to ${max} min`;
+  return "—";
+};
 
 export default function RestaurantsSection({
   searchQuery,
   currentRole,
 }: RestaurantsSectionProps) {
+  const { t } = useI18n();
+  const confirm = useConfirm();
+
   const [restaurants, setRestaurants] = useState<RestaurantResponse[]>([]);
+  const [merchantTotal, setMerchantTotal] = useState(0);
+  const [merchantPage, setMerchantPage] = useState(1);
+  const [merchantTotalPages, setMerchantTotalPages] = useState(1);
+  const [merchantFilter, setMerchantFilter] = useState<MerchantFilter>("all");
+
   const [submissions, setSubmissions] = useState<RestaurantSubmission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const isBusy = pendingAction !== null;
 
   const [selectedRestId, setSelectedRestId] = useState<string | null>(
-    currentRole?.type === "restaurant" ? currentRole.restaurantId : null,
+    currentRole?.type === "restaurant" ? (currentRole.restaurantId ?? null) : null,
   );
   const [fullSelectedRest, setFullSelectedRest] =
     useState<RestaurantFullResponse | null>(null);
+  const [isFullLoading, setIsFullLoading] = useState(false);
+  const [fullError, setFullError] = useState<string | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<
     string | null
   >(null);
   const [viewMode, setViewMode] = useState<"merchants" | "applications">(
     "merchants",
   );
-  const [innerTab, setInnerTab] = useState<
-    "overview" | "profile" | "menu" | "orders" | "delivery"
-  >("overview");
-  const [merchantStatus, setMerchantStatus] = useState<
-    "all" | "active" | "suspended"
-  >("all");
+  const [innerTab, setInnerTab] = useState<InnerTab>("overview");
   const [appStatus, setAppStatus] = useState<string>("pending");
   const [appPage, setAppPage] = useState(1);
   const [appTotalPages, setAppTotalPages] = useState(1);
@@ -85,158 +184,209 @@ export default function RestaurantsSection({
   const [viewingStoriesFor, setViewingStoriesFor] =
     useState<RestaurantResponse | null>(null);
 
-  const fetchMerchants = async () => {
+  /**
+   * The search box is debounced into the API's own `name` parameter. It used to
+   * filter the client-side array, so a merchant on page 3 could not be found by
+   * name at all.
+   */
+  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery);
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(searchQuery.trim()), 300);
+    return () => clearTimeout(id);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setMerchantPage(1);
+    setAppPage(1);
+  }, [debouncedSearch, merchantFilter]);
+
+  const fetchMerchants = useCallback(async () => {
     try {
       setIsLoading(true);
-      let restsData: RestaurantResponse[] = [];
-      try {
-        restsData = await restaurantsService.getRestaurants();
-      } catch (err) {
-        console.error("Failed to fetch restaurants via API:", err);
-      }
-      const finalRests = Array.isArray(restsData)
-        ? restsData
-        : restsData && (restsData as any).data
-          ? (restsData as any).data
-          : [];
-      setRestaurants(finalRests);
+      const params = {
+        name: debouncedSearch || undefined,
+        page: merchantPage,
+        limit: PAGE_SIZE,
+        ...(merchantFilter === "hasOffer" ? { hasOffer: true } : {}),
+        ...(merchantFilter === "topRated" ? { topRated: true } : {}),
+        ...(merchantFilter === "freeDelivery" ? { freeDelivery: true } : {}),
+      };
+      const res =
+        merchantFilter === "featured"
+          ? await restaurantsService.getFeaturedRestaurants(params)
+          : await restaurantsService.getRestaurants(params);
+
+      setRestaurants(res.data);
+      setMerchantTotal(res.total);
+      setMerchantTotalPages(Math.max(1, res.totalPages ?? 1));
       setError(null);
-    } catch (err: any) {
-      console.error("General error in fetchMerchants:", err);
-      setError("An unexpected error occurred while loading data.");
+    } catch (err) {
+      console.error("Failed to fetch restaurants:", err);
+      setError(
+        err instanceof Error ? err.message : t("rests.load_merchants_failed"),
+      );
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [debouncedSearch, merchantPage, merchantFilter]);
 
-  const fetchSubmissions = async () => {
+  const fetchSubmissions = useCallback(async () => {
     try {
       setIsLoading(true);
-      let subsData: any = null;
-      try {
-        subsData = await restaurantsService.getSubmissions({
-          status: appStatus,
-          page: appPage,
-          limit: 20,
-        });
-      } catch (err) {
-        console.error("Failed to fetch submissions via API:", err);
-      }
-
-      if (subsData && subsData.data) {
-        setSubmissions(subsData.data);
-        setAppTotalPages(
-          subsData.totalPages || Math.ceil((subsData.total || 0) / 20) || 1,
-        );
-        setAppTotalItems(subsData.total || 0);
-      } else if (Array.isArray(subsData)) {
-        setSubmissions(subsData);
-        setAppTotalPages(1);
-        setAppTotalItems(subsData.length);
-      } else {
-        setSubmissions([]);
-        setAppTotalPages(1);
-        setAppTotalItems(0);
-      }
+      const res = await restaurantsService.getSubmissions({
+        status: appStatus,
+        page: appPage,
+        limit: 20,
+      });
+      setSubmissions(res.data);
+      setAppTotalPages(Math.max(1, res.totalPages ?? 1));
+      setAppTotalItems(res.total);
       setError(null);
-    } catch (err: any) {
-      console.error("General error in fetchSubmissions:", err);
-      setError("An unexpected error occurred while loading data.");
+    } catch (err) {
+      console.error("Failed to fetch submissions:", err);
+      setError(
+        err instanceof Error ? err.message : t("rests.load_apps_failed"),
+      );
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [appStatus, appPage]);
+
+  const refetchList = useCallback(() => {
+    if (viewMode === "merchants") fetchMerchants();
+    else fetchSubmissions();
+  }, [viewMode, fetchMerchants, fetchSubmissions]);
 
   useEffect(() => {
-    if (viewMode === "merchants") {
-      fetchMerchants();
-    } else {
-      fetchSubmissions();
-    }
-  }, [viewMode, appStatus, appPage]);
+    if (viewMode === "merchants") fetchMerchants();
+    else fetchSubmissions();
+  }, [viewMode, fetchMerchants, fetchSubmissions]);
 
-  useEffect(() => {
-    if (selectedRestId && viewMode === "merchants") {
-      restaurantsService
-        .getRestaurantFull(selectedRestId)
-        .then((data) => setFullSelectedRest(data))
-        .catch((err) =>
-          console.error("Failed to fetch full restaurant details:", err),
-        );
-    } else {
-      setFullSelectedRest(null);
+  /**
+   * Pulls the detail payload (menu + delivery zones + fresh status). Every
+   * mutation on the detail screen has to call this too, otherwise the header
+   * keeps rendering the pre-mutation status and still offers "Suspend" on an
+   * already-suspended merchant.
+   */
+  const refreshSelected = useCallback(async () => {
+    if (!selectedRestId || viewMode !== "merchants") return;
+    try {
+      setIsFullLoading(true);
+      const data = await restaurantsService.getRestaurantFull(selectedRestId);
+      setFullSelectedRest(data);
+      setFullError(null);
+    } catch (err) {
+      console.error("Failed to fetch full restaurant details:", err);
+      setFullError(
+        err instanceof Error
+          ? err.message
+          : t("rests.load_detail_failed"),
+      );
+    } finally {
+      setIsFullLoading(false);
     }
   }, [selectedRestId, viewMode]);
 
+  useEffect(() => {
+    if (selectedRestId && viewMode === "merchants") {
+      refreshSelected();
+    } else {
+      setFullSelectedRest(null);
+      setFullError(null);
+    }
+  }, [selectedRestId, viewMode, refreshSelected]);
+
+  // Ignore the detail payload while it still belongs to the previously opened
+  // merchant, otherwise the new detail view renders the old merchant's data.
+  const fullDetail =
+    fullSelectedRest?.restaurant?.id === selectedRestId ? fullSelectedRest : null;
   const selectedRest =
-    fullSelectedRest?.restaurant ||
-    restaurants.find((r) => r.id === selectedRestId);
+    fullDetail?.restaurant || restaurants.find((r) => r.id === selectedRestId);
   const selectedSubmission = submissions.find(
     (s) => s.id === selectedSubmissionId,
   );
 
-  // Filter restaurants locally (if you want local search/status for merchants)
-  const filteredRestaurants = restaurants.filter((r) => {
-    const matchesSearch =
-      r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (r.cuisineType || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (r.address || "").toLowerCase().includes(searchQuery.toLowerCase());
-
-    const matchesStatus =
-      merchantStatus === "all" ||
-      r.status?.toLowerCase() === merchantStatus.toLowerCase();
-
-    return matchesSearch && matchesStatus;
-  });
-
-  // Filter submissions (search locally since backend doesn't have search query param yet, or assume it does)
-  const filteredSubmissions = submissions.filter((s) => {
-    const matchesSearch =
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.cuisineType || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.address?.street || "")
-        .toLowerCase()
-        .includes(searchQuery.toLowerCase()) ||
-      (s.address?.city || "").toLowerCase().includes(searchQuery.toLowerCase());
-
-    return matchesSearch;
-  });
+  // Applications have no server-side search, so this one stays client side —
+  // and says so, rather than pretending to search the whole queue.
+  const filteredSubmissions = useMemo(() => {
+    const query = debouncedSearch.toLowerCase();
+    if (!query) return submissions;
+    return submissions.filter(
+      (s) =>
+        searchable(s.name).includes(query) ||
+        searchable(s.address?.street).includes(query) ||
+        searchable(s.address?.city).includes(query),
+    );
+  }, [submissions, debouncedSearch]);
 
   const isPendingTab = viewMode === "applications";
-  const displayList = isPendingTab ? filteredSubmissions : filteredRestaurants;
+  const displayList: (RestaurantResponse | RestaurantSubmission)[] = isPendingTab
+    ? filteredSubmissions
+    : restaurants;
 
-  const handleStatusChange = async (restId: string, newStatus: string) => {
+  const handleStatusChange = async (
+    restId: string,
+    newStatus: RestaurantStatus,
+    restName?: string,
+  ) => {
+    const label = restName ? `“${restName}”` : t("rests.this_merchant");
+    if (
+      newStatus === "suspended" &&
+      !(await confirm({
+        title: t("rests.suspend_title", { label }),
+        description: t("rests.suspend_body"),
+        confirmLabel: t("rests.suspend_cta"),
+        variant: "danger",
+      }))
+    ) {
+      return;
+    }
+
     try {
-      setIsSubmitting(true);
+      setPendingAction("status");
       await restaurantsService.updateRestaurant(restId, { status: newStatus });
-      toast.success(`Status updated successfully!`);
-      if (viewMode === "merchants") fetchMerchants();
-      else fetchSubmissions();
-    } catch (err: any) {
-      toast.error(`Failed to update status: ${err.message}`);
+      toast.success(t("rests.status_updated"));
+      refetchList();
+      // Without this the header still shows the old status and keeps
+      // offering "Suspend" on a merchant that was just suspended.
+      await refreshSelected();
+    } catch (err) {
+      toast.error(
+        t("rests.status_failed", {
+          error: err instanceof Error ? err.message : "",
+        }),
+      );
     } finally {
-      setIsSubmitting(false);
+      setPendingAction(null);
     }
   };
 
-  const handleDeleteRestaurant = async (restId: string) => {
-    if (
-      !confirm(
-        "Are you sure you want to delete this restaurant? This cannot be undone.",
-      )
-    )
-      return;
+  const handleDeleteRestaurant = async (restId: string, restName?: string) => {
+    const confirmed = await confirm({
+      title: t("rests.delete_title", {
+        label: restName ? `“${restName}”` : t("rests.this_merchant"),
+      }),
+      description: t("rests.delete_body"),
+      confirmLabel: t("rests.delete_cta"),
+      variant: "danger",
+      confirmPhrase: restName,
+    });
+    if (!confirmed) return;
+
     try {
-      setIsSubmitting(true);
+      setPendingAction("delete");
       await restaurantsService.deleteRestaurant(restId);
-      toast.success(`Restaurant deleted successfully!`);
+      toast.success(t("rests.deleted"));
       setSelectedRestId(null);
-      if (viewMode === "merchants") fetchMerchants();
-      else fetchSubmissions();
-    } catch (err: any) {
-      toast.error(`Failed to delete restaurant: ${err.message}`);
+      refetchList();
+    } catch (err) {
+      toast.error(
+        t("rests.delete_failed", {
+          error: err instanceof Error ? err.message : "",
+        }),
+      );
     } finally {
-      setIsSubmitting(false);
+      setPendingAction(null);
     }
   };
 
@@ -245,16 +395,16 @@ export default function RestaurantsSection({
     isCurrentlyFeatured: boolean,
   ) => {
     try {
-      setIsSubmitting(true);
+      setPendingAction("feature");
       if (isCurrentlyFeatured) {
         await restaurantsService.removeFeatured(restId);
-        toast.success(`Restaurant unfeatured successfully!`);
+        toast.success(t("rests.unfeatured"));
       } else {
         await restaurantsService.markAsFeatured(restId);
-        toast.success(`Restaurant featured successfully!`);
+        toast.success(t("rests.featured"));
       }
 
-      // Update selected restaurant state directly for immediate feedback
+      // Immediate feedback while the refetch is in flight.
       if (fullSelectedRest) {
         setFullSelectedRest({
           ...fullSelectedRest,
@@ -265,56 +415,98 @@ export default function RestaurantsSection({
         });
       }
 
-      if (viewMode === "merchants") fetchMerchants();
-    } catch (err: any) {
-      toast.error(`Failed to toggle featured status: ${err.message}`);
+      refetchList();
+      await refreshSelected();
+    } catch (err) {
+      toast.error(
+        t("rests.feature_failed", {
+          error: err instanceof Error ? err.message : "",
+        }),
+      );
     } finally {
-      setIsSubmitting(false);
+      setPendingAction(null);
     }
   };
 
   const handleReview = async (decision: "approve" | "reject") => {
     if (!selectedSubmission) return;
     if (decision === "reject" && !rejectionReason.trim()) {
-      toast.error("Please provide a rejection reason.");
+      toast.error(t("rests.need_reason"));
       return;
     }
 
     try {
-      setIsSubmitting(true);
+      setPendingAction(decision);
       await restaurantsService.reviewSubmission(selectedSubmission.id, {
         decision,
         rejectionReason: decision === "reject" ? rejectionReason : undefined,
       });
-      toast.success(`Application ${decision}d successfully!`);
+      toast.success(
+        t("rests.reviewed", {
+          decision:
+            decision === "approve"
+              ? t("rests.approved_word")
+              : t("rests.rejected_word"),
+        }),
+      );
       setIsReviewing(false);
       setRejectionReason("");
       setSelectedSubmissionId(null);
-      if (viewMode === "merchants") fetchMerchants();
-      else fetchSubmissions();
-    } catch (err: any) {
-      toast.error(`Failed to review application: ${err.message}`);
+      refetchList();
+    } catch (err) {
+      toast.error(
+        t("rests.review_failed", {
+          error: err instanceof Error ? err.message : "",
+        }),
+      );
     } finally {
-      setIsSubmitting(false);
+      setPendingAction(null);
     }
   };
 
-  if (isLoading && restaurants.length === 0 && submissions.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center p-24 text-zinc-500">
-        <Loader2 className="w-8 h-8 animate-spin mb-4 text-orange-500" />
-        <p className="text-sm font-semibold">
-          Loading merchants and submissions...
-        </p>
-      </div>
-    );
+  /** Revoking an approval takes a live merchant offline — always ask first. */
+  const startRejection = async () => {
+    if (selectedSubmission?.status === "approved") {
+      const confirmed = await confirm({
+        title: t("rests.revoke_title", { name: selectedSubmission.name }),
+        description: t("rests.revoke_body"),
+        confirmLabel: t("rests.revoke_cta"),
+        variant: "danger",
+      });
+      if (!confirmed) return;
+    }
+    setIsReviewing(true);
+  };
+
+  // A merchant landing straight on its own detail view (owner role) has no
+  // list to fall back on, so gate that view on its own fetch.
+  if (!isPendingTab && selectedRestId && !selectedRest) {
+    if (isLoading || isFullLoading) {
+      return (
+        <CardSkeletonGrid
+          count={3}
+          className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+        />
+      );
+    }
+    if (fullError || error) {
+      return (
+        <ErrorState
+          message={fullError || error}
+          onRetry={() => {
+            fetchMerchants();
+            refreshSelected();
+          }}
+        />
+      );
+    }
   }
 
-  // Render detail view if a submission is selected
+  // ─── Application detail ────────────────────────────────────────────────────
+
   if (isPendingTab && selectedSubmission) {
     return (
       <div className="space-y-6 animate-in slide-in-from-right duration-200">
-        {/* Back Button */}
         <button
           onClick={() => {
             setSelectedSubmissionId(null);
@@ -322,55 +514,35 @@ export default function RestaurantsSection({
           }}
           className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-950 dark:hover:text-white transition-colors"
         >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Back to Submissions Registry</span>
+          <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
+          <span>{t("rests.back_to_apps")}</span>
         </button>
 
-        {/* Restaurant Header Jumbotron */}
         <div className="relative bg-zinc-900 rounded-2xl overflow-hidden border border-zinc-800 shadow-lg">
-          <div className="h-40 relative">
-            <img
-              src={
-                selectedSubmission.backgroundImageUrl ||
-                selectedSubmission.coverImage ||
-                "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
-              }
-              alt={selectedSubmission.name}
-              className="w-full h-full object-cover opacity-40"
-            />
-            <div className="absolute top-4 right-4 flex gap-2">
-              <span
-                className={`text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider ${
-                  selectedSubmission.status === "approved"
-                    ? "bg-emerald-500/90 text-white border-emerald-400"
-                    : selectedSubmission.status === "pending"
-                      ? "bg-amber-500/90 text-black border-amber-400 animate-pulse"
-                      : selectedSubmission.status === "rejected"
-                        ? "bg-red-500/90 text-white border-red-400"
-                        : "bg-zinc-500/90 text-white border-zinc-400"
-                }`}
-              >
-                {selectedSubmission.status === "pending"
-                  ? "Pending Review"
-                  : selectedSubmission.status}
-              </span>
+          <div className="h-40 relative bg-zinc-800">
+            {selectedSubmission.backgroundImageUrl && (
+              <img
+                src={selectedSubmission.backgroundImageUrl}
+                alt=""
+                className="w-full h-full object-cover opacity-40"
+              />
+            )}
+            <div className="absolute top-4 end-4 flex gap-2">
+              <StatusPill
+                status={selectedSubmission.status}
+                className="px-3 py-1.5 text-xs shadow-lg backdrop-blur-sm"
+              />
             </div>
           </div>
 
           <div className="p-6 relative -mt-10 flex flex-col md:flex-row justify-between items-start md:items-end gap-6 bg-gradient-to-t from-zinc-950 via-zinc-950/95 to-zinc-950/40">
             <div className="flex gap-4 items-end">
               {selectedSubmission.logo ? (
-                selectedSubmission.logo.length > 5 ? (
-                  <img
-                    src={selectedSubmission.logo}
-                    alt="logo"
-                    className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl object-cover"
-                  />
-                ) : (
-                  <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">
-                    {selectedSubmission.logo}
-                  </span>
-                )
+                <img
+                  src={selectedSubmission.logo}
+                  alt={`${selectedSubmission.name} logo`}
+                  className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl object-cover"
+                />
               ) : (
                 <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">
                   🍽️
@@ -380,57 +552,47 @@ export default function RestaurantsSection({
                 <h3 className="text-xl font-bold text-white tracking-tight">
                   {selectedSubmission.name}
                 </h3>
-                <p className="text-xs text-orange-400 font-semibold">
-                  {selectedSubmission.cuisineType || "No cuisine set"}
-                </p>
-                <div className="flex items-center gap-4 mt-2 text-[11px] text-zinc-400">
+                <div className="flex flex-wrap items-center gap-4 mt-2 text-[11px] text-zinc-400">
                   <span className="flex items-center gap-1">
-                    <MapPin className="w-3.5 h-3.5" />{" "}
-                    {[
-                      selectedSubmission.address?.street,
-                      selectedSubmission.address?.building,
-                      selectedSubmission.address?.city,
-                    ]
-                      .filter(Boolean)
-                      .join(", ") || "No address provided"}
+                    <MapPin className="w-3.5 h-3.5" />
+                    {formatAddress(selectedSubmission.address) ||
+t("rests.no_address")}
                   </span>
                   <span className="flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5" /> Submitted{" "}
-                    {selectedSubmission.createdAt
-                      ? new Date(
-                          selectedSubmission.createdAt,
-                        ).toLocaleDateString()
-                      : "N/A"}
+                    <Calendar className="w-3.5 h-3.5" />{" "}
+                    {t("rests.submitted_on", {
+                      date: formatDate(selectedSubmission.createdAt),
+                    })}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Admin Override Action Bar */}
             <div className="flex gap-2 shrink-0">
               {!isReviewing && (
                 <>
                   {selectedSubmission.status === "pending" && (
                     <button
                       onClick={() => handleReview("approve")}
-                      disabled={isSubmitting}
+                      disabled={isBusy}
                       className="flex items-center bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isSubmitting && (
-                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      {pendingAction === "approve" && (
+                        <Loader2 className="w-4 h-4 animate-spin me-2" />
                       )}
-                      Approve Application
+                      {t("rests.approve_app")}
                     </button>
                   )}
                   {(selectedSubmission.status === "pending" ||
                     selectedSubmission.status === "approved") && (
                     <button
-                      onClick={() => setIsReviewing(true)}
-                      className="bg-zinc-800 hover:bg-red-500 hover:text-white text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+                      onClick={startRejection}
+                      disabled={isBusy}
+                      className="bg-zinc-800 hover:bg-red-500 hover:text-white text-zinc-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {selectedSubmission.status === "approved"
-                        ? "Revoke / Reject"
-                        : "Reject Application"}
+                        ? t("rests.revoke_reject")
+                        : t("rests.reject_app")}
                     </button>
                   )}
                 </>
@@ -439,197 +601,136 @@ export default function RestaurantsSection({
           </div>
         </div>
 
-        {/* Rejection Form */}
         {isReviewing && (
           <div className="bg-red-500/5 border border-red-500/20 rounded-2xl p-6 animate-in slide-in-from-top-4 duration-200">
             <h4 className="text-sm font-bold text-red-500 mb-2">
-              Reject Merchant Application
+              {t("rests.reject_heading")}
             </h4>
-            <p className="text-xs text-zinc-400 mb-4">
-              Please provide a reason for rejecting this restaurant. This will
-              be sent to the merchant's dashboard.
-            </p>
+            <label
+              htmlFor="rejection-reason"
+              className="block text-xs text-zinc-500 dark:text-zinc-400 mb-2"
+            >
+              {t("rests.reject_help")}
+            </label>
             <textarea
+              id="rejection-reason"
               value={rejectionReason}
               onChange={(e) => setRejectionReason(e.target.value)}
-              placeholder="e.g. Logo image URL is invalid, or cuisine selection is unsupported."
-              className="w-full bg-zinc-950 border border-red-500/30 text-zinc-200 text-sm rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-red-500 mb-4 h-24"
+              placeholder={t("rests.reject_placeholder")}
+              className="w-full bg-white dark:bg-zinc-950 border border-red-500/30 text-zinc-900 dark:text-zinc-200 text-sm rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-red-500 mb-4 h-24"
             />
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setIsReviewing(false)}
-                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold px-4 py-2 rounded-lg"
+                className="bg-zinc-200 dark:bg-zinc-800 hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-300 text-xs font-bold px-4 py-2 rounded-lg"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 onClick={() => handleReview("reject")}
-                disabled={isSubmitting}
+                disabled={isBusy}
                 className="flex items-center bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting && (
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                {pendingAction === "reject" && (
+                  <Loader2 className="w-4 h-4 animate-spin me-2" />
                 )}
-                Confirm Rejection
+                {t("rests.confirm_rejection")}
               </button>
             </div>
           </div>
         )}
 
-        {/* Info Grid & Details */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
-            <div className="p-3 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl">
-              <Clock className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                Est. Delivery Time
-              </p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">
-                {selectedSubmission.estimatedDeliveryMinutes ?? "N/A"} Minutes
-              </p>
-            </div>
-          </div>
-
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
-            <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl">
-              <DollarSign className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                Delivery Fee
-              </p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">
-                ${(selectedSubmission.deliveryFee ?? 0).toFixed(2)}
-              </p>
-            </div>
-          </div>
-
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
-            <div className="p-3 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-xl">
-              <Store className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                Cuisine Type
-              </p>
-              <p className="text-lg font-black text-zinc-900 dark:text-white">
-                {selectedSubmission.cuisineType}
-              </p>
-            </div>
-          </div>
+          <InfoCard
+            icon={<Clock className="w-5 h-5" />}
+            accent="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+            label={t("common.delivery_window")}
+            value={deliveryWindow(selectedSubmission)}
+          />
+          <InfoCard
+            icon={<DollarSign className="w-5 h-5" />}
+            accent="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+            label={t("common.delivery_fee")}
+            value={formatMoney(
+              selectedSubmission.deliveryFee,
+              selectedSubmission.currencyId,
+            )}
+          />
+          <InfoCard
+            icon={<Store className="w-5 h-5" />}
+            accent="bg-purple-500/10 text-purple-600 dark:text-purple-400"
+            label={t("rests.categories_requested")}
+            value={orDash(selectedSubmission.categoryIds?.length ?? 0)}
+          />
         </div>
 
-        {/* Extended Details card */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-2xl shadow-sm space-y-4">
             <h4 className="text-sm font-extrabold text-zinc-900 dark:text-white border-b border-zinc-100 dark:border-zinc-800 pb-3">
-              Contact & Location Information
+              {t("rests.contact_location")}
             </h4>
             <div className="space-y-3 text-xs">
-              <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
-                <Mail className="w-4 h-4 text-zinc-400" />
-                <div>
-                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">
-                    Email Address
-                  </p>
-                  <p className="font-bold">
-                    {selectedSubmission.email || "Not provided"}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
-                <Phone className="w-4 h-4 text-zinc-400" />
-                <div>
-                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">
-                    Phone Number
-                  </p>
-                  <p className="font-bold">
-                    {selectedSubmission.phone || "Not provided"}
-                  </p>
-                </div>
-              </div>
+              <DetailRow
+                icon={<Phone className="w-4 h-4" />}
+                label={t("customers.phone")}
+                value={selectedSubmission.phone || t("rests.not_provided")}
+              />
               {selectedSubmission.website && (
-                <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
-                  <FileText className="w-4 h-4 text-zinc-400" />
-                  <div>
-                    <p className="font-semibold text-zinc-400 text-[10px] uppercase">
-                      Website URL
-                    </p>
-                    <p className="font-bold">{selectedSubmission.website}</p>
-                  </div>
-                </div>
+                <DetailRow
+                  icon={<Globe className="w-4 h-4" />}
+                  label={t("common.website")}
+                  value={selectedSubmission.website}
+                />
               )}
               <div className="flex items-start gap-3 text-zinc-600 dark:text-zinc-300 pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
-                <MapPin className="w-4 h-4 text-zinc-400 mt-1" />
+                <MapPin className="w-4 h-4 text-zinc-500 dark:text-zinc-400 mt-1" />
                 <div>
-                  <p className="font-semibold text-zinc-400 text-[10px] uppercase">
-                    Address & Coordinates
+                  <p className="font-semibold text-zinc-500 dark:text-zinc-400 text-[10px] uppercase">
+                    {t("rests.address_coords")}
                   </p>
                   <p className="font-bold">
-                    {[
-                      selectedSubmission.address?.street,
-                      selectedSubmission.address?.building,
-                      selectedSubmission.address?.city,
-                    ]
-                      .filter(Boolean)
-                      .join(", ") || "No address"}
+                    {formatAddress(selectedSubmission.address) ||
+                      t("rests.no_address_short")}
                   </p>
                   <p className="font-bold">
-                    Lat: {selectedSubmission.address?.latitude ?? "N/A"}, Lng:{" "}
-                    {selectedSubmission.address?.longitude ?? "N/A"}
+                    Lat: {orDash(selectedSubmission.address?.latitude)}, Lng:{" "}
+                    {orDash(selectedSubmission.address?.longitude)}
                   </p>
                 </div>
               </div>
+              {selectedSubmission.rejectionReason && (
+                <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
+                  <p className="font-semibold text-red-500 text-[10px] uppercase">
+                    {t("common.rejection_reason")}
+                  </p>
+                  <p className="text-zinc-600 dark:text-zinc-300 mt-1">
+                    {selectedSubmission.rejectionReason}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-6 rounded-2xl shadow-sm space-y-4">
             <h4 className="text-sm font-extrabold text-zinc-900 dark:text-white border-b border-zinc-100 dark:border-zinc-800 pb-3">
-              Proposed Opening Hours
+              {t("rests.proposed_hours")}
             </h4>
-            <div className="space-y-2.5 max-h-[220px] overflow-y-auto pr-2 custom-scrollbar">
-              {selectedSubmission.openingHours &&
-              selectedSubmission.openingHours.length > 0 ? (
-                selectedSubmission.openingHours.map((entry, idx) => (
-                  <div
-                    key={idx}
-                    className="flex justify-between items-center text-xs border-b border-zinc-50 dark:border-zinc-800/40 pb-2"
-                  >
-                    <span className="font-bold text-zinc-700 dark:text-zinc-300">
-                      {entry.day}
-                    </span>
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                        entry.is24Hours
-                          ? "bg-emerald-500/10 text-emerald-500"
-                          : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
-                      }`}
-                    >
-                      {entry.is24Hours
-                        ? "24 Hours Open"
-                        : `${entry.openTime} - ${entry.closeTime}`}
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-xs text-zinc-400">
-                  No custom opening hours submitted. Standard settings apply.
-                </p>
-              )}
-            </div>
+            <OpeningHours entries={selectedSubmission.openingHours} />
           </div>
         </div>
       </div>
     );
   }
 
-  // Render detail view if a restaurant is selected
+  // ─── Merchant detail ───────────────────────────────────────────────────────
+
   if (!isPendingTab && selectedRest) {
+    const currency = currencyOf(selectedRest);
+    const exchangeRates: ExchangeRateRef[] =
+      fullDetail?.exchangeRates ?? selectedRest.exchangeRates ?? [];
+
     return (
       <div className="space-y-6 animate-in slide-in-from-right duration-200">
-        {/* Back Button */}
         {currentRole?.type !== "restaurant" && (
           <button
             onClick={() => {
@@ -638,38 +739,46 @@ export default function RestaurantsSection({
             }}
             className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-950 dark:hover:text-white transition-colors"
           >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Back to Restaurant Registry</span>
+            <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
+            <span>{t("rests.back_to_registry")}</span>
           </button>
         )}
 
-        {/* Restaurant Header Jumbotron */}
+        {/* The detail payload failed but the list copy is still on screen. */}
+        {fullError && (
+          <ErrorBanner message={fullError} onRetry={() => refreshSelected()} />
+        )}
+
         <div className="relative bg-zinc-900 rounded-2xl overflow-hidden border border-zinc-800 shadow-lg">
-          <div className="h-40 relative">
-            <img
-              src={
-                selectedRest.backgroundImageUrl ||
-                selectedRest.coverImage ||
-                "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
-              }
-              alt={selectedRest.name}
-              className="w-full h-full object-cover opacity-40"
-            />
-            <div className="absolute top-4 right-4 flex gap-2">
-              <span
-                className={`text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider ${
-                  selectedRest.status === "active"
-                    ? "bg-emerald-500/90 text-white border-emerald-400"
-                    : selectedRest.status === "pending"
-                      ? "bg-amber-500/90 text-black border-amber-400 animate-pulse"
-                      : "bg-red-500/90 text-white border-red-400"
-                }`}
-              >
-                {selectedRest.status}
-              </span>
+          <div className="h-40 relative bg-zinc-800">
+            {selectedRest.backgroundImageUrl && (
+              <img
+                src={selectedRest.backgroundImageUrl}
+                alt=""
+                className="w-full h-full object-cover opacity-40"
+              />
+            )}
+            <div className="absolute top-4 end-4 flex flex-wrap gap-2 justify-end">
+              <StatusPill
+                status={selectedRest.status}
+                className="px-3 py-1.5 text-xs shadow-lg backdrop-blur-sm"
+              />
+              {selectedRest.isOpen !== undefined && (
+                <span
+                  className={`text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider ${
+                    selectedRest.isOpen
+                      ? "bg-emerald-500/90 text-white border-emerald-400"
+                      : "bg-zinc-700/90 text-zinc-200 border-zinc-600"
+                  }`}
+                >
+                  {selectedRest.isOpen
+                    ? t("merchant.open_now")
+                    : t("merchant.closed_now")}
+                </span>
+              )}
               {selectedRest.isFeatured && (
                 <span className="text-xs font-bold px-3 py-1.5 rounded-full shadow-lg border uppercase tracking-wider bg-purple-500/90 text-white border-purple-400 flex items-center gap-1">
-                  <Star className="w-3 h-3 fill-white" /> Featured
+  <Star className="w-3 h-3 fill-white" /> {t("rests.filter_featured")}
                 </span>
               )}
             </div>
@@ -678,32 +787,28 @@ export default function RestaurantsSection({
           <div className="p-6 relative -mt-10 flex flex-col md:flex-row justify-between items-start md:items-end gap-6 bg-gradient-to-t from-zinc-950 via-zinc-950/95 to-zinc-950/40">
             <div className="flex gap-4 items-end">
               {selectedRest.logo ? (
-                selectedRest.logo.length > 5 ? (
+                selectedRest.stories && selectedRest.stories.length > 0 ? (
                   <button
-                    onClick={(e) => {
-                      if (
-                        selectedRest.stories &&
-                        selectedRest.stories.length > 0
-                      ) {
-                        e.stopPropagation();
-                        setViewingStoriesFor(selectedRest);
-                      }
-                    }}
-                    className={`relative w-16 h-16 rounded-2xl shadow-xl overflow-hidden bg-zinc-900 border-2 transition-transform ${
-                      selectedRest.stories && selectedRest.stories.length > 0
-                        ? "border-orange-500 hover:scale-105 cursor-pointer p-[2px]"
-                        : "border-zinc-800"
-                    }`}
+                    type="button"
+                    onClick={() => setViewingStoriesFor(selectedRest)}
+                    aria-label={`View ${selectedRest.name} stories`}
+                    className="relative w-16 h-16 rounded-2xl shadow-xl overflow-hidden bg-zinc-900 border-2 border-orange-500 hover:scale-105 cursor-pointer p-[2px] transition-transform"
                   >
                     <img
                       src={selectedRest.logo}
-                      alt="logo"
+                      alt=""
                       className="w-full h-full object-cover rounded-xl"
                     />
                   </button>
                 ) : (
-                  <span className="text-4xl p-3 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">
-                    {selectedRest.logo}
+                  // Not a button: with no stories it had no action, so it was
+                  // just a focus stop that did nothing.
+                  <span className="relative block w-16 h-16 rounded-2xl shadow-xl overflow-hidden bg-zinc-900 border-2 border-zinc-800">
+                    <img
+                      src={selectedRest.logo}
+                      alt={`${selectedRest.name} logo`}
+                      className="w-full h-full object-cover rounded-xl"
+                    />
                   </span>
                 )
               ) : (
@@ -716,71 +821,80 @@ export default function RestaurantsSection({
                   {selectedRest.name}
                 </h3>
                 <p className="text-xs text-orange-400 font-semibold">
-                  {selectedRest.cuisineType || "No cuisine set"}
+                  {selectedRest.categories?.map((c) => c.name).join(" · ") ||
+t("rests.no_categories")}
                 </p>
-                <div className="flex items-center gap-4 mt-2 text-[11px] text-zinc-400">
+                <div className="flex flex-wrap items-center gap-4 mt-2 text-[11px] text-zinc-400">
                   <span className="flex items-center gap-1">
-                    <MapPin className="w-3.5 h-3.5" />{" "}
-                    {[selectedRest.address, selectedRest.city]
-                      .filter(Boolean)
-                      .join(", ") || "No address provided"}
+                    <MapPin className="w-3.5 h-3.5" />
+                    {formatAddress(selectedRest.restaurantAddress) ||
+t("rests.no_address")}
                   </span>
                   <span className="flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5" /> Joined{" "}
-                    {selectedRest.joinedDate || selectedRest.createdAt
-                      ? new Date(
-                          (selectedRest.joinedDate ||
-                            selectedRest.createdAt) as string,
-                        ).toLocaleDateString()
-                      : "N/A"}
+                    <Calendar className="w-3.5 h-3.5" />{" "}
+                    {t("rests.joined_on", {
+                      date: formatDate(selectedRest.createdAt),
+                    })}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Admin Override Action Bar */}
             <div className="flex gap-2 shrink-0 flex-wrap justify-end">
               <button
                 onClick={() => setIsEditModalOpen(true)}
-                disabled={isSubmitting}
+                disabled={isBusy}
                 className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Edit Merchant
+                {t("rests.edit_merchant")}
               </button>
               <button
-                onClick={() => handleDeleteRestaurant(selectedRest.id)}
-                disabled={isSubmitting}
+                onClick={() =>
+                  handleDeleteRestaurant(selectedRest.id, selectedRest.name)
+                }
+                disabled={isBusy}
                 className="flex items-center bg-zinc-800 hover:bg-red-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting && (
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                {pendingAction === "delete" && (
+                  <Loader2 className="w-4 h-4 animate-spin me-2" />
                 )}
-                Delete
+                {t("common.delete")}
               </button>
               {selectedRest.status === "active" && (
                 <button
                   onClick={() =>
-                    handleStatusChange(selectedRest.id, "suspended")
+                    handleStatusChange(
+                      selectedRest.id,
+                      "suspended",
+                      selectedRest.name,
+                    )
                   }
-                  disabled={isSubmitting}
+                  disabled={isBusy}
                   className="flex items-center bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting && (
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  {pendingAction === "status" && (
+                    <Loader2 className="w-4 h-4 animate-spin me-2" />
                   )}
-                  Suspend Merchant
+                  {t("rests.suspend_cta")}
                 </button>
               )}
-              {selectedRest.status === "suspended" && (
+              {(selectedRest.status === "suspended" ||
+                selectedRest.status === "inactive") && (
                 <button
-                  onClick={() => handleStatusChange(selectedRest.id, "active")}
-                  disabled={isSubmitting}
+                  onClick={() =>
+                    handleStatusChange(
+                      selectedRest.id,
+                      "active",
+                      selectedRest.name,
+                    )
+                  }
+                  disabled={isBusy}
                   className="flex items-center bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting && (
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  {pendingAction === "status" && (
+                    <Loader2 className="w-4 h-4 animate-spin me-2" />
                   )}
-                  Make Available
+                  {t("rests.make_available")}
                 </button>
               )}
               {selectedRest.status === "active" && (
@@ -791,164 +905,134 @@ export default function RestaurantsSection({
                       !!selectedRest.isFeatured,
                     )
                   }
-                  disabled={isSubmitting}
+                  disabled={isBusy}
                   className={`flex items-center active:scale-95 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                     selectedRest.isFeatured
                       ? "bg-zinc-700 hover:bg-zinc-800"
                       : "bg-purple-600 hover:bg-purple-700 shadow-lg shadow-purple-500/20"
                   }`}
                 >
-                  {isSubmitting && (
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  {pendingAction === "feature" && (
+                    <Loader2 className="w-4 h-4 animate-spin me-2" />
                   )}
                   <Star
-                    className={`w-4 h-4 mr-1.5 ${selectedRest.isFeatured ? "opacity-50" : "fill-white"}`}
+                    className={`w-4 h-4 me-1.5 ${selectedRest.isFeatured ? "opacity-50" : "fill-white"}`}
                   />
-                  {selectedRest.isFeatured ? "Unfeature" : "Feature Merchant"}
+                  {selectedRest.isFeatured
+                    ? t("rests.unfeature")
+                    : t("rests.feature_merchant")}
                 </button>
               )}
             </div>
           </div>
         </div>
 
-        {/* Internal Tabs */}
-        <div className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-4">
-          <button
-            onClick={() => setInnerTab("overview")}
-            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-              innerTab === "overview"
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
-            }`}
-          >
-            Overview
-          </button>
-          <button
-            onClick={() => setInnerTab("profile")}
-            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-              innerTab === "profile"
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
-            }`}
-          >
-            Profile
-          </button>
-          <button
-            onClick={() => setInnerTab("menu")}
-            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-              innerTab === "menu"
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
-            }`}
-          >
-            Menu Editor
-          </button>
-          <button
-            onClick={() => setInnerTab("orders")}
-            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-              innerTab === "orders"
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
-            }`}
-          >
-            Live Orders
-          </button>
-          <button
-            onClick={() => setInnerTab("delivery")}
-            className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-              innerTab === "delivery"
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
-            }`}
-          >
-            Delivery Zone
-          </button>
+        {/* Internal Tabs — scrollable so the last tabs stay reachable at 375px */}
+        <div className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-4 overflow-x-auto scrollbar-none">
+          {INNER_TABS.map(([tab, label]) => (
+            <button
+              key={tab}
+              onClick={() => setInnerTab(tab)}
+              aria-current={innerTab === tab ? "page" : undefined}
+              className={`shrink-0 px-4 py-2 text-sm font-bold rounded-lg transition-all ${
+                innerTab === tab
+                  ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white bg-zinc-100 dark:bg-zinc-800/50"
+              }`}
+            >
+              {t(label)}
+            </button>
+          ))}
         </div>
-
-        {innerTab === "delivery" && fullSelectedRest?.deliveryZones && (
-          <div className="space-y-6 animate-in fade-in duration-200">
-            {fullSelectedRest.deliveryZones.length > 0 ? (
-              fullSelectedRest.deliveryZones.map((zone) => (
-                <div
-                  key={zone.id}
-                  className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm"
-                >
-                  <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">
-                    {zone.name}
-                  </h3>
-                  <div className="w-full h-[400px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-950 relative z-0">
-                    <DeliveryZoneMap polygon={zone.polygon} />
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-12 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl">
-                <MapPin className="w-12 h-12 text-zinc-300 mx-auto mb-3" />
-                <h3 className="text-lg font-bold text-zinc-900 dark:text-white">
-                  No Delivery Zones Setup
-                </h3>
-                <p className="text-zinc-500 text-sm">
-                  This restaurant hasn't configured any delivery zones yet.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
 
         {innerTab === "overview" && (
           <div className="space-y-6 animate-in fade-in duration-200">
-            {/* Info Grid (Summary Payouts + Documents Verification) */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
-                <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl">
-                  <DollarSign className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                    Gross Income
-                  </p>
-                  <p className="text-lg font-black text-zinc-900 dark:text-white">
-                    $
-                    {(selectedRest.revenue || 0).toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </p>
-                </div>
+              <InfoCard
+                icon={<Star className="w-5 h-5 fill-amber-500" />}
+                accent="bg-amber-500/10 text-amber-500"
+                label={t("rests.review_rating")}
+                value={`${formatRating(selectedRest.rating)} ★`}
+                hint={t("rests.ratings_hint", {
+                  count: selectedRest.totalRatings ?? 0,
+                })}
+              />
+              <InfoCard
+                icon={<DollarSign className="w-5 h-5" />}
+                accent="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                label={t("common.delivery_fee")}
+                value={formatMoney(selectedRest.deliveryFee, currency)}
+                hint={
+                  currency ? t("rests.priced_in", { code: currency }) : undefined
+                }
+              />
+              <InfoCard
+                icon={<Clock className="w-5 h-5" />}
+                accent="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                label={t("common.delivery_window")}
+                value={deliveryWindow(selectedRest)}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm space-y-3">
+                <h4 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+                  <Truck className="w-4 h-4 text-orange-500" />
+                  {t("rests.fulfilment")}
+                </h4>
+                <dl className="space-y-2.5 text-xs">
+                  <Row
+                    label={t("rests.delivery_partner")}
+                    value={
+                      selectedRest.deliveryCompanyName ||
+                      t("rests.self_delivery")
+                    }
+                  />
+                  <Row
+                    label={t("rests.auto_dispatch")}
+                    value={
+                      selectedRest.autoSendToDeliveryCompany
+                        ? t("common.on")
+                        : t("common.off")
+                    }
+                  />
+                  <Row
+                    label={t("rests.running_offer")}
+                    value={
+                      selectedRest.hasOffer ? t("common.yes") : t("common.no")
+                    }
+                  />
+                  <Row
+                    label={t("rests.delivery_zones")}
+                    value={String(
+                      fullDetail?.deliveryZones?.length ??
+                        selectedRest.deliveryZones?.length ??
+                        0,
+                    )}
+                  />
+                </dl>
               </div>
 
-              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
-                <div className="p-3 bg-orange-500/10 text-orange-600 dark:text-orange-400 rounded-xl">
-                  <ShoppingBag className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                    Total Sales Orders
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm space-y-3">
+                <h4 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+                  <Coins className="w-4 h-4 text-orange-500" />
+                  {t("rests.effective_rates")}
+                </h4>
+                {exchangeRates.length === 0 ? (
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    {t("rests.using_defaults")}
                   </p>
-                  <p className="text-lg font-black text-zinc-900 dark:text-white">
-                    {selectedRest.ordersCount || 0} Orders
-                  </p>
-                </div>
-              </div>
-
-              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
-                <div className="p-3 bg-amber-500/10 text-amber-500 rounded-xl">
-                  <Star className="w-5 h-5 fill-amber-500" />
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                    Review Rating
-                  </p>
-                  <p className="text-lg font-black text-zinc-900 dark:text-white">
-                    {selectedRest.rating || 0} ★{" "}
-                    <span className="text-xs font-normal text-zinc-400">
-                      (
-                      {selectedRest.reviewsCount ||
-                        (selectedRest as any).totalRatings ||
-                        0}{" "}
-                      votes)
-                    </span>
-                  </p>
-                </div>
+                ) : (
+                  <dl className="space-y-2.5 text-xs">
+                    {exchangeRates.map((rate, idx) => (
+                      <Row
+                        key={`${rate.fromCurrencyId}-${rate.toCurrencyId}-${idx}`}
+                        label={`${rate.fromCurrencyId} → ${rate.toCurrencyId}`}
+                        value={formatRate(rate.rate)}
+                      />
+                    ))}
+                  </dl>
+                )}
               </div>
             </div>
           </div>
@@ -957,39 +1041,26 @@ export default function RestaurantsSection({
         {innerTab === "profile" && (
           <div className="space-y-6 animate-in fade-in duration-200 border-t border-zinc-200 dark:border-zinc-800 pt-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Contact Info */}
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm space-y-4">
                 <h4 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                  <User className="w-4 h-4 text-orange-500" />
-                  Contact Information
+                  <Phone className="w-4 h-4 text-orange-500" />
+                  {t("rests.contact")}
                 </h4>
                 <div className="space-y-3 text-sm">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                      Email
-                    </span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      {selectedRest.email}
-                    </span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                      Phone
-                    </span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      {selectedRest.phone}
-                    </span>
-                  </div>
+                  <Field
+                    label={t("common.phone")}
+                    value={orDash(selectedRest.phone)}
+                  />
                   {selectedRest.website && (
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                        Website
+                      <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
+                        {t("common.website")}
                       </span>
                       <a
                         href={selectedRest.website}
                         target="_blank"
                         rel="noreferrer"
-                        className="font-semibold text-blue-500 hover:underline"
+                        className="font-semibold text-blue-500 hover:underline break-all"
                       >
                         {selectedRest.website}
                       </a>
@@ -997,124 +1068,77 @@ export default function RestaurantsSection({
                   )}
                   {selectedRest.description && (
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                        Description
+                      <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
+                        {t("common.description")}
                       </span>
                       <span className="text-zinc-600 dark:text-zinc-400 text-xs leading-relaxed">
                         {selectedRest.description}
                       </span>
                     </div>
                   )}
+                  <Field
+                    label={t("common.categories")}
+                    value={
+                      selectedRest.categories?.map((c) => c.name).join(", ") ||
+                      "—"
+                    }
+                  />
+                  <Field
+                    label={t("common.currency")}
+                    value={
+                      selectedRest.currency
+                        ? `${selectedRest.currency.code} — ${selectedRest.currency.name ?? ""}`.trim()
+                        : "—"
+                    }
+                  />
                 </div>
               </div>
 
-              {/* Operations Info */}
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm space-y-4">
                 <h4 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                  <Store className="w-4 h-4 text-orange-500" />
-                  Operations
+                  <Clock className="w-4 h-4 text-orange-500" />
+                  {t("rests.opening_hours")}
                 </h4>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                      Cuisine Type
-                    </span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200 capitalize">
-                      {selectedRest.cuisineType}
-                    </span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                      Delivery Fee
-                    </span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      ${selectedRest.deliveryFee?.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                      Est. Delivery
-                    </span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      {selectedRest.estimatedDeliveryMinutes} mins
-                    </span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                      Joined Date
-                    </span>
-                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                      {selectedRest.joinedDate
-                        ? new Date(selectedRest.joinedDate).toLocaleDateString()
-                        : "—"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Opening Hours */}
-                {selectedRest.openingHours?.entries && (
-                  <div className="mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-800">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide block mb-2">
-                      Opening Hours
-                    </span>
-                    <div className="space-y-1.5 text-xs">
-                      {selectedRest.openingHours.entries.map((entry, idx) => (
-                        <div
-                          key={idx}
-                          className="flex justify-between items-center"
-                        >
-                          <span className="capitalize font-medium text-zinc-600 dark:text-zinc-400 w-24">
-                            {entry.day}
-                          </span>
-                          <span className="font-bold text-zinc-800 dark:text-zinc-200">
-                            {entry.is24Hours
-                              ? "24 Hours"
-                              : entry.openTime && entry.closeTime
-                                ? `${entry.openTime} - ${entry.closeTime}`
-                                : "Closed"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <OpeningHours entries={selectedRest.openingHours} />
               </div>
 
-              {/* Location */}
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm space-y-4 md:col-span-2">
                 <h4 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
                   <MapPin className="w-4 h-4 text-orange-500" />
-                  Location
+                  {t("rests.location")}
                 </h4>
                 <div className="flex flex-col md:flex-row gap-6">
                   <div className="flex-1 space-y-3 text-sm">
-                    <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                        City
-                      </span>
-                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                        {selectedRest.city}
-                      </span>
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">
-                        Address
-                      </span>
-                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                        {selectedRest.address}
-                      </span>
-                    </div>
+                    <Field
+                      label={t("common.city")}
+                      value={orDash(selectedRest.restaurantAddress?.city)}
+                    />
+                    <Field
+                      label={t("common.address")}
+                      value={
+                        formatAddress(selectedRest.restaurantAddress) || "—"
+                      }
+                    />
+                    <Field
+                      label={t("rests.coordinates")}
+                      value={
+                        selectedRest.restaurantAddress
+                          ? `${selectedRest.restaurantAddress.latitude}, ${selectedRest.restaurantAddress.longitude}`
+                          : "—"
+                      }
+                    />
                   </div>
-                  {selectedRest.latitude && selectedRest.longitude && (
+                  {selectedRest.restaurantAddress && (
                     <div className="w-full md:w-2/3 h-64 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-700 shadow-inner relative">
                       <iframe
+                        title={t("rests.map_alt", { name: selectedRest.name })}
                         width="100%"
                         height="100%"
                         style={{ border: 0 }}
                         loading="lazy"
                         allowFullScreen
                         referrerPolicy="no-referrer-when-downgrade"
-                        src={`https://maps.google.com/maps?q=${selectedRest.latitude},${selectedRest.longitude}&t=&z=15&ie=UTF8&iwloc=&output=embed`}
+                        src={`https://maps.google.com/maps?q=${selectedRest.restaurantAddress.latitude},${selectedRest.restaurantAddress.longitude}&t=&z=15&ie=UTF8&iwloc=&output=embed`}
                       />
                     </div>
                   )}
@@ -1126,10 +1150,7 @@ export default function RestaurantsSection({
 
         {innerTab === "menu" && (
           <div className="animate-in fade-in duration-200 border-t border-zinc-200 dark:border-zinc-800 pt-4">
-            <RestaurantMenuSection
-              restaurant={selectedRest as any}
-              onUpdateRestaurant={() => fetchMerchants()}
-            />
+            <RestaurantMenuSection restaurant={selectedRest} />
           </div>
         )}
 
@@ -1143,97 +1164,141 @@ export default function RestaurantsSection({
           </div>
         )}
 
-        {/* Edit Restaurant Modal */}
+        {innerTab === "reviews" && (
+          <div className="animate-in fade-in duration-200 border-t border-zinc-200 dark:border-zinc-800 pt-4">
+            <RestaurantReviewsPanel restaurantId={selectedRest.id} />
+          </div>
+        )}
+
+        {innerTab === "stories" && (
+          <div className="animate-in fade-in duration-200 border-t border-zinc-200 dark:border-zinc-800 pt-4">
+            <RestaurantStoriesPanel
+              restaurantId={selectedRest.id}
+              restaurantName={selectedRest.name}
+            />
+          </div>
+        )}
+
+        {innerTab === "delivery" && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Loading, failed and genuinely-empty are three different states —
+                this tab used to render nothing at all for the first two. */}
+            {isFullLoading && !fullDetail ? (
+              <CardSkeletonGrid count={1} className="grid grid-cols-1" />
+            ) : fullError ? (
+              <ErrorState
+                message={fullError}
+                title={t("rests.zones_failed")}
+                onRetry={() => refreshSelected()}
+              />
+            ) : fullDetail?.deliveryZones?.length ? (
+              fullDetail.deliveryZones.map((zone) => (
+                <div
+                  key={zone.id}
+                  className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm"
+                >
+                  <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">
+                    {zone.name}
+                  </h3>
+                  <div className="w-full h-[400px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-950 relative z-0">
+                    <DeliveryZoneMap polygon={zone.polygon} />
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl">
+                <EmptyState
+                  icon={MapPin}
+                  title={t("rests.no_zones")}
+                  hint={t("rests.no_zones_hint")}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         <EditRestaurantModal
           isOpen={isEditModalOpen}
           onClose={() => setIsEditModalOpen(false)}
-          restaurant={selectedRest || null}
+          restaurant={selectedRest}
           onSuccess={() => {
             setIsEditModalOpen(false);
             fetchMerchants();
+            // Header/profile read from the detail payload, so refresh it too.
+            refreshSelected();
           }}
+        />
+
+        <StoriesViewerModal
+          isOpen={!!viewingStoriesFor}
+          onClose={() => setViewingStoriesFor(null)}
+          restaurant={viewingStoriesFor}
         />
       </div>
     );
   }
 
-  // Registry Listing Grid
+  // ─── Registry listing ──────────────────────────────────────────────────────
+
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold p-4 rounded-xl flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4" />
-          {error}
-        </div>
+      {/* Content is already on screen — don't replace it, just flag the failure. */}
+      {error && displayList.length > 0 && (
+        <ErrorBanner message={error} onRetry={refetchList} />
       )}
 
-      {/* Search & Tabs Filter Row */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-2xl shadow-sm flex flex-col gap-4">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
           <div className="flex flex-wrap items-center gap-4">
-            {/* View Mode Switcher */}
             <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/80">
-              <button
-                onClick={() => {
-                  setViewMode("merchants");
-                  setSelectedRestId(null);
-                  setSelectedSubmissionId(null);
-                }}
-                className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 ${
-                  viewMode === "merchants"
-                    ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm border border-zinc-200/30 dark:border-zinc-800"
-                    : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
-                }`}
-              >
-                Merchants Registry
-              </button>
-              <button
-                onClick={() => {
-                  setViewMode("applications");
-                  setSelectedRestId(null);
-                  setSelectedSubmissionId(null);
-                }}
-                className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 ${
-                  viewMode === "applications"
-                    ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm border border-zinc-200/30 dark:border-zinc-800"
-                    : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
-                }`}
-              >
-                Applications
-              </button>
+              {(
+                [
+                  ["merchants", "rests.registry"],
+                  ["applications", "rests.applications"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  onClick={() => {
+                    setViewMode(mode);
+                    setSelectedRestId(null);
+                    setSelectedSubmissionId(null);
+                  }}
+                  className={`text-xs font-bold px-4 py-2 rounded-lg transition-all duration-200 ${
+                    viewMode === mode
+                      ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm border border-zinc-200/30 dark:border-zinc-800"
+                      : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
+                  }`}
+                >
+                  {t(label as MessageKey)}
+                </button>
+              ))}
             </div>
 
-            {/* Dynamic Filters based on view mode */}
-            <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800/50 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/80">
+            <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800/50 p-1 rounded-xl border border-zinc-200/60 dark:border-zinc-700/80 overflow-x-auto scrollbar-none">
               {viewMode === "merchants"
-                ? (["all", "active", "suspended"] as const).map((filter) => (
+                ? MERCHANT_FILTERS.map((filter) => (
                     <button
-                      key={filter}
-                      onClick={() => setMerchantStatus(filter)}
-                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all duration-200 capitalize ${
-                        merchantStatus === filter
+                      key={filter.value}
+                      onClick={() => setMerchantFilter(filter.value)}
+                      aria-pressed={merchantFilter === filter.value}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all duration-200 whitespace-nowrap ${
+                        merchantFilter === filter.value
                           ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800"
                           : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
                       }`}
                     >
-                      {filter}
+                      {t(filter.key)}
                     </button>
                   ))
-                : (
-                    [
-                      "all",
-                      "pending",
-                      "approved",
-                      "rejected",
-                      "cancelled",
-                    ] as const
-                  ).map((filter) => (
+                : APP_STATUS_FILTERS.map((filter) => (
                     <button
                       key={filter}
                       onClick={() => {
                         setAppStatus(filter);
                         setAppPage(1);
                       }}
+                      aria-pressed={appStatus === filter}
                       className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all duration-200 capitalize ${
                         appStatus === filter
                           ? "bg-white dark:bg-zinc-900 text-orange-500 shadow-sm border border-zinc-200/30 dark:border-zinc-800"
@@ -1246,193 +1311,208 @@ export default function RestaurantsSection({
             </div>
           </div>
 
-          {/* Counter summary & Actions */}
           <div className="flex items-center gap-4">
             <span className="text-xs font-semibold text-zinc-500">
-              Showing {displayList.length} of{" "}
-              {isPendingTab ? appTotalItems : restaurants.length}{" "}
-              {isPendingTab ? "applications" : "merchants"}
+              {isPendingTab
+                ? t("rests.showing_apps", {
+                    shown: displayList.length,
+                    total: appTotalItems,
+                  })
+                : t("rests.showing_merchants", {
+                    shown: displayList.length,
+                    total: merchantTotal,
+                  })}
             </span>
             {!isPendingTab && (
               <button
                 onClick={() => setIsAddModalOpen(true)}
-                className="text-xs font-bold px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all shadow-sm"
+                className="text-xs font-bold px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all shadow-sm whitespace-nowrap"
               >
-                Add Restaurant
+                {t("rests.add")}
               </button>
             )}
           </div>
         </div>
+
+        {debouncedSearch && (
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5">
+            <Search className="w-3 h-3" />
+            {isPendingTab
+              ? t("rests.filtering_page", { query: debouncedSearch })
+              : t("rests.searching_all", { query: debouncedSearch })}
+          </p>
+        )}
       </div>
 
-      {/* Grid of Restaurant / Submission Cards */}
-      {displayList.length === 0 ? (
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-12 text-center rounded-2xl flex flex-col items-center justify-center">
-          <Store className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mb-3" />
-          <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-            {isPendingTab
-              ? "No pending submissions to review"
-              : "No restaurants match criteria"}
-          </p>
-          <p className="text-xs text-zinc-400 mt-1">
-            Try relaxing filters or updating search terms
-          </p>
+      {isLoading ? (
+        <CardSkeletonGrid
+          count={6}
+          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+        />
+      ) : error ? (
+        <ErrorState
+          message={error}
+          title={
+            isPendingTab
+              ? t("rests.load_apps_failed")
+              : t("rests.load_merchants_failed")
+          }
+          onRetry={refetchList}
+        />
+      ) : displayList.length === 0 ? (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
+          <EmptyState
+            icon={Store}
+            title={
+              isPendingTab
+                ? t("rests.none_apps")
+                : t("rests.none_merchants")
+            }
+            hint={t("rests.none_hint")}
+          />
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {displayList.map((item) => {
-            const isSub = "status" in item && isPendingTab;
+            const isSub = isPendingTab;
+            const merchant = isSub ? null : (item as RestaurantResponse);
+            const submission = isSub ? (item as RestaurantSubmission) : null;
+            const hasStories = (merchant?.stories?.length ?? 0) > 0;
+            const subtitle = isSub
+              ? deliveryWindow(submission ?? undefined)
+              : merchant?.categories?.map((c) => c.name).join(" · ") ||
+t("rests.no_categories_short");
 
             return (
               <div
                 key={item.id}
-                className="bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800/80 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 group flex flex-col cursor-pointer"
-                onClick={() => {
-                  if (isPendingTab) {
-                    setSelectedSubmissionId(item.id);
-                  } else {
-                    setSelectedRestId(item.id);
-                    setInnerTab("overview");
-                  }
-                }}
+                className="relative bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800/80 rounded-2xl overflow-hidden shadow-sm hover:shadow-md focus-within:ring-2 focus-within:ring-orange-500 transition-all duration-200 group flex flex-col"
               >
-                {/* Banner Area */}
-                <div className="h-32 relative">
-                  <img
-                    src={
-                      (item as any).backgroundImageUrl ||
-                      item.coverImage ||
-                      "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
-                    }
-                    alt={item.name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300 opacity-80"
-                  />
-                  <div className="absolute top-3 right-3 flex flex-col gap-2 items-end">
-                    <span
-                      className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full shadow border ${
-                        item.status === "active" || item.status === "approved"
-                          ? "bg-emerald-500/90 text-white border-emerald-400"
-                          : item.status === "pending"
-                            ? "bg-amber-500/95 text-black border-amber-400 animate-pulse"
-                            : "bg-red-500/90 text-white border-red-400"
-                      }`}
-                    >
-                      {item.status}
-                    </span>
-                    {(item as any).isFeatured && (
+                <div className="h-32 relative bg-zinc-100 dark:bg-zinc-800">
+                  {item.backgroundImageUrl && (
+                    <img
+                      src={item.backgroundImageUrl}
+                      alt=""
+                      className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300 opacity-80"
+                    />
+                  )}
+                  <div className="absolute top-3 end-3 flex flex-col gap-2 items-end">
+                    <StatusPill status={item.status} className="shadow" />
+                    {merchant?.isFeatured && (
                       <span className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full shadow border bg-purple-500/90 text-white border-purple-400 flex items-center gap-1">
-                        <Star className="w-2.5 h-2.5 fill-white" /> Featured
+                        <Star className="w-2.5 h-2.5 fill-white" /> {t("rests.filter_featured")}
+                      </span>
+                    )}
+                    {merchant?.hasOffer && (
+                      <span className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full shadow border bg-emerald-500/90 text-white border-emerald-400">
+                        {t("rests.offer_badge")}
                       </span>
                     )}
                   </div>
                 </div>
 
-                {/* Body */}
                 <div className="p-5 space-y-4 flex-1 flex flex-col justify-between">
                   <div>
-                    <div className="flex gap-3 items-start relative z-10">
-                      {item.logo &&
-                      typeof item.logo === "string" &&
-                      item.logo.length > 5 ? (
-                        <button
-                          onClick={(e) => {
-                            if (
-                              !isSub &&
-                              (item as any).stories &&
-                              (item as any).stories.length > 0
-                            ) {
-                              e.stopPropagation();
-                              setViewingStoriesFor(item as any);
-                            }
-                          }}
-                          className={`w-11 h-11 rounded-xl shadow-sm overflow-hidden bg-zinc-50 dark:bg-zinc-800 border-2 shrink-0 transition-transform ${
-                            !isSub &&
-                            (item as any).stories &&
-                            (item as any).stories.length > 0
-                              ? "border-orange-500 hover:scale-110 cursor-pointer p-[1.5px]"
-                              : "border-zinc-200 dark:border-zinc-700"
-                          }`}
-                        >
-                          <img
-                            src={item.logo}
-                            alt="logo"
-                            className="w-full h-full object-cover rounded-lg"
-                          />
-                        </button>
+                    <div className="flex gap-3 items-start">
+                      {item.logo ? (
+                        hasStories && merchant ? (
+                          <button
+                            type="button"
+                            aria-label={t("rests.view_stories", { name: item.name })}
+                            onClick={() => setViewingStoriesFor(merchant)}
+                            className="relative z-10 w-11 h-11 rounded-xl shadow-sm overflow-hidden bg-zinc-50 dark:bg-zinc-800 border-2 shrink-0 transition-transform border-orange-500 hover:scale-110 cursor-pointer p-[1.5px]"
+                          >
+                            <img
+                              src={item.logo}
+                              alt=""
+                              className="w-full h-full object-cover rounded-lg"
+                            />
+                          </button>
+                        ) : (
+                          // Not a button: with no stories it had no action, and
+                          // it would nest inside the card's own control.
+                          <span className="block w-11 h-11 rounded-xl shadow-sm overflow-hidden bg-zinc-50 dark:bg-zinc-800 border-2 border-zinc-200 dark:border-zinc-700 shrink-0">
+                            <img
+                              src={item.logo}
+                              alt={`${item.name} logo`}
+                              className="w-full h-full object-cover rounded-lg"
+                            />
+                          </span>
+                        )
                       ) : (
                         <span className="text-2xl p-1.5 bg-zinc-50 dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-700 shrink-0">
-                          {item.logo || "🍽️"}
+                          🍽️
                         </span>
                       )}
                       <div className="min-w-0">
+                        {/* The card used to be a `<div onClick>`: unreachable by
+                            keyboard. The button's ::after stretches over the
+                            whole card so the click target is unchanged. */}
                         <h4 className="text-sm font-bold text-zinc-950 dark:text-white truncate group-hover:text-orange-500 transition-colors">
-                          {item.name}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isPendingTab) {
+                                setSelectedSubmissionId(item.id);
+                              } else {
+                                setSelectedRestId(item.id);
+                                setInnerTab("overview");
+                              }
+                            }}
+                            className="block max-w-full truncate text-start cursor-pointer after:absolute after:inset-0 after:rounded-2xl focus:outline-none"
+                          >
+                            {item.name}
+                          </button>
                         </h4>
-                        <p className="text-[10px] text-zinc-400 font-medium truncate mt-0.5">
-                          {item.cuisineType || "No cuisine set"}
+                        <p className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium truncate mt-0.5">
+                          {subtitle}
                         </p>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 text-[10px] text-zinc-400 mt-3.5">
-                      <MapPin className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                    <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 dark:text-zinc-400 mt-3.5">
+                      <MapPin className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">
-                        {isSub
-                          ? [
-                              (item as any).address?.street,
-                              (item as any).address?.city,
-                            ]
-                              .filter(Boolean)
-                              .join(", ") || "No address provided"
-                          : [item.address, (item as any).city]
-                              .filter(Boolean)
-                              .join(", ") || "No address provided"}
+                        {formatAddress(
+                          isSub
+                            ? submission?.address
+                            : merchant?.restaurantAddress,
+) || t("rests.no_address")}
                       </span>
                     </div>
                   </div>
 
-                  {/* mini stats */}
                   <div className="pt-4 border-t border-zinc-100 dark:border-zinc-800 grid grid-cols-2 gap-2 text-center text-xs">
                     {isSub ? (
                       <>
-                        <div className="bg-amber-500/5 dark:bg-amber-500/10 p-2 rounded-xl border border-amber-500/10">
-                          <p className="text-[9px] font-bold text-amber-500 uppercase">
-                            Apply Date
-                          </p>
-                          <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">
-                            {item.createdAt
-                              ? new Date(item.createdAt).toLocaleDateString()
-                              : "Today"}
-                          </p>
-                        </div>
-                        <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
-                          <p className="text-[9px] font-bold text-zinc-400 uppercase">
-                            Est. Delivery
-                          </p>
-                          <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">
-                            {item.estimatedDeliveryMinutes ?? "N/A"} min
-                          </p>
-                        </div>
+                        <MiniStat
+                          label={t("rests.applied")}
+                          value={formatDate(submission?.createdAt)}
+                          tone="amber"
+                        />
+                        <MiniStat
+                          label={t("common.delivery_fee")}
+                          value={formatMoney(
+                            submission?.deliveryFee,
+                            submission?.currencyId,
+                          )}
+                        />
                       </>
                     ) : (
                       <>
-                        <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
-                          <p className="text-[9px] font-bold text-zinc-400 uppercase">
-                            GMV Sales
-                          </p>
-                          <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5">
-                            ${((item as any).revenue || 0).toFixed(0)}
-                          </p>
-                        </div>
-                        <div className="bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded-xl">
-                          <p className="text-[9px] font-bold text-zinc-400 uppercase">
-                            Rating
-                          </p>
-                          <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5 inline-flex items-center justify-center gap-0.5">
-                            {(item as any).rating || 0}{" "}
-                            <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
-                          </p>
-                        </div>
+                        <MiniStat
+                          label={t("common.delivery_fee")}
+                          value={formatMoney(
+                            merchant?.deliveryFee,
+                            currencyOf(merchant),
+                          )}
+                        />
+                        <MiniStat
+                          label={t("rests.rating_with_count", {
+                            count: merchant?.totalRatings ?? 0,
+                          })}
+                          value={`${formatRating(merchant?.rating)} ★`}
+                        />
                       </>
                     )}
                   </div>
@@ -1443,31 +1523,18 @@ export default function RestaurantsSection({
         </div>
       )}
 
-      {viewMode === "applications" &&
-        appTotalPages > 1 &&
-        displayList.length > 0 && (
-          <div className="flex justify-center items-center gap-2 mt-8">
-            <button
-              disabled={appPage === 1}
-              onClick={() => setAppPage((p) => Math.max(1, p - 1))}
-              className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
-            >
-              Previous
-            </button>
-            <span className="text-xs font-semibold text-zinc-500">
-              Page {appPage} of {appTotalPages}
-            </span>
-            <button
-              disabled={appPage === appTotalPages}
-              onClick={() => setAppPage((p) => Math.min(appTotalPages, p + 1))}
-              className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        )}
+      {/* Pagination — merchants are now paged too. The registry used to render
+          only whatever the API put on page one and call it the whole platform. */}
+      {!isLoading && !error && (
+        <Pagination
+          page={isPendingTab ? appPage : merchantPage}
+          totalPages={isPendingTab ? appTotalPages : merchantTotalPages}
+          onChange={(next) =>
+            isPendingTab ? setAppPage(next) : setMerchantPage(next)
+          }
+        />
+      )}
 
-      {/* Add Restaurant Modal */}
       <AddRestaurantModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
@@ -1477,22 +1544,201 @@ export default function RestaurantsSection({
         }}
       />
 
-      {/* Edit Restaurant Modal */}
-      <EditRestaurantModal
-        isOpen={isEditModalOpen}
-        onClose={() => setIsEditModalOpen(false)}
-        restaurant={selectedRest || null}
-        onSuccess={() => {
-          setIsEditModalOpen(false);
-          fetchMerchants();
-        }}
-      />
-      {/* Stories Viewer Modal */}
       <StoriesViewerModal
         isOpen={!!viewingStoriesFor}
         onClose={() => setViewingStoriesFor(null)}
         restaurant={viewingStoriesFor}
       />
+    </div>
+  );
+}
+
+// ─── Presentational ──────────────────────────────────────────────────────────
+
+function Pagination({
+  page,
+  totalPages,
+  onChange,
+}: {
+  page: number;
+  totalPages: number;
+  onChange: (page: number) => void;
+}) {
+  const { t } = useI18n();
+
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex justify-center items-center gap-2 mt-8">
+      <button
+        disabled={page === 1}
+        onClick={() => onChange(Math.max(1, page - 1))}
+        className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
+      >
+        {t("common.previous")}
+      </button>
+      <span className="text-xs font-semibold text-zinc-500">
+        Page {page} of {totalPages}
+      </span>
+      <button
+        disabled={page >= totalPages}
+        onClick={() => onChange(Math.min(totalPages, page + 1))}
+        className="px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold disabled:opacity-50"
+      >
+        {t("common.next")}
+      </button>
+    </div>
+  );
+}
+
+function InfoCard({
+  icon,
+  accent,
+  label,
+  value,
+  hint,
+}: {
+  icon: React.ReactNode;
+  accent: string;
+  label: string;
+  value: string;
+  hint?: string;
+}) {
+  return (
+    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-sm flex items-center gap-4">
+      <div className={`p-3 rounded-xl shrink-0 ${accent}`}>{icon}</div>
+      <div className="min-w-0">
+        <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
+          {label}
+        </p>
+        <p className="text-lg font-black text-zinc-900 dark:text-white truncate">
+          {value}
+        </p>
+        {hint && (
+          <p className="text-[10px] text-zinc-500 dark:text-zinc-400">{hint}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "amber";
+}) {
+  return (
+    <div
+      className={`p-2 rounded-xl ${
+        tone === "amber"
+          ? "bg-amber-500/5 dark:bg-amber-500/10 border border-amber-500/10"
+          : "bg-zinc-50 dark:bg-zinc-800/40"
+      }`}
+    >
+      <p
+        className={`text-[9px] font-bold uppercase truncate ${
+          tone === "amber"
+            ? "text-amber-500"
+            : "text-zinc-500 dark:text-zinc-400"
+        }`}
+      >
+        {label}
+      </p>
+      <p className="font-extrabold text-zinc-900 dark:text-white mt-0.5 truncate">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between items-center gap-3">
+      <dt className="text-zinc-500 dark:text-zinc-400 font-semibold">{label}</dt>
+      <dd className="font-bold text-zinc-800 dark:text-zinc-200 text-end truncate">
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
+        {label}
+      </span>
+      <span className="font-semibold text-zinc-800 dark:text-zinc-200 break-words">
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function DetailRow({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 text-zinc-600 dark:text-zinc-300">
+      <span className="text-zinc-500 dark:text-zinc-400">{icon}</span>
+      <div className="min-w-0">
+        <p className="font-semibold text-zinc-500 dark:text-zinc-400 text-[10px] uppercase">
+          {label}
+        </p>
+        <p className="font-bold break-all">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+function OpeningHours({
+  entries,
+}: {
+  entries?: { day: string; is24Hours: boolean; openTime?: string; closeTime?: string }[] | null;
+}) {
+  const { t } = useI18n();
+
+  if (!entries || entries.length === 0) {
+    return (
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        {t("rests.no_hours")}
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-2.5 max-h-[220px] overflow-y-auto pe-2 custom-scrollbar">
+      {entries.map((entry, idx) => (
+        <div
+          key={`${entry.day}-${idx}`}
+          className="flex justify-between items-center text-xs border-b border-zinc-50 dark:border-zinc-800/40 pb-2"
+        >
+          <span className="font-bold text-zinc-700 dark:text-zinc-300 capitalize">
+            {entry.day}
+          </span>
+          <span
+            className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+              entry.is24Hours
+                ? "bg-emerald-500/10 text-emerald-500"
+                : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+            }`}
+          >
+            {entry.is24Hours
+              ? t("rests.hours_24")
+              : entry.openTime && entry.closeTime
+                ? `${entry.openTime} - ${entry.closeTime}`
+                : t("rests.closed")}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

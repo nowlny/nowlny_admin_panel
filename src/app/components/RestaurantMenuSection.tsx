@@ -21,15 +21,19 @@ import {
   ToggleLeft,
   ToggleRight,
 } from "lucide-react";
-import { Restaurant } from "../data/mockData";
+import toast from "react-hot-toast";
+import { RestaurantResponse } from "../../services/restaurants";
 import { menuService, MenuSection, MenuItem as ApiMenuItem } from "../../services/menu";
-import { restaurantsService } from "../../services/restaurants";
+import { formatAddress, formatMoney } from "../../lib/format";
 import MenuSectionEditorModal from "./MenuSectionEditorModal";
 import MenuItemEditorModal from "./MenuItemEditorModal";
+import { useConfirm } from "./ui/ConfirmDialog";
+import { EmptyState, ErrorBanner, ErrorState, Skeleton } from "./ui/States";
 
+import { useI18n } from "../../lib/i18n";
 interface RestaurantMenuSectionProps {
-  restaurant: Restaurant;
-  onUpdateRestaurant: (updatedRest: Restaurant) => void;
+  /** The live API record, not the retired localStorage `Restaurant` fixture. */
+  restaurant: RestaurantResponse;
 }
 
 interface ParsedMenuData {
@@ -50,8 +54,8 @@ interface ParsedMenuData {
 
 export default function RestaurantMenuSection({
   restaurant,
-  onUpdateRestaurant,
 }: RestaurantMenuSectionProps) {
+  const { t } = useI18n();
   // Real Google Gemini API states
   const [geminiApiKey, setGeminiApiKey] = useState(() => {
     if (typeof window !== "undefined") {
@@ -83,56 +87,78 @@ export default function RestaurantMenuSection({
     fileMime: string;
     fileSize: string;
   } | null>(null);
-  const [toast, setToast] = useState<{
-    message: string;
-    type: "success" | "error" | "info";
-  } | null>(null);
-
-  const showToast = (
-    message: string,
-    type: "success" | "error" | "info" = "success",
-  ) => {
-    setToast({ message, type });
-    setTimeout(() => {
-      setToast(null);
-    }, 4000);
-  };
+  const confirm = useConfirm();
 
   // --- API DATA STATES ---
   const [sections, setSections] = useState<MenuSection[]>([]);
   const [itemsBySection, setItemsBySection] = useState<Record<string, ApiMenuItem[]>>({});
   const [isLoadingMenu, setIsLoadingMenu] = useState(true);
+  // Only the *first* fetch shows skeletons; later refreshes keep the list on
+  // screen behind the spinner in the catalog header.
+  const [hasLoadedMenu, setHasLoadedMenu] = useState(false);
+  // A failed fetch used to fall back to `[]`, which rendered the "your menu is
+  // empty" CTA — an outage looked exactly like a brand new store.
+  const [menuError, setMenuError] = useState<string | null>(null);
+  const [itemsError, setItemsError] = useState<string | null>(null);
+
+  // Inline price editing (controlled — see handlePriceBlur).
+  const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
+  const [priceErrors, setPriceErrors] = useState<Record<string, string>>({});
+
+  // Integration / row-level mutation guards
+  const [isIntegrating, setIsIntegrating] = useState(false);
+  const [integrationProgress, setIntegrationProgress] = useState({ done: 0, total: 0 });
+  const [pendingItemId, setPendingItemId] = useState<string | null>(null);
+  const [pendingSectionId, setPendingSectionId] = useState<string | null>(null);
 
   const loadMenu = async () => {
     setIsLoadingMenu(true);
+    setMenuError(null);
+    setItemsError(null);
     try {
-      // First, get the full menu response
-      // For fallback we also just manually load sections and items
-      const loadedSections = await menuService.getSectionsByRestaurant(restaurant.id).catch(() => [] as MenuSection[]);
-      setSections(loadedSections || []);
+      const loadedSections = (await menuService.getSectionsByRestaurant(restaurant.id)) || [];
+      setSections(loadedSections);
 
       const itemsMap: Record<string, ApiMenuItem[]> = {};
-      
+      let failedSections = 0;
+
       // Load items for each section in parallel
-      if (loadedSections && loadedSections.length > 0) {
-        await Promise.all(
-          loadedSections.map(async (sec) => {
-            const items = await menuService.getItemsBySection(sec.id).catch(() => [] as ApiMenuItem[]);
-            itemsMap[sec.id] = items || [];
-          })
+      await Promise.all(
+        loadedSections.map(async (sec) => {
+          try {
+            itemsMap[sec.id] = (await menuService.getItemsBySection(sec.id)) || [];
+          } catch {
+            // Keep the rest of the menu usable, but say so rather than
+            // rendering the section as genuinely empty.
+            itemsMap[sec.id] = [];
+            failedSections += 1;
+          }
+        })
+      );
+
+      setItemsBySection(itemsMap);
+      // Drop any inline price edits that are now stale.
+      setPriceDrafts({});
+      setPriceErrors({});
+
+      if (failedSections > 0) {
+        setItemsError(
+          `Couldn't load the dishes for ${failedSections} section${failedSections > 1 ? "s" : ""}. They may look empty below.`,
         );
       }
-      setItemsBySection(itemsMap);
-    } catch (err) {
-      console.error("Failed to load menu", err);
-      showToast("Failed to load menu from API. Check connection.", "error");
+    } catch (err: any) {
+      setSections([]);
+      setItemsBySection({});
+      setMenuError(err?.message || t("rmenu.load_failed"));
     } finally {
       setIsLoadingMenu(false);
+      setHasLoadedMenu(true);
     }
   };
 
   useEffect(() => {
     if (restaurant?.id) {
+      setHasLoadedMenu(false); // a different store starts from skeletons again
       loadMenu();
     }
   }, [restaurant.id]);
@@ -216,10 +242,16 @@ export default function RestaurantMenuSection({
     }, 300);
 
     try {
+      // /api/parse-menu falls back to the server's GEMINI_API_KEY, so the
+      // route now requires a bearer token to stop it being an open proxy.
+      const authToken =
+        typeof window !== "undefined" ? localStorage.getItem("token") : null;
+
       const response = await fetch("/api/parse-menu", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
         body: JSON.stringify({
           fileData: base64Data,
@@ -257,7 +289,7 @@ export default function RestaurantMenuSection({
           categories: parsedResult.categories || [],
         });
         setParseSuccess(true);
-        showToast("Menu parsed successfully by Gemini AI!", "success");
+        toast.success(t("rmenu.parsed_ok"));
       }, 500);
     } catch (err: any) {
       clearInterval(progressInterval);
@@ -282,7 +314,7 @@ export default function RestaurantMenuSection({
       }
 
       setParsingError(friendlyMessage);
-      showToast("Gemini parsing failed. See details below.", "error");
+      toast.error(t("rmenu.parse_failed"));
     }
   };
 
@@ -329,8 +361,17 @@ export default function RestaurantMenuSection({
 
   // Merge parsed items into the restaurant's menu using API
   const handleApproveParsedMenu = async () => {
-    if (!parsedData) return;
-    showToast("Integrating parsed menu into live API. Please wait...", "info");
+    // The button is disabled while this runs, but re-entrancy would duplicate
+    // every create call in the loop below, so guard here too.
+    if (!parsedData || isIntegrating) return;
+
+    const totalSteps = parsedData.categories.reduce(
+      (steps, cat) => steps + 1 + cat.items.length,
+      0,
+    );
+    setIntegrationProgress({ done: 0, total: totalSteps });
+    setIsIntegrating(true);
+    const step = () => setIntegrationProgress((p) => ({ ...p, done: p.done + 1 }));
 
     try {
       // Reload sections to ensure we have the most up-to-date list
@@ -368,6 +409,8 @@ export default function RestaurantMenuSection({
           }
         }
 
+        step();
+
         if (!sectionId) continue;
 
         // Create items for section
@@ -389,6 +432,7 @@ export default function RestaurantMenuSection({
                 throw err; // Re-throw if it's not a conflict
              }
           }
+          step();
         }
       }
 
@@ -400,55 +444,144 @@ export default function RestaurantMenuSection({
       setParseSuccess(false);
       setLastUploadedFile(null);
 
-      showToast("AI Parsed Menu approved! Items successfully integrated into your live menu.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("An error occurred integrating the menu via API.", "error");
+      toast.success(t("rmenu.approved"));
+    } catch (err: any) {
+      toast.error(err?.message || t("rmenu.integrate_failed"));
+    } finally {
+      setIsIntegrating(false);
     }
+  };
+
+  /** Patch one item in local state without refetching the whole menu. */
+  const patchItem = (item: ApiMenuItem, patch: Partial<ApiMenuItem>) => {
+    setItemsBySection((prev) => ({
+      ...prev,
+      [item.sectionId]: (prev[item.sectionId] || []).map((i) =>
+        i.id === item.id ? { ...i, ...patch } : i,
+      ),
+    }));
   };
 
   // Delete an item from the menu via API
-  const handleDeleteItem = async (itemId: string) => {
-    if (!confirm("Are you sure you want to remove this item from your store menu?")) return;
+  const handleDeleteItem = async (item: ApiMenuItem) => {
+    const confirmed = await confirm({
+      title: `Delete “${item.name}”?`,
+      description: t("rmenu.delete_dish_body"),
+      confirmLabel: t("rmenu.delete_dish_cta"),
+      variant: "danger",
+    });
+    if (!confirmed) return;
 
+    setPendingItemId(item.id);
     try {
-      await menuService.deleteItem(itemId);
+      await menuService.deleteItem(item.id);
       await loadMenu();
-      showToast("Item deleted.", "success");
-    } catch (error) {
-      showToast("Failed to delete item.", "error");
+      toast.success(`“${item.name}” deleted.`);
+    } catch (err: any) {
+      toast.error(err?.message || t("rmenu.delete_item_failed"));
+    } finally {
+      setPendingItemId(null);
     }
   };
 
-  // Toggle Item Availability via API
+  /**
+   * Toggle availability optimistically. This used to call loadMenu(), which
+   * refetches every section plus one request per section and remounts the list
+   * (losing scroll position) just to flip one boolean.
+   */
   const handleToggleAvailability = async (item: ApiMenuItem) => {
+    const next = !item.isAvailable;
+    patchItem(item, { isAvailable: next });
     try {
-      await menuService.updateItem(item.id, { isAvailable: !item.isAvailable });
-      await loadMenu();
-    } catch (error) {
-      showToast("Failed to toggle availability.", "error");
+      await menuService.updateItem(item.id, { isAvailable: next });
+      toast.success(next ? `“${item.name}” is available again.` : `“${item.name}” snoozed.`);
+    } catch (err: any) {
+      patchItem(item, { isAvailable: !next }); // roll back
+      toast.error(err?.message || t("rmenu.toggle_failed"));
     }
   };
 
-  // Edit Item Details (inline price update)
-  const handleUpdatePrice = async (itemId: string, newPrice: number) => {
-    if (isNaN(newPrice) || newPrice <= 0) return;
+  // Inline price editor -------------------------------------------------
+  const priceValue = (item: ApiMenuItem) =>
+    priceDrafts[item.id] ?? String(item.price ?? "");
+
+  const handlePriceChange = (item: ApiMenuItem, value: string) => {
+    setPriceDrafts((prev) => ({ ...prev, [item.id]: value }));
+    setPriceErrors((prev) => {
+      if (!prev[item.id]) return prev;
+      const next = { ...prev };
+      delete next[item.id];
+      return next;
+    });
+  };
+
+  const clearPriceDraft = (itemId: string) =>
+    setPriceDrafts((prev) => {
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
+
+  /**
+   * The editor used to be uncontrolled (`defaultValue` + onBlur): clearing it
+   * or typing text produced NaN, `handleUpdatePrice` returned silently, and the
+   * invalid text stayed on screen — so the merchant believed the price saved.
+   */
+  const handlePriceBlur = async (item: ApiMenuItem) => {
+    const draft = priceDrafts[item.id];
+    if (draft === undefined) return; // untouched
+
+    const parsed = parseFloat(draft);
+    if (draft.trim() === "" || !Number.isFinite(parsed) || parsed <= 0) {
+      clearPriceDraft(item.id); // revert to the stored price
+      setPriceErrors((prev) => ({
+        ...prev,
+        [item.id]: t("rmenu.price_invalid"),
+      }));
+      toast.error(`“${item.name}”: price must be a number above 0. Reverted.`);
+      return;
+    }
+
+    clearPriceDraft(item.id);
+    if (parsed === item.price) return;
+
+    const previousPrice = item.price;
+    patchItem(item, { price: parsed }); // optimistic
     try {
-      await menuService.updateItem(itemId, { price: newPrice });
-      await loadMenu();
-    } catch (error) {
-      showToast("Failed to update price.", "error");
+      await menuService.updateItem(item.id, { price: parsed });
+      toast.success(
+        `“${item.name}” priced at ${formatMoney(parsed, restaurant.currency?.code)}.`,
+      );
+    } catch (err: any) {
+      patchItem(item, { price: previousPrice }); // roll back
+      toast.error(err?.message || t("rmenu.price_failed"));
     }
   };
 
-  const handleDeleteSection = async (sectionId: string) => {
-    if (!confirm("Are you sure you want to delete this category? All items inside will be lost.")) return;
+  const handleDeleteSection = async (section: MenuSection) => {
+    const itemCount = itemsBySection[section.id]?.length ?? 0;
+    const confirmed = await confirm({
+      title: `Delete the “${section.name}” category?`,
+      description:
+        itemCount > 0
+          ? `${itemCount} dish${itemCount > 1 ? "es" : ""} inside this category will be permanently deleted with it.`
+          : t("rmenu.empty_category_body"),
+      confirmLabel: t("rmenu.delete_category_cta"),
+      variant: "danger",
+      ...(itemCount > 0 ? { confirmPhrase: section.name } : {}),
+    });
+    if (!confirmed) return;
+
+    setPendingSectionId(section.id);
     try {
-      await menuService.deleteSection(sectionId);
+      await menuService.deleteSection(section.id);
+      if (selectedCategoryTab === section.id) setSelectedCategoryTab("all");
       await loadMenu();
-      showToast("Category deleted.", "success");
-    } catch (err) {
-      showToast("Failed to delete category.", "error");
+      toast.success(`“${section.name}” deleted.`);
+    } catch (err: any) {
+      toast.error(err?.message || t("rmenu.delete_category_failed"));
+    } finally {
+      setPendingSectionId(null);
     }
   };
 
@@ -456,18 +589,18 @@ export default function RestaurantMenuSection({
     <div className="space-y-8 animate-in fade-in duration-200">
       {/* Banner / Store Header Info Card */}
       <div className="relative h-48 sm:h-56 rounded-3xl overflow-hidden shadow-md">
-        <img
-          src={
-            (restaurant as any).backgroundImageUrl ||
-            (restaurant as any).coverImage ||
-            "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80"
-          }
-          alt={restaurant.name}
-          className="absolute inset-0 w-full h-full object-cover"
-        />
+        {restaurant.backgroundImageUrl ? (
+          <img
+            src={restaurant.backgroundImageUrl}
+            alt=""
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-zinc-800" />
+        )}
         <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent" />
 
-        <div className="absolute bottom-6 left-6 right-6 flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
+        <div className="absolute bottom-6 start-6 end-6 flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-2xl bg-white dark:bg-zinc-900 shadow-lg flex items-center justify-center text-4xl shrink-0 border-2 border-orange-500/20 overflow-hidden">
               {restaurant.logo && typeof restaurant.logo === 'string' && restaurant.logo.length > 5 ? (
@@ -483,21 +616,24 @@ export default function RestaurantMenuSection({
                 </h1>
                 <span
                   className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
-                    restaurant.status.toLowerCase() === "active"
+                    restaurant.status === "active"
                       ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                      : restaurant.status.toLowerCase() === "pending"
+                      : restaurant.status === "pending"
                         ? "bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse"
                         : "bg-red-500/20 text-red-400 border border-red-500/30"
                   }`}
                 >
-                  {restaurant.status}
+                  {restaurant.status ?? "unknown"}
                 </span>
               </div>
               <p className="text-xs text-zinc-300 font-semibold mt-1">
-                Cuisine: {restaurant.cuisine} • Total Items: {allItems.length}
+                {restaurant.categories?.map((c) => c.name).join(", ") ||
+t("rmenu.no_categories")}{" "}
+                • {allItems.length} item{allItems.length === 1 ? "" : "s"}
               </p>
               <p className="text-[10px] text-zinc-400 mt-0.5">
-                {restaurant.address}
+                {formatAddress(restaurant.restaurantAddress) ||
+                  t("rmenu.no_address")}
               </p>
             </div>
           </div>
@@ -509,7 +645,7 @@ export default function RestaurantMenuSection({
             }}
             className="bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-lg shadow-orange-500/20 flex items-center gap-2 transition-all self-stretch sm:self-auto justify-center"
           >
-            <Plus className="w-4 h-4" /> Add Menu Item
+            <Plus className="w-4 h-4" /> {t("rmenu.add_item")}
           </button>
         </div>
       </div>
@@ -530,7 +666,7 @@ export default function RestaurantMenuSection({
                 </span>
                 <div>
                   <h3 className="text-sm font-bold text-zinc-900 dark:text-white">
-                    AI Menu Uploader & Parser
+                    {t("rmenu.uploader")}
                   </h3>
                   <p className="text-[10px] text-zinc-400">
                     Import menu lists from PDF flyer, Excel spreadsheets, or
@@ -540,7 +676,7 @@ export default function RestaurantMenuSection({
               </div>
 
               <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 bg-purple-500/10 text-purple-600 rounded border border-purple-500/10 animate-pulse">
-                Powered by OCR
+                {t("rmenu.powered_by")}
               </span>
             </div>
 
@@ -551,7 +687,7 @@ export default function RestaurantMenuSection({
                   <AlertCircle className="w-4.5 h-4.5 shrink-0 mt-0.5" />
                   <div className="space-y-1">
                     <p className="font-bold text-red-650 dark:text-red-400">
-                      Gemini Parsing Failure
+                      {t("rmenu.parse_failure")}
                     </p>
                     <p className="text-[11px] text-zinc-650 dark:text-zinc-300 leading-normal font-medium">
                       {parsingError}
@@ -569,14 +705,14 @@ export default function RestaurantMenuSection({
                       <Loader2
                         className={`w-3.5 h-3.5 ${isParsing ? "animate-spin" : ""}`}
                       />
-                      Retry Scan
+                      {t("rmenu.retry_scan")}
                     </button>
                   )}
                   <button
                     onClick={() => setParsingError(null)}
                     className="border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-850 text-zinc-500 font-bold text-[10px] px-3.5 py-2 rounded-xl transition-all"
                   >
-                    Dismiss
+                    {t("rmenu.dismiss")}
                   </button>
                 </div>
               </div>
@@ -596,19 +732,23 @@ export default function RestaurantMenuSection({
 
               <div className="space-y-2 animate-in slide-in-from-top-2 duration-200">
                 <div className="space-y-1">
-                  <label className="text-[9px] font-black text-zinc-400 uppercase tracking-widest block">
-                    Google Gemini API Key
+                  <label
+                    htmlFor="gemini-api-key"
+                    className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest block"
+                  >
+                    {t("rmenu.api_key_label")}
                   </label>
                   <input
+                    id="gemini-api-key"
                     type="password"
-                    placeholder="Enter Gemini API Key (AIzaSy...)"
+                    placeholder={t("rmenu.api_key_placeholder")}
                     value={geminiApiKey}
                     onChange={(e) => handleUpdateApiKey(e.target.value)}
                     className="w-full bg-white dark:bg-zinc-900 border border-zinc-250 dark:border-zinc-850 text-[11px] font-bold text-zinc-850 dark:text-zinc-100 placeholder-zinc-400 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-purple-500 shadow-sm"
                   />
                 </div>
                 <p className="text-[9px] text-zinc-400 leading-normal">
-                  💡 <strong>Safe & Secure</strong>: Transmitted securely to
+                  💡 <strong>{t("rmenu.safe_secure")}</strong>: Transmitted securely to
                   Gemini's API endpoints. Get a free API Key at{" "}
                   <a
                     href="https://aistudio.google.com/"
@@ -629,15 +769,15 @@ export default function RestaurantMenuSection({
               <UploadCloud className="w-10 h-10 text-zinc-300 dark:text-zinc-700" />
               <div className="space-y-1">
                 <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                  Drag & drop your store menu file here
+                  {t("rmenu.drag_drop")}
                 </p>
                 <p className="text-[10px] text-zinc-400">
-                  PDF, Excel (XLSX, CSV), PNG, JPG up to 10MB
+                  {t("rmenu.file_types")}
                 </p>
               </div>
 
               <label className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/80 text-zinc-700 dark:text-zinc-300 font-bold text-[10px] px-3 py-2 rounded-lg cursor-pointer transition-all shadow-sm">
-                Browse Files
+                {t("rmenu.browse")}
                 <input
                   type="file"
                   accept=".pdf, .xlsx, .xls, .csv, .png, .jpg, .jpeg, .webp"
@@ -677,7 +817,7 @@ export default function RestaurantMenuSection({
 
         {/* AI Parsed Results Preview Panel - Right */}
         {parsedData && (
-          <div className="lg:col-span-6 bg-white dark:bg-zinc-900 border border-purple-500/20 dark:border-purple-500/10 rounded-3xl p-6 shadow-md flex flex-col justify-between max-h-[460px] animate-in slide-in-from-right-4 duration-300">
+          <div className="lg:col-span-6 bg-white dark:bg-zinc-900 border border-purple-500/20 dark:border-purple-500/10 rounded-3xl p-6 shadow-md flex flex-col justify-between max-h-[460px] animate-in slide-in-from-end-4 duration-300">
             <div className="space-y-4 overflow-hidden flex flex-col flex-1">
               <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-3">
                 <div className="flex items-center gap-2">
@@ -686,23 +826,23 @@ export default function RestaurantMenuSection({
                   </span>
                   <div>
                     <h3 className="text-xs font-black text-zinc-900 dark:text-white uppercase tracking-wider">
-                      AI Parsed Menu Preview
+                      {t("rmenu.preview")}
                     </h3>
-                    <p className="text-[9px] text-zinc-400 font-semibold truncate max-w-[200px]">
+                    <p className="text-[9px] text-zinc-500 dark:text-zinc-400 font-semibold truncate max-w-[200px]">
                       Source: {parsedData.name}
                     </p>
                   </div>
                 </div>
 
-                <div className="text-right">
-                  <p className="text-[10px] font-black text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/15 inline-block">
-                    Confidence: 98%
-                  </p>
-                </div>
+                {/* Item count is real; the old "Confidence: 98%" was a literal
+                    that /api/parse-menu never returns. */}
+                <p className="text-[10px] font-black text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/15 shrink-0">
+                  {parsedData.categories.reduce((n, c) => n + c.items.length, 0)} dishes found
+                </p>
               </div>
 
               {/* Extracted category items list (Scrollable) */}
-              <div className="overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800 flex-1 pr-1 space-y-4">
+              <div className="overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800 flex-1 pe-1 space-y-4">
                 {parsedData.categories.map((cat, catIdx) => (
                   <div key={catIdx} className="pt-3 first:pt-0 space-y-2">
                     <h4 className="text-[10px] font-black text-purple-500 dark:text-purple-400 uppercase tracking-widest flex items-center gap-1.5">
@@ -738,20 +878,36 @@ export default function RestaurantMenuSection({
             {/* Approval Action CTA */}
             <div className="pt-4 border-t border-zinc-100 dark:border-zinc-800 mt-4 flex items-center gap-3">
               <button
+                type="button"
+                disabled={isIntegrating}
                 onClick={() => {
                   setParsedData(null);
                   setCustomFileName("");
                 }}
-                className="px-4 py-2.5 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-red-500 text-zinc-500 dark:text-zinc-400 font-bold text-xs rounded-xl transition-all"
+                className="px-4 py-2.5 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-500 dark:text-zinc-400 font-bold text-xs rounded-xl transition-all"
               >
-                Discard
+                {t("rmenu.discard")}
               </button>
 
+              {/* Disabled while integrating: a second click used to re-run the
+                  whole create loop and duplicate every parsed dish. */}
               <button
+                type="button"
                 onClick={handleApproveParsedMenu}
-                className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-lg shadow-purple-500/20 flex items-center justify-center gap-2 transition-all"
+                disabled={isIntegrating}
+                aria-busy={isIntegrating}
+                className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-lg shadow-purple-500/20 flex items-center justify-center gap-2 transition-all"
               >
-                <Check className="w-4 h-4" /> Approve & Integrate Menu
+                {isIntegrating ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Integrating {integrationProgress.done}/{integrationProgress.total}…
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" /> {t("rmenu.approve_cta")}
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -767,7 +923,7 @@ export default function RestaurantMenuSection({
               Store Menu Catalog
               {isLoadingMenu && <Loader2 className="w-4 h-4 animate-spin text-orange-500" />}
             </h3>
-            <p className="text-[10px] text-zinc-400">
+            <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
               Search, edit pricing, or toggle availability of dishes listed in
               your store menu.
             </p>
@@ -775,8 +931,10 @@ export default function RestaurantMenuSection({
 
           <div className="w-full sm:w-64">
             <input
-              type="text"
-              placeholder="Search catalog..."
+              id="menu-catalog-search"
+              type="search"
+              aria-label={t("rmenu.search_aria")}
+              placeholder={t("rmenu.search_placeholder")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-zinc-50 border border-zinc-200 text-zinc-850 placeholder-zinc-400 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-orange-500 dark:bg-zinc-950/20 dark:border-zinc-800 dark:text-zinc-200"
@@ -822,23 +980,46 @@ export default function RestaurantMenuSection({
           </button>
         </div>
 
-        {/* Menu Items Grouped by Section */}
-        {sections.length === 0 ? (
-          <div className="text-center p-12 border border-dashed border-zinc-200 dark:border-zinc-800 rounded-2xl flex flex-col items-center justify-center">
-            <Store className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mb-3" />
-            <p className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
-              Your menu is empty
-            </p>
-            <p className="text-[10px] text-zinc-400 mt-1 mb-4">
-              Start by creating a section, then add your items!
-            </p>
-            <button onClick={() => {
-              setEditingSection(null);
-              setIsSectionModalOpen(true);
-            }} className="bg-orange-500 text-white font-bold text-xs px-4 py-2 rounded-lg">Create Section</button>
+        {/* Menu Items Grouped by Section.
+            Loading, failed and genuinely-empty are three different states: this
+            used to key off `sections.length === 0`, so during the initial fetch
+            the user saw the "create a section" CTA and created duplicates. */}
+        {isLoadingMenu && !hasLoadedMenu ? (
+          <div className="space-y-8" aria-busy="true" aria-label={t("rmenu.loading_menu")}>
+            {[0, 1].map((sectionIdx) => (
+              <div key={sectionIdx} className="space-y-4">
+                <Skeleton className="h-4 w-40 rounded" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {[0, 1, 2, 3].map((cardIdx) => (
+                    <Skeleton key={cardIdx} className="h-28 w-full rounded-2xl" />
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
+        ) : menuError ? (
+          <ErrorState message={menuError} onRetry={loadMenu} title={t("rmenu.load_error_title")} />
+        ) : sections.length === 0 ? (
+          <EmptyState
+            icon={Store}
+            title={t("rmenu.empty_title")}
+            hint={t("rmenu.empty_hint")}
+            action={
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingSection(null);
+                  setIsSectionModalOpen(true);
+                }}
+                className="bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-colors"
+              >
+                {t("rmenu.create_section")}
+              </button>
+            }
+          />
         ) : (
           <div className="space-y-8">
+            {itemsError && <ErrorBanner message={itemsError} onRetry={loadMenu} />}
             {sections
               .filter(sec => selectedCategoryTab === "all" || selectedCategoryTab === sec.id)
               .filter(sec => {
@@ -854,18 +1035,34 @@ export default function RestaurantMenuSection({
                     {/* Section Header */}
                     <div className="flex items-center justify-between pb-2 border-b border-zinc-200 dark:border-zinc-800">
                       <h4 className="font-black text-sm text-zinc-900 dark:text-white uppercase tracking-wider">{sec.name}</h4>
-                      <div className="flex gap-2">
-                        <button onClick={() => {
-                          setEditingSection(sec);
-                          setIsSectionModalOpen(true);
-                        }} className="text-xs font-bold text-zinc-500 hover:text-orange-500">Edit Section</button>
-                        <button onClick={() => handleDeleteSection(sec.id)} className="text-xs font-bold text-zinc-500 hover:text-red-500">Delete</button>
+                      <div className="flex gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingSection(sec);
+                            setIsSectionModalOpen(true);
+                          }}
+                          className="text-xs font-bold text-zinc-500 dark:text-zinc-400 hover:text-orange-500"
+                        >
+                          {t("rmenu.edit_section")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSection(sec)}
+                          disabled={pendingSectionId === sec.id}
+                          className="text-xs font-bold text-zinc-500 dark:text-zinc-400 hover:text-red-500 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                        >
+                          {pendingSectionId === sec.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                          {pendingSectionId === sec.id
+                            ? t("rmenu.deleting")
+                            : t("common.delete")}
+                        </button>
                       </div>
                     </div>
-                    
+
                     {/* Items Grid for this Section */}
                     {secItems.length === 0 ? (
-                      <p className="text-xs text-zinc-400 italic">No items found in this section.</p>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400 italic">{t("rmenu.no_items_section")}</p>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {secItems.map((item) => (
@@ -895,65 +1092,90 @@ export default function RestaurantMenuSection({
                                   <h4 className="text-xs font-bold text-zinc-900 dark:text-white truncate group-hover:text-orange-500 transition-colors">
                                     {item.name}
                                   </h4>
-                                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                                  {/* Hover-only actions were unreachable on touch
+                                      devices and invisible to keyboard focus. */}
+                                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100 transition-opacity">
                                     <button
+                                      type="button"
                                       onClick={() => {
                                         setEditingItem(item);
                                         setIsItemModalOpen(true);
                                       }}
-                                      className="text-zinc-400 hover:text-orange-500 p-1 hover:bg-zinc-150 dark:hover:bg-zinc-800 rounded"
-                                      title="Edit dish"
+                                      className="text-zinc-500 dark:text-zinc-400 hover:text-orange-500 p-2.5 hover:bg-zinc-150 dark:hover:bg-zinc-800 rounded-lg"
+                                      title={t("rmenu.edit_dish")}
+                                      aria-label={`Edit ${item.name}`}
                                     >
                                       <FileText className="w-3.5 h-3.5" />
                                     </button>
                                     <button
-                                      onClick={() => handleDeleteItem(item.id)}
-                                      className="text-zinc-400 hover:text-red-500 p-1 hover:bg-zinc-150 dark:hover:bg-zinc-800 rounded"
-                                      title="Delete dish"
+                                      type="button"
+                                      onClick={() => handleDeleteItem(item)}
+                                      disabled={pendingItemId === item.id}
+                                      className="text-zinc-500 dark:text-zinc-400 hover:text-red-500 p-2.5 hover:bg-zinc-150 dark:hover:bg-zinc-800 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title={t("rmenu.delete_dish")}
+                                      aria-label={`Delete ${item.name}`}
                                     >
-                                      <Trash2 className="w-3.5 h-3.5" />
+                                      {pendingItemId === item.id ? (
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                      ) : (
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      )}
                                     </button>
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-zinc-400 line-clamp-2 mt-0.5">
+                                <p className="text-[10px] text-zinc-500 dark:text-zinc-400 line-clamp-2 mt-0.5">
                                   {item.description}
                                 </p>
                               </div>
 
-                              <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800/80 mt-2">
-                                {/* Price Editor inline */}
-                                <div className="flex items-center gap-1.5">
-                                  <DollarSign className="w-3.5 h-3.5 text-zinc-400" />
-                                  <input
-                                    type="number"
-                                    step="0.1"
-                                    defaultValue={item.price}
-                                    onBlur={(e) =>
-                                      handleUpdatePrice(
-                                        item.id,
-                                        parseFloat(e.target.value),
-                                      )
-                                    }
-                                    className="w-16 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-bold text-zinc-800 dark:text-zinc-200 px-1 py-0.5 rounded focus:outline-none focus:ring-1 focus:ring-orange-500"
-                                  />
+                              <div className="flex items-start justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800/80 mt-2 gap-2">
+                                {/* Inline price editor — controlled, validated on blur */}
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <DollarSign className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                    <input
+                                      type="number"
+                                      step="0.1"
+                                      min="0"
+                                      inputMode="decimal"
+                                      aria-label={`Price for ${item.name}`}
+                                      aria-invalid={priceErrors[item.id] ? true : undefined}
+                                      aria-describedby={priceErrors[item.id] ? `price-error-${item.id}` : undefined}
+                                      value={priceValue(item)}
+                                      onChange={(e) => handlePriceChange(item, e.target.value)}
+                                      onBlur={() => handlePriceBlur(item)}
+                                      className={`w-16 bg-white dark:bg-zinc-900 border text-xs font-bold text-zinc-800 dark:text-zinc-200 px-1 py-0.5 rounded focus:outline-none focus:ring-1 ${
+                                        priceErrors[item.id]
+                                          ? "border-red-500 focus:ring-red-500"
+                                          : "border-zinc-200 dark:border-zinc-800 focus:ring-orange-500"
+                                      }`}
+                                    />
+                                  </div>
+                                  {priceErrors[item.id] && (
+                                    <p id={`price-error-${item.id}`} className="text-[9px] font-bold text-red-500 mt-1">
+                                      {priceErrors[item.id]}
+                                    </p>
+                                  )}
                                 </div>
 
                                 {/* Availability toggle */}
                                 <button
+                                  type="button"
                                   onClick={() => handleToggleAvailability(item)}
-                                  className={`text-[10px] font-bold px-2 py-1 rounded transition-colors flex items-center gap-1 border ${
+                                  aria-pressed={item.isAvailable}
+                                  className={`text-[10px] font-bold px-2 py-1.5 rounded transition-colors flex items-center gap-1 border shrink-0 ${
                                     item.isAvailable
                                       ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500"
-                                      : "bg-zinc-100 border-zinc-200 text-zinc-400 dark:bg-zinc-800 dark:border-zinc-700"
+                                      : "bg-zinc-100 border-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-400"
                                   }`}
                                 >
                                   {item.isAvailable ? (
                                     <>
-                                      <Check className="w-3 h-3" /> Available
+                                      <Check className="w-3 h-3" /> {t("rmenu.available")}
                                     </>
                                   ) : (
                                     <>
-                                      <X className="w-3 h-3" /> Snoozed
+                                      <X className="w-3 h-3" /> {t("rmenu.snoozed")}
                                     </>
                                   )}
                                 </button>
@@ -978,7 +1200,7 @@ export default function RestaurantMenuSection({
         onSuccess={() => {
           setIsSectionModalOpen(false);
           loadMenu();
-          showToast(editingSection ? "Category updated." : "Category created.", "success");
+          // The modal already raises its own react-hot-toast on success.
         }}
       />
 
@@ -990,37 +1212,9 @@ export default function RestaurantMenuSection({
         onSuccess={() => {
           setIsItemModalOpen(false);
           loadMenu();
-          showToast(editingItem ? "Item updated." : "Item created.", "success");
+          // The modal already raises its own react-hot-toast on success.
         }}
       />
-
-      {/* Dynamic Floating Toast Notification */}
-      {toast && (
-        <div className="fixed bottom-6 right-6 z-[100] p-4 bg-zinc-900 dark:bg-zinc-950 border border-zinc-800 dark:border-zinc-900 rounded-2xl shadow-2xl flex items-center gap-3 max-w-sm animate-in slide-in-from-bottom-5 duration-200">
-          {toast.type === "success" ? (
-            <span className="p-1.5 bg-emerald-500/10 text-emerald-400 rounded-lg">
-              <Check className="w-4 h-4" />
-            </span>
-          ) : toast.type === "error" ? (
-            <span className="p-1.5 bg-red-500/10 text-red-400 rounded-lg">
-              <AlertCircle className="w-4 h-4" />
-            </span>
-          ) : (
-            <span className="p-1.5 bg-blue-500/10 text-blue-400 rounded-lg">
-              <AlertCircle className="w-4 h-4" />
-            </span>
-          )}
-          <p className="text-[11px] font-bold text-white leading-normal">
-            {toast.message}
-          </p>
-          <button
-            onClick={() => setToast(null)}
-            className="text-zinc-500 hover:text-white transition-colors ml-auto p-1"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
     </div>
   );
 }

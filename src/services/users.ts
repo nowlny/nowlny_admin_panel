@@ -1,22 +1,48 @@
-import { apiClient } from './apiClient';
+import { apiClient, buildQuery, toPaginated } from "./apiClient";
+
+/** `CreateUserDto.userType` / `UpdateUserDto.userType`. */
+export type UserType =
+  | "admin"
+  | "customer"
+  | "restaurant_owner"
+  | "driver"
+  | "delivery_company";
+
+export type UserStatus = "active" | "inactive" | "suspended" | "deleted";
+
+export const USER_TYPES: { value: UserType; label: string }[] = [
+  { value: "admin", label: "Admin" },
+  { value: "restaurant_owner", label: "Restaurant owner" },
+  { value: "delivery_company", label: "Delivery company" },
+  { value: "driver", label: "Driver" },
+  { value: "customer", label: "Customer" },
+];
+
+export const USER_STATUSES: { value: UserStatus; label: string }[] = [
+  { value: "active", label: "Active" },
+  { value: "inactive", label: "Inactive" },
+  { value: "suspended", label: "Suspended" },
+  { value: "deleted", label: "Deleted" },
+];
 
 export interface UserProfileUpdate {
   fullName?: string;
   nickname?: string;
-  dateOfBirth?: string; // Format: YYYY-MM-DD
+  profileImage?: string;
+  dateOfBirth?: string; // YYYY-MM-DD
 }
 
 export interface SystemUserCreate {
   phoneNumber: string;
   fullName: string;
-  userType: string;
+  userType: UserType;
 }
 
 export interface SystemUserUpdate {
   phoneNumber?: string;
   fullName?: string;
-  userType?: string;
-  status?: string;
+  userType?: UserType;
+  status?: UserStatus;
   isActive?: boolean;
 }
 
@@ -24,116 +50,75 @@ export interface SystemUser {
   id: string;
   phoneNumber: string;
   fullName: string;
-  userType: string;
-  status: string;
+  /** `super_admin` exists on live accounts even though it isn't assignable. */
+  userType: UserType | string;
+  status: UserStatus | string;
   isActive: boolean;
   nickname?: string;
+  email?: string;
+  profileImage?: string;
   dateOfBirth?: string;
+  createdAt?: string;
+}
+
+export interface ListUsersParams {
+  search?: string;
+  userType?: UserType | "all" | "";
+  status?: UserStatus | "all" | "";
+  isActive?: boolean;
+  page?: number;
+  limit?: number;
 }
 
 export const usersService = {
-  /**
-   * Update own profile (any authenticated user)
-   * PATCH /api/v1/users/me
-   */
-  updateProfile: (data: UserProfileUpdate) => {
-    return apiClient<void>('/api/v1/users/me', {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    });
-  },
+  getMe: () => apiClient<SystemUser>("/api/v1/users/me"),
 
-  /**
-   * Update FCM Device Token
-   * POST /api/v1/users/device-token
-   */
-  updateFCMToken: (token: string) => {
-    return apiClient<void>('/api/v1/users/me/device-token', {
-      method: 'POST',
+  updateProfile: (data: UserProfileUpdate) =>
+    apiClient<SystemUser>("/api/v1/users/me", {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  registerDeviceToken: (data: { token: string }) =>
+    apiClient<void>("/api/v1/users/me/device-token", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** The API reads the token from the body, so it has to be sent on DELETE. */
+  removeDeviceToken: (token: string) =>
+    apiClient<void>("/api/v1/users/me/device-token", {
+      method: "DELETE",
       body: JSON.stringify({ token }),
-    });
-  },
+    }),
 
   /**
-   * Get own user info
-   * GET /api/v1/users/me
+   * `GET /api/v1/users` — paginated with `search`, `userType`, `status` and
+   * `isActive`. Previously fetched unfiltered and unpaged, so the panel only
+   * ever showed the API's first page with no way to reach the rest.
    */
-  getMe: () => {
-    return apiClient<SystemUser>('/api/v1/users/me', {
-      method: 'GET',
-    });
+  getSystemUsers: async (params?: ListUsersParams) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/users${buildQuery({ ...params })}`,
+    );
+    return toPaginated<SystemUser>(payload, params?.limit ?? 20);
   },
 
-  /**
-   * Register FCM device token
-   * POST /api/v1/users/me/device-token
-   */
-  registerDeviceToken: (data: { token: string }) => {
-    return apiClient<void>('/api/v1/users/me/device-token', {
-      method: 'POST',
+  getSystemUserById: (id: string) =>
+    apiClient<SystemUser>(`/api/v1/users/${id}`),
+
+  createSystemUser: (data: SystemUserCreate) =>
+    apiClient<SystemUser>("/api/v1/users", {
+      method: "POST",
       body: JSON.stringify(data),
-    });
-  },
+    }),
 
-  /**
-   * Remove FCM device token
-   * DELETE /api/v1/users/me/device-token
-   */
-  removeDeviceToken: () => {
-    return apiClient<void>('/api/v1/users/me/device-token', {
-      method: 'DELETE',
-    });
-  },
-
-  /**
-   * Create a system user (super_admin only)
-   * POST /api/v1/users
-   */
-  createSystemUser: (data: SystemUserCreate) => {
-    return apiClient<void>('/api/v1/users', {
-      method: 'POST',
+  updateSystemUser: (id: string, data: SystemUserUpdate) =>
+    apiClient<SystemUser>(`/api/v1/users/${id}`, {
+      method: "PATCH",
       body: JSON.stringify(data),
-    });
-  },
+    }),
 
-  /**
-   * List all system users
-   * GET /api/v1/users
-   */
-  getSystemUsers: () => {
-    return apiClient<SystemUser[]>('/api/v1/users', {
-      method: 'GET',
-    });
-  },
-
-  /**
-   * Get a system user by ID
-   * GET /api/v1/users/{id}
-   */
-  getSystemUserById: (id: string) => {
-    return apiClient<SystemUser>(`/api/v1/users/${id}`, {
-      method: 'GET',
-    });
-  },
-
-  /**
-   * Update a system user
-   * PATCH /api/v1/users/{id}
-   */
-  updateSystemUser: (id: string, data: SystemUserUpdate) => {
-    return apiClient<void>(`/api/v1/users/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    });
-  },
-
-  /**
-   * Delete a system user
-   * DELETE /api/v1/users/{id}
-   */
-  deleteSystemUser: (id: string) => {
-    return apiClient<void>(`/api/v1/users/${id}`, {
-      method: 'DELETE',
-    });
-  },
+  deleteSystemUser: (id: string) =>
+    apiClient<void>(`/api/v1/users/${id}`, { method: "DELETE" }),
 };
