@@ -225,6 +225,15 @@ export async function POST(request: Request) {
 
       if (adapted?.kind === "menu") {
         const menu = normalizeParsedMenu(adapted.data, adapted.images);
+
+        // Same rule as the model path below: an empty menu is a failure.
+        if (menu.categories.every((category) => category.items.length === 0)) {
+          return NextResponse.json(
+            { error: "That store's menu has no dishes in it yet." },
+            { status: 422 },
+          );
+        }
+
         const photoless = menu.categories
           .flatMap((category) => category.items)
           .filter((item) => !item.image);
@@ -574,8 +583,31 @@ ${imageRule}
       }
     }
 
+    const menu = normalizeParsedMenu(parsedMenu, sourceImages, imageBase);
+    const dishCount = menu.categories.reduce(
+      (total, category) => total + category.items.length,
+      0,
+    );
+
+    // The model answering with an empty menu is a failure, not a success. It
+    // used to come back as a green "parsed successfully" toast over an empty
+    // preview, which reads as "this restaurant has no food".
+    if (dishCount === 0) {
+      console.warn(
+        `[parse-menu] no dishes extracted from ${link ? link : "upload"}`,
+      );
+      return NextResponse.json(
+        {
+          error: link
+            ? "We opened that page but found no dishes on it. Its menu is drawn after the page loads, so there was nothing to read — open it in a browser, save it as a PDF or screenshot, and upload that instead."
+            : `We couldn't find any dishes in that file. ${retryHint}`,
+        },
+        { status: 422 },
+      );
+    }
+
     return NextResponse.json({
-      ...normalizeParsedMenu(parsedMenu, sourceImages, imageBase),
+      ...menu,
       ...(sourceLabel ? { label: sourceLabel } : {}),
     });
 
