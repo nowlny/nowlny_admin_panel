@@ -31,6 +31,7 @@ import { useConfirm } from "./ui/ConfirmDialog";
 import { EmptyState, ErrorBanner, ErrorState, Skeleton } from "./ui/States";
 
 import { useI18n } from "../../lib/i18n";
+import { MAX_UPLOAD_MB, readErrorMessage } from "../../lib/httpErrors";
 interface RestaurantMenuSectionProps {
   /** The live API record, not the retired localStorage `Restaurant` fixture. */
   restaurant: RestaurantResponse;
@@ -285,8 +286,7 @@ export default function RestaurantMenuSection({
       });
 
       if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({}));
-        throw new Error(errorBody.error || t("rmenu.images_failed"));
+        throw new Error(await readErrorMessage(response, t("rmenu.images_failed")));
       }
 
       const { images } = await response.json();
@@ -395,9 +395,8 @@ export default function RestaurantMenuSection({
       clearInterval(progressInterval);
 
       if (!response.ok) {
-        const errorBody = await response.json();
         throw new Error(
-          errorBody.error || "Failed to scan menu via Gemini API.",
+          await readErrorMessage(response, "Failed to scan menu via Gemini API."),
         );
       }
 
@@ -488,10 +487,22 @@ export default function RestaurantMenuSection({
   const handleCustomFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0];
-      const mockSize = (file.size / (1024 * 1024)).toFixed(1) + " MB";
+      const sizeMb = file.size / (1024 * 1024);
+      const mockSize = sizeMb.toFixed(1) + " MB";
 
       setCustomFileName(file.name);
       setParsingError(null);
+
+      if (sizeMb > MAX_UPLOAD_MB) {
+        setParsingError(
+          t("rmenu.file_too_large", {
+            size: sizeMb.toFixed(1),
+            limit: String(MAX_UPLOAD_MB),
+          }),
+        );
+        e.target.value = "";
+        return;
+      }
 
       const reader = new FileReader();
       reader.onload = async () => {

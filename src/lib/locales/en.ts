@@ -1252,6 +1252,7 @@ export const en = {
   "rmenu.link_invalid": "That doesn't look like a link. It should start with https://",
   "rmenu.step_fetching_link": "Opening the menu link and reading the page…",
   "rmenu.step_reading_page": "Reading the dishes off the page…",
+  "rmenu.file_too_large": "That file is {size} MB — too big to send (limit about {limit} MB). Split the PDF into fewer pages, export it at a lower quality, or paste a link to the menu instead.",
   "stories.skipping": "Skipping to the next one…",
   "stories.load_error": "This story couldn't be loaded.",
   "error.title": "Something went wrong",

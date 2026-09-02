@@ -321,7 +321,7 @@ export async function POST(request: Request) {
         return NextResponse.json(
           {
             error:
-              "That file is too large to scan. Please upload a file under ~7 MB, or split a long PDF into fewer pages.",
+              "That file is too large to scan. Split a long PDF into fewer pages, or paste a link to the menu instead.",
           },
           { status: 413 },
         );
