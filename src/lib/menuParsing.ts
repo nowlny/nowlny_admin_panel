@@ -116,6 +116,11 @@ export function normalizeParsedMenu(
    * a long CDN address comes back subtly mangled far too often.
    */
   sourceImages: string[] = [],
+  /**
+   * Base for image paths a page stored relatively (`menu_images/x.webp`).
+   * Discovered by `menuSource`, since only the site knows where they live.
+   */
+  imageBase?: string,
 ): {
   language: string;
   categories: { name: string; items: NormalizedItem[] }[];
@@ -143,7 +148,13 @@ export function normalizeParsedMenu(
             typeof item.imageRef === "number" && Number.isInteger(item.imageRef)
               ? sourceImages[item.imageRef - 1]
               : undefined;
-          const image = referenced ?? asText(item.image, 500);
+          const raw = referenced ?? asText(item.image, 500);
+          // A relative path is only usable once it is put back on the host it
+          // came from; anything else has to stand on its own.
+          const image =
+            raw && imageBase && !/^https?:\/\//i.test(raw)
+              ? new URL(raw.replace(/^\/+/, ""), imageBase).href
+              : raw;
 
           samples.push(itemName);
           if (description) samples.push(description);

@@ -196,6 +196,8 @@ export async function POST(request: Request) {
     let pageText = "";
     /** `pageText` is the page's own JSON rather than readable prose. */
     let structuredText = false;
+    /** Where relative image paths inside `pageText` resolve to. */
+    let imageBase: string | undefined;
     /** Photos found on the linked page, referenced from `pageText` by number. */
     let sourceImages: string[] = [];
 
@@ -287,6 +289,7 @@ export async function POST(request: Request) {
           pageText = source.text;
           sourceImages = source.images;
           structuredText = source.structured === true;
+          imageBase = source.imageBase;
         }
       } catch (sourceError) {
         if (sourceError instanceof MenuSourceError) {
@@ -341,8 +344,8 @@ export async function POST(request: Request) {
     const imageRule = structuredText
       ? `
       Dish photo requirement:
-      15. The JSON often holds an image URL for a dish. When it does, copy that absolute https URL VERBATIM into that item's "image" field — do not shorten it, guess it, or build it out of an id.
-      16. Leave "image" out entirely when the JSON has no picture for that dish. Never reuse another dish's URL.`
+      15. The JSON usually holds a picture for a dish. Copy that value into the item's "image" field EXACTLY as it appears — character for character. It is often a relative path such as "menu_images/8ebefc39.webp" rather than a full URL; copy it as-is, do not turn it into a URL, do not guess it, do not build one out of an id.
+      16. Leave "image" out entirely when the data has no picture for that dish. Never reuse another dish's picture.`
       : sourceImages.length
       ? `
       Dish photo requirement:
@@ -395,7 +398,7 @@ ${imageRule}
                 "category": "Category Name, in the menu's language",
                 "imageQuery": "english stock photo search phrase"${
                   structuredText
-                    ? ',\n                "image": "https://…"'
+                    ? ',\n                "image": "exactly as written in the data"'
                     : sourceImages.length
                       ? ',\n                "imageRef": 4'
                       : ""
@@ -572,7 +575,7 @@ ${imageRule}
     }
 
     return NextResponse.json({
-      ...normalizeParsedMenu(parsedMenu, sourceImages),
+      ...normalizeParsedMenu(parsedMenu, sourceImages, imageBase),
       ...(sourceLabel ? { label: sourceLabel } : {}),
     });
 

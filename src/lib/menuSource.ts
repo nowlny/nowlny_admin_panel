@@ -83,6 +83,12 @@ export type MenuSource =
        * image URLs straight out of it.
        */
       structured?: boolean;
+      /**
+       * Where the relative image paths in `text` actually live, once we have
+       * worked it out. Dish photos in a page's own data are usually stored as
+       * `menu_images/<id>.webp`, which is useless on its own.
+       */
+      imageBase?: string;
     };
 
 /** Carries a message that is safe to show the operator, unlike a raw fetch error. */
@@ -518,6 +524,144 @@ async function discoverMenuUrls(html: string, pageUrl: URL): Promise<string[]> {
   return [...candidates.entries()].sort((a, b) => a[1] - b[1]).map(([href]) => href);
 }
 
+/** Image paths sitting in a page's own data, e.g. `"image":"menu_images/x.webp"`. */
+const IMAGE_FIELD =
+  /"(?:image|image_url|img|photo|picture|thumbnail|cover)"\s*:\s*"([^"?<>\s]{4,180}\.(?:webp|jpe?g|png|avif))"/gi;
+
+/** Object stores a restaurant site is likely to keep its dish photos in. */
+const STORAGE_HOST =
+  /https:\/\/[a-z0-9][a-z0-9.-]{2,60}\.(?:supabase\.co|cloudinary\.com|amazonaws\.com|cloudfront\.net|digitaloceanspaces\.com|blob\.core\.windows\.net)/gi;
+
+/** Buckets to try when a store needs one and the page never names it. */
+const COMMON_BUCKETS = ["images", "media", "assets", "uploads", "public", "menu"];
+
+/** Bounded because each one is a request; the right base is usually first. */
+const MAX_IMAGE_BASE_PROBES = 10;
+
+/** Only a couple of bundles are worth opening to find a storage hostname. */
+const MAX_CHUNKS_SCANNED = 3;
+
+const IMAGE_PROBE_TIMEOUT_MS = 6_000;
+
+/** Paths without a scheme — the ones that need a base to be usable. */
+function collectRelativeImagePaths(payload: string): string[] {
+  const paths = new Set<string>();
+
+  IMAGE_FIELD.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = IMAGE_FIELD.exec(payload)) !== null) {
+    const value = match[1];
+    if (!/^(?:https?:)?\/\//i.test(value) && !value.startsWith("data:")) {
+      paths.add(value.replace(/^\/+/, ""));
+    }
+    if (paths.size >= 5) break;
+  }
+
+  return [...paths];
+}
+
+/** Does this URL actually serve an image? One probe, one answer. */
+async function servesImage(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      // A single byte is enough to see the status and content type.
+      headers: { "User-Agent": USER_AGENT, Range: "bytes=0-0" },
+      signal: AbortSignal.timeout(IMAGE_PROBE_TIMEOUT_MS),
+      cache: "no-store",
+    });
+    const type = (response.headers.get("content-type") ?? "").toLowerCase();
+    await response.body?.cancel();
+    return response.ok && type.startsWith("image/");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Work out where a page's relative dish photos are actually served from.
+ *
+ * The data says `menu_images/<id>.webp` and the absolute URL only ever exists
+ * in the browser, built at render time from an environment variable. So we
+ * reconstruct it: find the object store the site talks to — in the page, or
+ * failing that in its bundles — then try the handful of shapes that store
+ * uses and keep the one that returns an actual image.
+ */
+async function findImageBase(
+  payload: string,
+  html: string,
+  pageUrl: URL,
+): Promise<string | undefined> {
+  const [sample] = collectRelativeImagePaths(payload);
+  if (!sample) return undefined;
+
+  // Cheapest possible answer: the page already spells one of them out.
+  const spelledOut = payload.match(
+    new RegExp(`https?://[^"\\s]{4,200}?${sample.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i"),
+  );
+  if (spelledOut) {
+    const base = spelledOut[0].slice(0, spelledOut[0].length - sample.length);
+    if (await servesImage(`${base}${sample}`)) return base;
+  }
+
+  let hosts = [...new Set(html.match(STORAGE_HOST) ?? [])];
+
+  if (hosts.length === 0) {
+    // The hostname lives in an environment variable compiled into a bundle.
+    const scripts = [...html.matchAll(/<script[^>]+src="([^"]+\.js)"/gi)]
+      .map((match) => match[1])
+      // The client that talks to the store is set up in the root layout.
+      .sort((a, b) => Number(b.includes("layout")) - Number(a.includes("layout")))
+      .slice(0, MAX_CHUNKS_SCANNED);
+
+    const bundles = await Promise.all(
+      scripts.map(async (src) => {
+        try {
+          const response = await fetch(new URL(src, pageUrl), {
+            headers: { "User-Agent": USER_AGENT },
+            signal: AbortSignal.timeout(IMAGE_PROBE_TIMEOUT_MS),
+            cache: "no-store",
+          });
+          return response.ok ? (await response.text()).slice(0, MAX_HTML_BYTES) : "";
+        } catch {
+          return "";
+        }
+      }),
+    );
+
+    hosts = [...new Set(bundles.join("").match(STORAGE_HOST) ?? [])];
+  }
+
+  const bases: string[] = [];
+  const folder = sample.split("/")[0];
+
+  for (const host of hosts.slice(0, 2)) {
+    if (host.includes("supabase.co")) {
+      // Supabase needs a bucket in the path, and the folder name is very
+      // often it — modulo the dash/underscore the two conventions disagree on.
+      const buckets = [
+        folder,
+        folder.replace(/_/g, "-"),
+        folder.replace(/-/g, "_"),
+        ...COMMON_BUCKETS,
+      ];
+      for (const bucket of [...new Set(buckets)]) {
+        bases.push(`${host}/storage/v1/object/public/${bucket}/`);
+      }
+    } else {
+      bases.push(`${host}/`);
+    }
+  }
+
+  bases.push(new URL("/", pageUrl).href);
+
+  for (const base of bases.slice(0, MAX_IMAGE_BASE_PROBES)) {
+    if (await servesImage(`${base}${sample}`)) return base;
+  }
+
+  return undefined;
+}
+
 /**
  * Fetch whatever the link points at and return it in a form the scanner can
  * send to Gemini: PDFs and photos go up as-is, web pages go up as text.
@@ -631,7 +775,14 @@ export async function fetchMenuSource(
       ).slice(0, MAX_STRUCTURED_CHARS);
 
       if (payload.length >= MIN_TEXT_CHARS && (looksLikeMenu(payload) || !best)) {
-        best = { kind: "text", label, text: payload, images, structured: true };
+        best = {
+          kind: "text",
+          label,
+          text: payload,
+          images,
+          structured: true,
+          imageBase: await findImageBase(payload, html, url),
+        };
       }
     }
 
