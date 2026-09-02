@@ -108,7 +108,15 @@ function detectLanguage(claimed: unknown, samples: string[]): string {
  * Prices arriving as `"12.99 $"` used to reach the preview as a string and
  * blow up on `.toFixed()`, and items with no name were created as blank rows.
  */
-export function normalizeParsedMenu(raw: unknown): {
+export function normalizeParsedMenu(
+  raw: unknown,
+  /**
+   * Photos pulled off the source page, in the order they were numbered in the
+   * text handed to the model. It answers with the number rather than the URL —
+   * a long CDN address comes back subtly mangled far too often.
+   */
+  sourceImages: string[] = [],
+): {
   language: string;
   categories: { name: string; items: NormalizedItem[] }[];
 } {
@@ -127,7 +135,15 @@ export function normalizeParsedMenu(raw: unknown): {
           if (!itemName) return null;
 
           const description = asText(item.description, 600);
-          const image = asText(item.image, 500);
+
+          // `imageRef` is a 1-based index into `sourceImages`; `image` is a URL
+          // the model echoed back. https only, so an import can't downgrade the
+          // storefront to mixed content.
+          const referenced =
+            typeof item.imageRef === "number" && Number.isInteger(item.imageRef)
+              ? sourceImages[item.imageRef - 1]
+              : undefined;
+          const image = referenced ?? asText(item.image, 500);
 
           samples.push(itemName);
           if (description) samples.push(description);

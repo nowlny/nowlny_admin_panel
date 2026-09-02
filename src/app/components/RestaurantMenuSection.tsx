@@ -36,6 +36,14 @@ interface RestaurantMenuSectionProps {
   restaurant: RestaurantResponse;
 }
 
+/**
+ * A menu can be scanned from an uploaded file or from a link to the
+ * restaurant's own menu page — kept as one value so "retry" works for both.
+ */
+type ScanSource =
+  | { kind: "file"; name: string; base64Data: string; fileMime: string; fileSize: string }
+  | { kind: "link"; url: string };
+
 interface ParsedMenuData {
   name: string;
   type: "pdf" | "excel" | "image";
@@ -96,6 +104,7 @@ export default function RestaurantMenuSection({
 
   // Parsing tool states
   const [customFileName, setCustomFileName] = useState<string>("");
+  const [menuUrl, setMenuUrl] = useState("");
   const [isParsing, setIsParsing] = useState(false);
   const [parsingStep, setParsingStep] = useState<string>("");
   const [parseProgress, setParseProgress] = useState(0);
@@ -111,12 +120,7 @@ export default function RestaurantMenuSection({
 
   // Custom states for premium error handling and Toast notifications
   const [parsingError, setParsingError] = useState<string | null>(null);
-  const [lastUploadedFile, setLastUploadedFile] = useState<{
-    name: string;
-    base64Data: string;
-    fileMime: string;
-    fileSize: string;
-  } | null>(null);
+  const [lastScanSource, setLastScanSource] = useState<ScanSource | null>(null);
   const confirm = useConfirm();
 
   // --- API DATA STATES ---
@@ -319,19 +323,19 @@ export default function RestaurantMenuSection({
   };
 
   // Real Google Gemini 1.5 Flash API scanner
-  const runLiveGeminiScan = async (
-    fileName: string,
-    base64Data: string,
-    fileMime: string,
-    fileSize: string,
-  ) => {
+  const runLiveGeminiScan = async (source: ScanSource) => {
     // Invalidates any photo lookup still in flight for the previous file.
     scanToken.current += 1;
     const token = scanToken.current;
 
+    setLastScanSource(source);
     setIsParsing(true);
     setParseProgress(10);
-    setParsingStep("Establishing bridge connection to Gemini AI...");
+    setParsingStep(
+      source.kind === "link"
+        ? t("rmenu.step_fetching_link")
+        : "Establishing bridge connection to Gemini AI...",
+    );
     setParsedData(null);
     setParseSuccess(false);
     setParsingError(null);
@@ -346,10 +350,16 @@ export default function RestaurantMenuSection({
         setParseProgress(Math.min(95, currentProgress));
 
         if (currentProgress > 25 && currentProgress <= 45) {
-          setParsingStep("Multimodal vision model parsing files...");
+          setParsingStep(
+            source.kind === "link"
+              ? t("rmenu.step_fetching_link")
+              : "Multimodal vision model parsing files...",
+          );
         } else if (currentProgress > 45 && currentProgress <= 70) {
           setParsingStep(
-            "Running Google Gemini 1.5 Flash OCR on text grids...",
+            source.kind === "link"
+              ? t("rmenu.step_reading_page")
+              : "Running Google Gemini 1.5 Flash OCR on text grids...",
           );
         } else if (currentProgress > 70) {
           setParsingStep(
@@ -371,11 +381,15 @@ export default function RestaurantMenuSection({
           "Content-Type": "application/json",
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
-        body: JSON.stringify({
-          fileData: base64Data,
-          mimeType: fileMime,
-          customApiKey: geminiApiKey,
-        }),
+        body: JSON.stringify(
+          source.kind === "link"
+            ? { url: source.url, customApiKey: geminiApiKey }
+            : {
+                fileData: source.base64Data,
+                mimeType: source.fileMime,
+                customApiKey: geminiApiKey,
+              },
+        ),
       });
 
       clearInterval(progressInterval);
@@ -395,15 +409,16 @@ export default function RestaurantMenuSection({
       setTimeout(() => {
         setIsParsing(false);
         const scanned: ParsedMenuData = {
-          name: fileName,
-          type: fileMime.includes("pdf")
-            ? "pdf"
-            : fileMime.includes("sheet") ||
-                fileMime.includes("excel") ||
-                fileMime.includes("csv")
-              ? "excel"
-              : "image",
-          size: fileSize,
+          name: source.kind === "link" ? source.url : source.name,
+          type:
+            source.kind === "link" || source.fileMime.includes("pdf")
+              ? "pdf"
+              : source.fileMime.includes("sheet") ||
+                  source.fileMime.includes("excel") ||
+                  source.fileMime.includes("csv")
+                ? "excel"
+                : "image",
+          size: source.kind === "link" ? "" : source.fileSize,
           language: parsedResult.language,
           categories: parsedResult.categories || [],
         };
@@ -441,13 +456,27 @@ export default function RestaurantMenuSection({
   };
 
   const handleRetryScan = async () => {
-    if (!lastUploadedFile) return;
-    await runLiveGeminiScan(
-      lastUploadedFile.name,
-      lastUploadedFile.base64Data,
-      lastUploadedFile.fileMime,
-      lastUploadedFile.fileSize,
-    );
+    if (!lastScanSource) return;
+    await runLiveGeminiScan(lastScanSource);
+  };
+
+  /**
+   * Scan the restaurant's own menu page. The link is fetched server-side —
+   * the browser can't read another site's HTML — and photos found on the page
+   * are carried through onto the matching dishes.
+   */
+  const handleScanLink = async () => {
+    const url = menuUrl.trim();
+    if (!url || isParsing) return;
+
+    if (!/^https?:\/\/\S+\.\S+/i.test(url)) {
+      setParsingError(t("rmenu.link_invalid"));
+      return;
+    }
+
+    setCustomFileName("");
+    setParsingError(null);
+    await runLiveGeminiScan({ kind: "link", url });
   };
 
   // Custom File Uploader
@@ -463,18 +492,14 @@ export default function RestaurantMenuSection({
       reader.onload = async () => {
         if (reader.result) {
           const base64Data = (reader.result as string).split(",")[1];
-          setLastUploadedFile({
+          setMenuUrl("");
+          await runLiveGeminiScan({
+            kind: "file",
             name: file.name,
             base64Data,
             fileMime: file.type || "image/png",
             fileSize: mockSize,
           });
-          await runLiveGeminiScan(
-            file.name,
-            base64Data,
-            file.type || "image/png",
-            mockSize,
-          );
         }
       };
       reader.readAsDataURL(file);
@@ -563,8 +588,9 @@ export default function RestaurantMenuSection({
       // Reset states
       setParsedData(null);
       setCustomFileName("");
+      setMenuUrl("");
       setParseSuccess(false);
-      setLastUploadedFile(null);
+      setLastScanSource(null);
 
       toast.success(t("rmenu.approved"));
     } catch (err: any) {
@@ -818,7 +844,7 @@ t("rmenu.no_categories")}{" "}
                 </div>
 
                 <div className="flex items-center gap-2.5 pt-1">
-                  {lastUploadedFile && (
+                  {lastScanSource && (
                     <button
                       onClick={handleRetryScan}
                       disabled={isParsing}
@@ -925,6 +951,51 @@ t("rmenu.no_categories")}{" "}
                   className="hidden"
                 />
               </label>
+            </div>
+
+            {/* Menu link — fetched on the server, since the browser can't read
+                another site's page. */}
+            <div className="space-y-1.5">
+              <label
+                htmlFor="menu-url"
+                className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest block"
+              >
+                {t("rmenu.link_label")}
+              </label>
+
+              <div className="flex items-center gap-2">
+                <input
+                  id="menu-url"
+                  type="url"
+                  inputMode="url"
+                  dir="ltr"
+                  placeholder={t("rmenu.link_placeholder")}
+                  value={menuUrl}
+                  onChange={(e) => setMenuUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void handleScanLink();
+                    }
+                  }}
+                  disabled={isParsing}
+                  className="flex-1 min-w-0 bg-white dark:bg-zinc-900 border border-zinc-250 dark:border-zinc-850 text-[11px] font-bold text-zinc-850 dark:text-zinc-100 placeholder-zinc-400 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:opacity-50 shadow-sm"
+                />
+
+                <button
+                  type="button"
+                  onClick={handleScanLink}
+                  disabled={isParsing || !menuUrl.trim()}
+                  className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-[10px] px-3.5 py-2.5 rounded-xl shadow-md shadow-purple-500/20 flex items-center gap-1.5 shrink-0 transition-all"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  {t("rmenu.scan_link")}
+                </button>
+              </div>
+
+              <p className="text-[9px] text-zinc-400 leading-normal">
+                {t("rmenu.link_hint")}
+              </p>
             </div>
           </div>
 

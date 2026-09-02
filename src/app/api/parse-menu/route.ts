@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { normalizeParsedMenu } from "../../../lib/menuParsing";
+import { fetchMenuSource, MenuSourceError } from "../../../lib/menuSource";
 
 /**
  * Gemini menu OCR proxy.
@@ -8,6 +9,10 @@ import { normalizeParsedMenu } from "../../../lib/menuParsing";
  * doesn't supply one, so without an auth check it is an open proxy that anyone
  * who finds the URL can use to burn the project's Gemini quota. There is no
  * `middleware.ts` in this app, so the gate has to live here.
+ *
+ * Takes either an uploaded file (`fileData`) or a link to the menu (`url`),
+ * which is fetched server-side — see `lib/menuSource.ts` for why that fetch is
+ * fenced off from private address space.
  */
 
 /** Vercel/Next serverless cap. Multi-page PDFs regularly need ~30-45s. */
@@ -15,6 +20,9 @@ export const maxDuration = 60;
 
 /** Leave ~5s of headroom under `maxDuration` so we can return a real message. */
 const UPSTREAM_TIMEOUT_MS = 55_000;
+
+/** Fetching the link has already spent part of the budget by the time we call out. */
+const UPSTREAM_TIMEOUT_AFTER_FETCH_MS = 38_000;
 
 /**
  * Base64 inflates by ~4/3, so this is roughly a 7.5 MB source document —
@@ -31,11 +39,21 @@ const GENERIC_ERROR =
  * contain the request URL (which carries the API key) and walls of Google JSON
  * that mean nothing to an operator.
  */
-function messageForUpstreamStatus(status: number): string {
+function messageForUpstreamStatus(
+  status: number,
+  errorText: string,
+  retryHint: string,
+): string {
+  // A bad key comes back as 400 INVALID_ARGUMENT, not 401 — telling the
+  // operator to "upload a clearer photo" sends them chasing the wrong thing.
+  const keyRejected = /api[_ ]key|api key not valid|invalid.{0,12}key/i.test(errorText);
+
   if (status === 429)
     return "The AI scanner is rate limited right now. Wait a minute and try again.";
   if (status === 400)
-    return "The AI scanner couldn't read that file. Upload a clear PNG, JPEG or text-based PDF.";
+    return keyRejected
+      ? "The Gemini API key was rejected. Check the key in AI Settings."
+      : `The AI scanner couldn't read that menu. ${retryHint}`;
   if (status === 401 || status === 403)
     return "The Gemini API key was rejected. Check the key in AI Settings.";
   if (status === 413)
@@ -58,26 +76,18 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const { fileData, mimeType, customApiKey } = body;
+    const { fileData, mimeType, customApiKey, url } = body;
+    const link = typeof url === "string" ? url.trim() : "";
 
-    if (!fileData || typeof fileData !== "string") {
+    if (!fileData && !link) {
       return NextResponse.json(
-        { error: "No file data received in request." },
+        { error: "No file or menu link received in request." },
         { status: 400 },
       );
     }
 
-    if (fileData.length > MAX_FILE_DATA_CHARS) {
-      return NextResponse.json(
-        {
-          error:
-            "That file is too large to scan. Please upload a file under ~7 MB, or split a long PDF into fewer pages.",
-        },
-        { status: 413 },
-      );
-    }
-
-    // Resolve API key: first check headers/body for custom client key, then fallback to environment
+    // Resolved before anything is fetched — there is no point pulling down a
+    // menu page we then can't send anywhere.
     const apiKey = customApiKey || process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
@@ -89,13 +99,73 @@ export async function POST(request: Request) {
       );
     }
 
+    // What ends up going to Gemini: a document to look at, or page text to read.
+    let document: { mimeType: string; data: string } | null = null;
+    let pageText = "";
+    /** Photos found on the linked page, referenced from `pageText` by number. */
+    let sourceImages: string[] = [];
+
+    if (link) {
+      try {
+        const source = await fetchMenuSource(link);
+        if (source.kind === "binary") {
+          document = { mimeType: source.mimeType, data: source.base64 };
+        } else {
+          pageText = source.text;
+          sourceImages = source.images;
+        }
+      } catch (sourceError) {
+        if (sourceError instanceof MenuSourceError) {
+          return NextResponse.json(
+            { error: sourceError.message },
+            { status: sourceError.status },
+          );
+        }
+        throw sourceError;
+      }
+    } else {
+      if (typeof fileData !== "string") {
+        return NextResponse.json(
+          { error: "No file data received in request." },
+          { status: 400 },
+        );
+      }
+
+      if (fileData.length > MAX_FILE_DATA_CHARS) {
+        return NextResponse.json(
+          {
+            error:
+              "That file is too large to scan. Please upload a file under ~7 MB, or split a long PDF into fewer pages.",
+          },
+          { status: 413 },
+        );
+      }
+
+      document = { mimeType: mimeType || "image/png", data: fileData };
+    }
+
     // Prepare prompt instructing Gemini to do structural OCR extraction and
     // return structured JSON. The language rules are the load-bearing part:
     // without them the model quietly translates Arabic menus into English,
     // which then goes straight into the storefront customers read.
+    const intro = document
+      ? `Analyze the attached menu document (which could be an image of a flyer, a PDF menu, or a spreadsheet).`
+      : `Analyze the menu page text at the end of this prompt. It was extracted from a restaurant's website, so it also contains navigation, opening hours and footer noise — ignore everything that is not a menu item.`;
+
+    // Pictures only exist when the menu came from a web page, and the model
+    // refers to them by number: asked for the URL itself it returns a
+    // plausible-looking but subtly wrong CDN address often enough to matter.
+    const imageRule = sourceImages.length
+      ? `
+      Dish photo requirement:
+      15. The page text contains markers like [IMAGE#4: grilled chicken]. When a marker clearly belongs to an item, set that item's "imageRef" to the marker's number (4 in that example).
+      16. Give "imageRef" ONLY when the picture really is that dish. Never guess, never reuse one number for several items, and never invent a number that is not in the text. Omit the field when unsure — a missing photo is fixed automatically later, a wrong one is not.
+      17. Never write image URLs yourself. The number is the only thing we read.`
+      : "";
+
     const prompt = `
       You are an expert menu digitizer and OCR extractor.
-      Analyze the attached menu document (which could be an image of a flyer, a PDF menu, or a spreadsheet).
+      ${intro}
       Extract all menu items, their descriptions, their prices, and group them into logical categories (e.g., Appetizers, Main Dishes, Drinks, Special Menu, Desserts).
 
       LANGUAGE RULES — these override every other instruction:
@@ -117,6 +187,7 @@ export async function POST(request: Request) {
       12. For every item add an 'imageQuery': a short stock-photo search phrase of 2 to 5 words describing what the dish LOOKS like, so we can find a photo for items the menu has no picture for.
       13. 'imageQuery' must ALWAYS be written in ENGLISH, even when the rest of the output is Arabic. Translate the dish for this field only (e.g. name "شاورما دجاج" -> imageQuery "chicken shawarma wrap").
       14. Keep 'imageQuery' generic and visual: no restaurant names, no brand names, no prices, no sizes. Prefer "grilled lamb kebab skewers" over "Chef Special #4".
+${imageRule}
 
       You must respond strictly with a valid JSON matching this schema:
       {
@@ -130,7 +201,9 @@ export async function POST(request: Request) {
                 "description": "Item Description, in the menu's language",
                 "price": 12.99,
                 "category": "Category Name, in the menu's language",
-                "imageQuery": "english stock photo search phrase"
+                "imageQuery": "english stock photo search phrase"${
+                  sourceImages.length ? ',\n                "imageRef": 4' : ""
+                }
               }
             ]
           }
@@ -138,21 +211,18 @@ export async function POST(request: Request) {
       }
     `;
 
+    // Advice for a dead end differs by where the menu came from.
+    const retryHint = link
+      ? "Try a link that opens the menu directly, or upload the menu file instead."
+      : "Try a clearer photo, or a text-based PDF instead of a scan.";
+
+    const parts = document
+      ? [{ text: prompt }, { inlineData: { mimeType: document.mimeType, data: document.data } }]
+      : [{ text: `${prompt}\n\n--- MENU PAGE TEXT ---\n${pageText}` }];
+
     // Construct request payload for Gemini Multimodal API (supports images, pdfs, and excels)
     const geminiPayload = {
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: mimeType || "image/png",
-                data: fileData // base64 string
-              }
-            }
-          ]
-        }
-      ],
+      contents: [{ parts }],
       generationConfig: {
         responseMimeType: "application/json",
         temperature: 0.1 // Low temperature for high precision OCR extraction
@@ -172,7 +242,9 @@ export async function POST(request: Request) {
         body: JSON.stringify(geminiPayload),
         // Without this a large PDF hangs until the platform kills the function
         // with an opaque 504 and no JSON body for the client to read.
-        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+        signal: AbortSignal.timeout(
+          link ? UPSTREAM_TIMEOUT_AFTER_FETCH_MS : UPSTREAM_TIMEOUT_MS,
+        )
       });
     } catch (fetchError: any) {
       const aborted =
@@ -195,7 +267,7 @@ export async function POST(request: Request) {
         errorText.slice(0, 2000),
       );
       return NextResponse.json(
-        { error: messageForUpstreamStatus(response.status) },
+        { error: messageForUpstreamStatus(response.status, errorText, retryHint) },
         { status: response.status >= 500 ? 502 : response.status }
       );
     }
@@ -210,10 +282,7 @@ export async function POST(request: Request) {
         JSON.stringify(result).slice(0, 2000),
       );
       return NextResponse.json(
-        {
-          error:
-            "The AI scanner returned nothing for that file. Try a clearer photo of the menu."
-        },
+        { error: `The AI scanner returned nothing for that menu. ${retryHint}` },
         { status: 502 }
       );
     }
@@ -225,10 +294,7 @@ export async function POST(request: Request) {
         JSON.stringify(candidates[0]).slice(0, 2000),
       );
       return NextResponse.json(
-        {
-          error:
-            "The AI scanner returned an empty result. Try a clearer photo of the menu."
-        },
+        { error: `The AI scanner returned an empty result. ${retryHint}` },
         { status: 502 }
       );
     }
@@ -250,16 +316,13 @@ export async function POST(request: Request) {
           String(textResponse).slice(0, 2000),
         );
         return NextResponse.json(
-          {
-            error:
-              "We couldn't read a menu out of that file. Try a clearer photo, or a text-based PDF instead of a scan."
-          },
+          { error: `We couldn't read a menu out of that. ${retryHint}` },
           { status: 422 }
         );
       }
     }
 
-    return NextResponse.json(normalizeParsedMenu(parsedMenu));
+    return NextResponse.json(normalizeParsedMenu(parsedMenu, sourceImages));
 
   } catch (error: any) {
     // `error.message` here can be a stack-revealing internal string.
