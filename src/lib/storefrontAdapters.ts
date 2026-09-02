@@ -16,6 +16,11 @@ import { MenuSourceError } from "./menuSource";
 
 const FETCH_TIMEOUT_MS = 15_000;
 
+/** Some platforms answer differently to anything that isn't a browser. */
+const BROWSER_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) " +
+  "Chrome/131.0.0.0 Safari/537.36 NowlnyMenuImporter/1.0 (+https://nowlny.com)";
+
 /** These payloads are a few hundred KB at most. */
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
 
@@ -352,6 +357,189 @@ async function adaptQrfy(uri: string): Promise<StorefrontResult> {
   );
 }
 
+
+/** Item names on POS-backed menus arrive numbered: "2.Chicken Noodle Soup". */
+const LEADING_ITEM_NUMBER = /^\d{1,3}\s*[.)\-]\s*(?=[^\d\s])/;
+
+/** Cookies a site hands out, as a lookup. */
+function readCookies(response: Response): Map<string, string> {
+  const jar = new Map<string, string>();
+  const raw =
+    typeof response.headers.getSetCookie === "function"
+      ? response.headers.getSetCookie()
+      : [response.headers.get("set-cookie") ?? ""];
+
+  for (const cookie of raw) {
+    const [pair] = cookie.split(";");
+    const index = pair.indexOf("=");
+    if (index > 0) jar.set(pair.slice(0, index).trim(), pair.slice(index + 1).trim());
+  }
+  return jar;
+}
+
+/** Omega Software menus — `https://menu.omegasoftware.ca/<slug>`. */
+function omegaSlug(url: URL): string | null {
+  if (!/(^|\.)omegasoftware\.ca$/i.test(url.hostname)) return null;
+
+  const segments = url.pathname.split("/").filter(Boolean);
+  const last = segments[segments.length - 1];
+  if (!last) return null;
+
+  // The app reads its own id off the URL the same way: everything before the
+  // first "-", which is where it hangs table numbers and survey codes.
+  const slug = last.split("-")[0];
+  return SLUG.test(slug) ? slug : null;
+}
+
+/**
+ * Omega Software runs an AngularJS front end over a Laravel back end: the page
+ * is an empty template and the menu arrives from a POST that is CSRF-guarded.
+ *
+ * So we do exactly what the page's own code does — load it for the session and
+ * `XSRF-TOKEN` cookie, then send that token back in the `X-XSRF-TOKEN` header.
+ * Without the header the endpoint answers 500 with no explanation, which is
+ * what made this platform look unreadable.
+ */
+async function adaptOmega(origin: string, slug: string): Promise<StorefrontResult> {
+  let jar: Map<string, string>;
+  try {
+    const page = await fetch(`${origin}/${slug}`, {
+      headers: { "User-Agent": BROWSER_UA, Accept: "text/html" },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      cache: "no-store",
+    });
+    jar = readCookies(page);
+    await page.body?.cancel();
+  } catch (error) {
+    console.error("[storefront] omega page fetch failed:", error);
+    throw new MenuSourceError("Couldn't open that menu. Try again in a moment.", 502);
+  }
+
+  const token = jar.get("XSRF-TOKEN");
+  if (!token) {
+    throw new MenuSourceError("That menu didn't let us in. Upload the menu file instead.", 502);
+  }
+
+  const cookieHeader = [...jar.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
+
+  let payload: Record<string, unknown>;
+  try {
+    const response = await fetch(`${origin}/getRestaurantMenu`, {
+      method: "POST",
+      headers: {
+        "User-Agent": BROWSER_UA,
+        "Content-Type": "application/json;charset=utf-8",
+        Accept: "application/json, text/plain, */*",
+        // Laravel accepts the encrypted cookie value here; Angular sends it
+        // url-decoded, and so must we.
+        "X-XSRF-TOKEN": decodeURIComponent(token),
+        "X-Requested-With": "XMLHttpRequest",
+        Cookie: cookieHeader,
+        Referer: `${origin}/${slug}`,
+      },
+      body: JSON.stringify({ customerid: slug, has_table: 0 }),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new MenuSourceError(
+        `That menu couldn't be read (${response.status}). Upload the menu file instead.`,
+        502,
+      );
+    }
+    payload = asRecord(await response.json());
+  } catch (error) {
+    if (error instanceof MenuSourceError) throw error;
+    console.error("[storefront] omega menu fetch failed:", error);
+    throw new MenuSourceError("Couldn't reach that menu. Try again in a moment.", 502);
+  }
+
+  const images: string[] = [];
+  const imageRefs = new Map<string, number>();
+
+  const registerImage = (raw: unknown): number | undefined => {
+    const href = text(raw);
+    if (!/^https:\/\//i.test(href)) return undefined;
+
+    const existing = imageRefs.get(href);
+    if (existing) return existing;
+
+    images.push(href);
+    imageRefs.set(href, images.length);
+    return images.length;
+  };
+
+  const arabic = ARABIC.test(JSON.stringify(payload.menu ?? ""));
+
+  const categories = asArray(payload.menu).map((rawSection) => {
+    const section = asRecord(rawSection);
+    const groups = asArray(section.groups).map((group) => asRecord(group));
+
+    const items = groups.flatMap((group) =>
+      asArray(group.items).flatMap((rawItem) => {
+        const item = asRecord(rawItem);
+        // `A*` fields are the second language slot; either can be the empty one.
+        const name = (text(item.ITEMNAME) || text(item.AITEMNAME)).replace(
+          LEADING_ITEM_NUMBER,
+          "",
+        );
+        if (!name) return [];
+
+        const description =
+          text(item.ITEMDESCRIPTION) || text(item.AITEMDESCRIPTION) || undefined;
+        const imageRef = registerImage(item.PIC);
+        const sizes = asArray(item.sizes).map((size) => asRecord(size));
+
+        if (sizes.length > 1) {
+          return sizes.map((size) => {
+            const label = sizeLabel(
+              text(size.SIZENAME) || text(size.NAME) || text(size.DESCRIPTION),
+              arabic,
+            );
+            return {
+              name: label ? `${name} - ${label}` : name,
+              description,
+              price: Number(size.PRICE) || 0,
+              imageRef,
+              isAvailable: true,
+            };
+          });
+        }
+
+        return [
+          {
+            name,
+            description,
+            price: Number(item.PRICE) || Number(sizes[0]?.PRICE) || 0,
+            imageRef,
+            isAvailable: true,
+          },
+        ];
+      }),
+    );
+
+    const name =
+      text(section.DESCRIPTION) ||
+      text(section.ADESCRIPTION) ||
+      text(groups[0]?.GROUPNAME) ||
+      "";
+
+    return { name, items };
+  });
+
+  const withItems = categories.filter((category) => category.items.length > 0);
+  if (withItems.length === 0) {
+    throw new MenuSourceError("That menu has no dishes in it yet.", 422);
+  }
+
+  const branch = asRecord(payload.branch);
+  const label = text(branch.BARANCHNAME) || text(branch.OTHERNAME) || slug;
+
+  return { kind: "menu", label, data: { categories: withItems }, images };
+}
+
 /**
  * Import a menu straight from its platform, when the link points at one we
  * know. Returns null for every other link, which then goes through the
@@ -370,6 +558,9 @@ export async function tryStorefrontMenu(rawUrl: string): Promise<StorefrontResul
 
   const uri = qrfyUri(url);
   if (uri) return adaptQrfy(uri);
+
+  const omega = omegaSlug(url);
+  if (omega) return adaptOmega(url.origin, omega);
 
   return null;
 }
