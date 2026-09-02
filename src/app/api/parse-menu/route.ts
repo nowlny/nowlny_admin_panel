@@ -19,11 +19,17 @@ import { tryStorefrontMenu } from "../../../lib/storefrontAdapters";
 /** Vercel/Next serverless cap. Multi-page PDFs regularly need ~30-45s. */
 export const maxDuration = 60;
 
-/** Leave ~5s of headroom under `maxDuration` so we can return a real message. */
+/** Mirrors `maxDuration`, in milliseconds, for the budget maths below. */
+const TOTAL_BUDGET_MS = 60_000;
+
+/** Leave ~5s of headroom so a timeout still returns a real message. */
+const RESPONSE_HEADROOM_MS = 5_000;
+
+/** Even a fast source shouldn't hand the model an unbounded wait. */
 const UPSTREAM_TIMEOUT_MS = 55_000;
 
-/** Fetching the link has already spent part of the budget by the time we call out. */
-const UPSTREAM_TIMEOUT_AFTER_FETCH_MS = 38_000;
+/** Below this the call cannot plausibly finish, so fail fast and say why. */
+const MIN_UPSTREAM_TIMEOUT_MS = 10_000;
 
 /** Photo phrases are a nice-to-have — never let them hold up the import. */
 const IMAGE_QUERY_TIMEOUT_MS = 20_000;
@@ -125,6 +131,11 @@ ${names.map((name, index) => `${index + 1}. ${name}`).join("\n")}`;
 }
 
 export async function POST(request: Request) {
+  // Fetching a link or a QR menu's pages spends part of the budget before we
+  // ever reach the model, and how much varies wildly — so the model gets
+  // whatever is actually left rather than a guessed constant.
+  const startedAt = Date.now();
+
   // Gate first — before reading the body, so an unauthenticated caller can't
   // even make us buffer a multi-megabyte upload.
   const authHeader = request.headers.get("authorization") ?? "";
@@ -147,9 +158,21 @@ export async function POST(request: Request) {
       );
     }
 
+    /** Page text handed to the model when the menu is a web page, not a file. */
+    let pageText = "";
+    /** `pageText` is the page's own JSON rather than readable prose. */
+    let structuredText = false;
+    /** Photos found on the linked page, referenced from `pageText` by number. */
+    let sourceImages: string[] = [];
+
     // A link to a storefront platform we can read directly never reaches the
-    // model: its own API returns the menu exactly, dish for dish and price for
-    // price, which no amount of prompting can match.
+    // model as a web page: its own API gives us either the menu exactly, or
+    // the menu's page images to read, or the address it really points at.
+    let linkToFetch = link;
+    /** Menu pages to OCR: one uploaded file, or every page of a QR menu. */
+    let documents: { mimeType: string; data: string }[] = [];
+    let sourceLabel = "";
+
     if (link) {
       let adapted;
       try {
@@ -164,7 +187,7 @@ export async function POST(request: Request) {
         throw adapterError;
       }
 
-      if (adapted) {
+      if (adapted?.kind === "menu") {
         const menu = normalizeParsedMenu(adapted.data, adapted.images);
         const photoless = menu.categories
           .flatMap((category) => category.items)
@@ -186,6 +209,21 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ ...menu, label: adapted.label });
       }
+
+      if (adapted?.kind === "documents") {
+        documents = adapted.documents.map((page) => ({
+          mimeType: page.mimeType,
+          data: page.base64,
+        }));
+        sourceLabel = adapted.label;
+      } else if (adapted?.kind === "text") {
+        pageText = adapted.text;
+        structuredText = true;
+        sourceLabel = adapted.label;
+      } else if (adapted?.kind === "follow") {
+        // The QR was only a redirect — scan what it actually points at.
+        linkToFetch = adapted.url;
+      }
     }
 
     // Resolved before anything is fetched — there is no point pulling down a
@@ -201,20 +239,20 @@ export async function POST(request: Request) {
       );
     }
 
-    // What ends up going to Gemini: a document to look at, or page text to read.
-    let document: { mimeType: string; data: string } | null = null;
-    let pageText = "";
-    /** Photos found on the linked page, referenced from `pageText` by number. */
-    let sourceImages: string[] = [];
+    // Skipped entirely when a platform adapter already produced the pages or
+    // the text — the upload branch below is only for when there is no link.
+    const needsSource = documents.length === 0 && !pageText;
 
-    if (link) {
+    if (needsSource && linkToFetch) {
       try {
-        const source = await fetchMenuSource(link);
+        const source = await fetchMenuSource(linkToFetch);
+        sourceLabel = sourceLabel || source.label;
         if (source.kind === "binary") {
-          document = { mimeType: source.mimeType, data: source.base64 };
+          documents = [{ mimeType: source.mimeType, data: source.base64 }];
         } else {
           pageText = source.text;
           sourceImages = source.images;
+          structuredText = source.structured === true;
         }
       } catch (sourceError) {
         if (sourceError instanceof MenuSourceError) {
@@ -225,7 +263,7 @@ export async function POST(request: Request) {
         }
         throw sourceError;
       }
-    } else {
+    } else if (needsSource) {
       if (typeof fileData !== "string") {
         return NextResponse.json(
           { error: "No file data received in request." },
@@ -243,21 +281,30 @@ export async function POST(request: Request) {
         );
       }
 
-      document = { mimeType: mimeType || "image/png", data: fileData };
+      documents = [{ mimeType: mimeType || "image/png", data: fileData }];
     }
 
     // Prepare prompt instructing Gemini to do structural OCR extraction and
     // return structured JSON. The language rules are the load-bearing part:
     // without them the model quietly translates Arabic menus into English,
     // which then goes straight into the storefront customers read.
-    const intro = document
-      ? `Analyze the attached menu document (which could be an image of a flyer, a PDF menu, or a spreadsheet).`
-      : `Analyze the menu page text at the end of this prompt. It was extracted from a restaurant's website, so it also contains navigation, opening hours and footer noise — ignore everything that is not a menu item.`;
+    const intro = documents.length
+      ? documents.length > 1
+        ? `The ${documents.length} attached images are consecutive pages of ONE menu. Read them all and merge them into a single set of categories — never repeat a category once per page.`
+        : `Analyze the attached menu document (which could be an image of a flyer, a PDF menu, or a spreadsheet).`
+      : structuredText
+        ? `The text at the end of this prompt is raw JSON taken out of a restaurant website's own page data. Walk it and pull out the menu, ignoring routing, analytics, theme and configuration keys.`
+        : `Analyze the menu page text at the end of this prompt. It was extracted from a restaurant's website, so it also contains navigation, opening hours and footer noise — ignore everything that is not a menu item.`;
 
     // Pictures only exist when the menu came from a web page, and the model
     // refers to them by number: asked for the URL itself it returns a
     // plausible-looking but subtly wrong CDN address often enough to matter.
-    const imageRule = sourceImages.length
+    const imageRule = structuredText
+      ? `
+      Dish photo requirement:
+      15. The JSON often holds an image URL for a dish. When it does, copy that absolute https URL VERBATIM into that item's "image" field — do not shorten it, guess it, or build it out of an id.
+      16. Leave "image" out entirely when the JSON has no picture for that dish. Never reuse another dish's URL.`
+      : sourceImages.length
       ? `
       Dish photo requirement:
       15. The page text contains markers like [IMAGE#4: grilled chicken]. When a marker clearly belongs to an item, set that item's "imageRef" to the marker's number (4 in that example).
@@ -304,7 +351,11 @@ ${imageRule}
                 "price": 12.99,
                 "category": "Category Name, in the menu's language",
                 "imageQuery": "english stock photo search phrase"${
-                  sourceImages.length ? ',\n                "imageRef": 4' : ""
+                  structuredText
+                    ? ',\n                "image": "https://…"'
+                    : sourceImages.length
+                      ? ',\n                "imageRef": 4'
+                      : ""
                 }
               }
             ]
@@ -313,14 +364,38 @@ ${imageRule}
       }
     `;
 
+    const upstreamTimeout = Math.min(
+      UPSTREAM_TIMEOUT_MS,
+      TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS,
+    );
+
+    if (upstreamTimeout < MIN_UPSTREAM_TIMEOUT_MS) {
+      return NextResponse.json(
+        {
+          error:
+            "Reading that menu took so long there was no time left to scan it. Try again, or upload the menu file instead.",
+        },
+        { status: 504 },
+      );
+    }
+
     // Advice for a dead end differs by where the menu came from.
     const retryHint = link
       ? "Try a link that opens the menu directly, or upload the menu file instead."
       : "Try a clearer photo, or a text-based PDF instead of a scan.";
 
-    const parts = document
-      ? [{ text: prompt }, { inlineData: { mimeType: document.mimeType, data: document.data } }]
-      : [{ text: `${prompt}\n\n--- MENU PAGE TEXT ---\n${pageText}` }];
+    const parts = documents.length
+      ? [
+          { text: prompt },
+          ...documents.map((page) => ({
+            inlineData: { mimeType: page.mimeType, data: page.data },
+          })),
+        ]
+      : [
+          {
+            text: `${prompt}\n\n--- ${structuredText ? "MENU PAGE DATA (JSON)" : "MENU PAGE TEXT"} ---\n${pageText}`,
+          },
+        ];
 
     // Construct request payload for Gemini Multimodal API (supports images, pdfs, and excels)
     const geminiPayload = {
@@ -343,9 +418,7 @@ ${imageRule}
         body: JSON.stringify(geminiPayload),
         // Without this a large PDF hangs until the platform kills the function
         // with an opaque 504 and no JSON body for the client to read.
-        signal: AbortSignal.timeout(
-          link ? UPSTREAM_TIMEOUT_AFTER_FETCH_MS : UPSTREAM_TIMEOUT_MS,
-        )
+        signal: AbortSignal.timeout(upstreamTimeout)
       });
     } catch (fetchError: any) {
       const aborted =
@@ -423,7 +496,10 @@ ${imageRule}
       }
     }
 
-    return NextResponse.json(normalizeParsedMenu(parsedMenu, sourceImages));
+    return NextResponse.json({
+      ...normalizeParsedMenu(parsedMenu, sourceImages),
+      ...(sourceLabel ? { label: sourceLabel } : {}),
+    });
 
   } catch (error: any) {
     // `error.message` here can be a stack-revealing internal string.

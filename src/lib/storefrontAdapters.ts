@@ -22,6 +22,19 @@ const MAX_JSON_BYTES = 8 * 1024 * 1024;
 /** Slugs are path segments on a host we hard-code, so keep them boring. */
 const SLUG = /^[a-z0-9][a-z0-9._-]{0,80}$/i;
 
+/**
+ * What a platform can give us, best first:
+ *  - `menu`      the dishes themselves, mapped field for field (no model needed)
+ *  - `documents` page images to OCR, e.g. a QR menu that is really 11 posters
+ *  - `text`      the platform's own JSON, for the model to read
+ *  - `follow`    the QR just points somewhere else; scan that instead
+ */
+export type StorefrontResult =
+  | ({ kind: "menu" } & AdaptedMenu)
+  | { kind: "documents"; label: string; documents: { mimeType: string; base64: string }[] }
+  | { kind: "text"; label: string; text: string }
+  | { kind: "follow"; url: string };
+
 /** Shaped exactly like the model's own output, so it normalizes identically. */
 export interface AdaptedMenu {
   /** Store name, for the "Source:" line in the preview. */
@@ -223,12 +236,128 @@ async function adaptStorec(slug: string): Promise<AdaptedMenu> {
   return { label: text(details.name) || slug, data: { categories }, images };
 }
 
+
+/** Menu posters are read at full size; OCR on a 400px thumbnail loses prices. */
+const QRFY_IMAGE_BASE = "https://img.qrfy.com/img/original/";
+
+/** A QR menu is a handful of posters. More than this is not a menu. */
+const MAX_QRFY_IMAGES = 15;
+
+/** Total base64 across all pages, keeping the upstream request sane. */
+const MAX_QRFY_TOTAL_BYTES = 9 * 1024 * 1024;
+
+/** qrfy.io — `https://qrfy.io/p/<uri>`. */
+function qrfyUri(url: URL): string | null {
+  if (!/(^|\.)qrfy\.(io|com)$/.test(url.hostname)) return null;
+
+  const segments = url.pathname.split("/").filter(Boolean);
+  const uri =
+    (segments[0] === "p" || segments[0] === "preview" || segments[0] === "r") && segments[1]
+      ? segments[1]
+      : null;
+
+  return uri && SLUG.test(uri) ? uri : null;
+}
+
+async function fetchImage(url: string): Promise<{ mimeType: string; base64: string } | null> {
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+
+    const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim();
+    if (!contentType.startsWith("image/")) return null;
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return { mimeType: contentType, base64: bytes.toString("base64") };
+  } catch (error) {
+    console.warn("[storefront] page image failed:", error);
+    return null;
+  }
+}
+
+/**
+ * qrfy QR codes are a wrapper, not a menu format: the same link can carry a
+ * gallery of menu posters, a structured payload, or just a redirect. Each ends
+ * up on the branch that can actually read it.
+ */
+async function adaptQrfy(uri: string): Promise<StorefrontResult> {
+  let payload: Record<string, unknown>;
+  try {
+    const response = await fetch(`https://qrfy.io/api/qr/uri/${uri}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: "{}",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      cache: "no-store",
+    });
+    if (response.status === 404) {
+      throw new MenuSourceError("That QR menu doesn't exist any more.", 404);
+    }
+    if (!response.ok) {
+      throw new MenuSourceError(`That QR menu couldn't be opened (${response.status}).`, 502);
+    }
+    payload = asRecord(await response.json());
+  } catch (error) {
+    if (error instanceof MenuSourceError) throw error;
+    console.error("[storefront] qrfy fetch failed:", error);
+    throw new MenuSourceError("Couldn't reach that QR menu. Try again in a moment.", 502);
+  }
+
+  if (payload.accessPassword === true) {
+    throw new MenuSourceError("That QR menu is password protected, so it can't be scanned.", 422);
+  }
+
+  const data = asRecord(payload.data);
+  const label = text(payload.name) || text(data.title) || uri;
+
+  const files = asArray(data.images)
+    .map((image) => text(typeof image === "string" ? image : asRecord(image).file))
+    .filter(Boolean)
+    .slice(0, MAX_QRFY_IMAGES);
+
+  if (files.length > 0) {
+    const pages = await Promise.all(
+      files.map((file) => fetchImage(`${QRFY_IMAGE_BASE}${encodeURIComponent(file)}`)),
+    );
+
+    const documents: { mimeType: string; base64: string }[] = [];
+    let total = 0;
+    for (const page of pages) {
+      if (!page) continue;
+      total += page.base64.length;
+      if (total > MAX_QRFY_TOTAL_BYTES) break;
+      documents.push(page);
+    }
+
+    if (documents.length === 0) {
+      throw new MenuSourceError("That QR menu's pages couldn't be downloaded.", 502);
+    }
+    return { kind: "documents", label, documents };
+  }
+
+  // A QR that is only a redirect — scan whatever it actually points at.
+  const target = text(data.url) || text(payload.url);
+  if (/^https?:\/\//i.test(target)) return { kind: "follow", url: target };
+
+  // Anything else: hand the platform's own payload to the model.
+  const json = JSON.stringify(data);
+  if (json.length > 40) return { kind: "text", label, text: json };
+
+  throw new MenuSourceError(
+    "That QR code doesn't hold a menu we can read. Upload the menu file instead.",
+    422,
+  );
+}
+
 /**
  * Import a menu straight from its platform, when the link points at one we
  * know. Returns null for every other link, which then goes through the
  * fetch-and-let-the-model-read-it path.
  */
-export async function tryStorefrontMenu(rawUrl: string): Promise<AdaptedMenu | null> {
+export async function tryStorefrontMenu(rawUrl: string): Promise<StorefrontResult | null> {
   let url: URL;
   try {
     url = new URL(rawUrl.trim());
@@ -237,7 +366,10 @@ export async function tryStorefrontMenu(rawUrl: string): Promise<AdaptedMenu | n
   }
 
   const slug = storecSlug(url);
-  if (slug) return adaptStorec(slug);
+  if (slug) return { kind: "menu", ...(await adaptStorec(slug)) };
+
+  const uri = qrfyUri(url);
+  if (uri) return adaptQrfy(uri);
 
   return null;
 }

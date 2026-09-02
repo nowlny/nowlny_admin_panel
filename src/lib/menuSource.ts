@@ -45,6 +45,12 @@ export type MenuSource =
       text: string;
       /** Absolute image URLs, referenced from `text` as `[IMAGE#1]`, `[IMAGE#2]`… */
       images: string[];
+      /**
+       * True when `text` is raw JSON lifted out of the page's own script tags
+       * rather than readable prose — the model needs telling, and it can take
+       * image URLs straight out of it.
+       */
+      structured?: boolean;
     };
 
 /** Carries a message that is safe to show the operator, unlike a raw fetch error. */
@@ -204,6 +210,89 @@ function decodeEntities(text: string): string {
 function attribute(tag: string, name: string): string {
   const match = tag.match(new RegExp(`${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"));
   return (match?.[2] ?? match?.[3] ?? match?.[4] ?? "").trim();
+}
+
+/** Framework state blobs worth reading when the visible page is empty. */
+const STATE_ASSIGNMENT =
+  /(?:window\.)?(?:__NUXT__|__INITIAL_STATE__|__INITIAL_DATA__|__remixContext|__APOLLO_STATE__|__PRELOADED_STATE__)\s*=\s*/;
+
+/** Total embedded JSON handed on. Menus are small; app bundles are not. */
+const MAX_EMBEDDED_CHARS = 60_000;
+
+/**
+ * Walk a balanced JSON object starting at `start`, respecting strings and
+ * escapes — `indexOf("}")` finds the wrong brace on anything real.
+ */
+function balancedObject(source: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+
+    if (char === '"') inString = true;
+    else if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Pull the page's own data out of its `<script>` tags.
+ *
+ * A single-page app renders an empty shell, but plenty of them still ship the
+ * whole menu in `__NEXT_DATA__`, a schema.org block or a state assignment —
+ * stripping scripts before reading the text throws exactly that away. Only
+ * blobs that actually parse as JSON are kept, so a minified bundle or a
+ * `__NUXT__` IIFE is skipped rather than handed on as noise.
+ */
+function extractEmbeddedJson(html: string): string[] {
+  const blobs: string[] = [];
+  let budget = MAX_EMBEDDED_CHARS;
+
+  for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    if (budget <= 0) break;
+
+    const attributes = match[1];
+    const body = match[2];
+    let candidate: string | null = null;
+
+    if (/application\/ld\+json/i.test(attributes) || /__NEXT_DATA__/.test(attributes)) {
+      candidate = body.trim();
+    } else {
+      const assignment = body.match(STATE_ASSIGNMENT);
+      if (assignment?.index !== undefined) {
+        const brace = body.indexOf("{", assignment.index + assignment[0].length - 1);
+        if (brace >= 0) candidate = balancedObject(body, brace);
+      }
+    }
+
+    if (!candidate) continue;
+
+    try {
+      JSON.parse(candidate); // proves it is data, not code
+    } catch {
+      continue;
+    }
+
+    const kept = candidate.slice(0, budget);
+    budget -= kept.length;
+    blobs.push(kept);
+  }
+
+  return blobs;
 }
 
 /** Logos, icons and tracking pixels are never dish photos. */
@@ -381,8 +470,17 @@ export async function fetchMenuSource(rawUrl: string): Promise<MenuSource> {
       : { text: html.slice(0, MAX_TEXT_CHARS).trim(), images: [] as string[] };
 
     if (text.length < MIN_TEXT_CHARS) {
+      // The page painted nothing readable — but a single-page app often still
+      // ships the whole menu as data in its own script tags.
+      const embedded = isHtml ? extractEmbeddedJson(html) : [];
+      const joined = embedded.join("\n\n");
+
+      if (joined.length >= MIN_TEXT_CHARS) {
+        return { kind: "text", label, text: joined, images, structured: true };
+      }
+
       throw new MenuSourceError(
-        "That page's menu is drawn by JavaScript, so there was no text to read. Open it in a browser, save it as a PDF or screenshot, and upload that instead.",
+        `That page's menu is drawn by JavaScript, so there was no text to read (${url.hostname} sent an empty page). Open it in a browser, save it as a PDF or screenshot, and upload that instead.`,
         422,
       );
     }
