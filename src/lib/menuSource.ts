@@ -24,6 +24,33 @@ const MAX_HTML_BYTES = 3 * 1024 * 1024;
 /** Trimmed page text handed to the model. Well inside the context window. */
 const MAX_TEXT_CHARS = 80_000;
 
+/**
+ * Structured payloads get far more room than prose: a React Server Components
+ * stream carries the whole menu as JSON plus a lot of framework noise, and
+ * truncating at 80k routinely cuts the menu in half. 400k characters is
+ * roughly 100k tokens — comfortable for the model we call.
+ */
+const MAX_STRUCTURED_CHARS = 400_000;
+
+/** Discovery is only worth doing while there is still time to use the result. */
+const DISCOVERY_BUDGET_MS = 22_000;
+
+/** Shorter than a first fetch — these are speculative. */
+const DISCOVERY_FETCH_TIMEOUT_MS = 10_000;
+
+/** Paths that look like a menu, in the languages this admin sees. */
+const MENU_PATH = /(menu|food|order|dishes|carte|eat|meals|قائمة|منيو|طعام|وجبات)/i;
+
+/**
+ * Prices are what separates a menu from an "about us" page: a decimal amount,
+ * a currency, or a price field in a JSON payload.
+ */
+const PRICE_HINT =
+  /(?:"price"\s*:|\d[\d.,]{0,9}\s*(?:\$|€|£|usd|lbp|l\.l|ل\.ل|ر\.س|ج\.م|aed|sar|egp|tl)|\b\d+[.,]\d{2}(?!\d))/gi;
+
+/** How many price-ish hits before we believe a page is really a menu. */
+const MENU_CONFIDENCE = 4;
+
 /** A page yielding less than this rendered nothing useful — almost always JS-only. */
 const MIN_TEXT_CHARS = 200;
 
@@ -33,9 +60,14 @@ const MAX_IMAGES = 80;
 /** Redirect chains longer than this are a loop or a tracker, not a menu. */
 const MAX_REDIRECTS = 4;
 
-/** Some sites 403 anything that doesn't look like a browser. */
+/**
+ * Plenty of restaurant sites serve a 404 or a 403 to anything that doesn't
+ * look like a browser, so the string leads with a normal Chrome UA and still
+ * says who we are on the end.
+ */
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; NowlnyMenuImporter/1.0; +https://nowlny.com)";
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) " +
+  "Chrome/131.0.0.0 Safari/537.36 NowlnyMenuImporter/1.0 (+https://nowlny.com)";
 
 export type MenuSource =
   | { kind: "binary"; label: string; mimeType: string; base64: string }
@@ -378,10 +410,110 @@ function htmlToMenuText(html: string, baseUrl: URL): { text: string; images: str
 }
 
 /**
+ * Decode a Next.js App Router page's RSC stream.
+ *
+ * App Router pages routinely render an empty body and ship everything through
+ * `self.__next_f.push([1, "…"])` chunks instead — for a restaurant site that
+ * stream holds the entire menu as JSON. The chunks are JS string literals, so
+ * `JSON.parse` on each one un-escapes it; concatenated they are the stream.
+ */
+function extractFlightStream(html: string): string {
+  const chunks: string[] = [];
+
+  for (const match of html.matchAll(/self\.__next_f\.push\(\[\d+\s*,\s*("(?:[^"\\]|\\.)*")/g)) {
+    try {
+      const decoded: unknown = JSON.parse(match[1]);
+      if (typeof decoded === "string") chunks.push(decoded);
+    } catch {
+      // A chunk we can't decode is skipped; the rest of the stream still reads.
+    }
+  }
+
+  return chunks.join("");
+}
+
+/** Does this text actually look like a menu, or just a page from the site? */
+function looksLikeMenu(text: string): boolean {
+  let hits = 0;
+  PRICE_HINT.lastIndex = 0;
+  while (PRICE_HINT.exec(text) !== null) {
+    hits += 1;
+    if (hits >= MENU_CONFIDENCE) {
+      PRICE_HINT.lastIndex = 0;
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Find the site's menu page when the operator pasted some other page of it.
+ *
+ * People paste the link they have — the home page, "about us", a QR landing
+ * page. Rather than send them away to go and find the right one, follow the
+ * site's own signposts: its sitemap, and its own navigation links.
+ */
+async function discoverMenuUrls(html: string, pageUrl: URL): Promise<string[]> {
+  const candidates = new Map<string, number>();
+
+  const consider = (href: string) => {
+    let candidate: URL;
+    try {
+      candidate = new URL(href, pageUrl);
+    } catch {
+      return;
+    }
+    if (candidate.hostname !== pageUrl.hostname) return;
+    if (candidate.protocol !== "https:" && candidate.protocol !== "http:") return;
+    if (!MENU_PATH.test(candidate.pathname)) return;
+
+    candidate.hash = "";
+    const href2 = candidate.href;
+    if (href2 === pageUrl.href || candidates.has(href2)) return;
+
+    // A delivery menu is the one this admin is importing into; after that,
+    // prefer the shortest path — "/menu" over "/menu/categories/dine_in".
+    const score =
+      (/deliver|توصيل/i.test(candidate.pathname) ? -100 : 0) + candidate.pathname.length;
+    candidates.set(href2, score);
+  };
+
+  for (const match of html.matchAll(/<a\b[^>]*href\s*=\s*("([^"]*)"|'([^']*)')/gi)) {
+    consider(decodeEntities(match[2] ?? match[3] ?? ""));
+  }
+
+  try {
+    const sitemap = await fetch(new URL("/sitemap.xml", pageUrl), {
+      headers: { "User-Agent": USER_AGENT },
+      signal: AbortSignal.timeout(DISCOVERY_FETCH_TIMEOUT_MS),
+      cache: "no-store",
+    });
+    if (sitemap.ok) {
+      const xml = (await sitemap.text()).slice(0, MAX_HTML_BYTES);
+      for (const match of xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)) {
+        consider(match[1]);
+      }
+    } else {
+      await sitemap.body?.cancel();
+    }
+  } catch {
+    // No sitemap, or too slow — the in-page links may still be enough.
+  }
+
+  return [...candidates.entries()].sort((a, b) => a[1] - b[1]).map(([href]) => href);
+}
+
+/**
  * Fetch whatever the link points at and return it in a form the scanner can
  * send to Gemini: PDFs and photos go up as-is, web pages go up as text.
  */
-export async function fetchMenuSource(rawUrl: string): Promise<MenuSource> {
+export async function fetchMenuSource(
+  rawUrl: string,
+  /** Set on a discovery follow-up, so a site can't send us round in circles. */
+  discovered = false,
+  /** Wall-clock cut-off for looking around the site for a better page. */
+  deadline = Date.now() + DISCOVERY_BUDGET_MS,
+): Promise<MenuSource> {
   let url = await assertPublicUrl(rawUrl);
   let response: Response | null = null;
 
@@ -469,23 +601,44 @@ export async function fetchMenuSource(rawUrl: string): Promise<MenuSource> {
       ? htmlToMenuText(html, url)
       : { text: html.slice(0, MAX_TEXT_CHARS).trim(), images: [] as string[] };
 
-    if (text.length < MIN_TEXT_CHARS) {
-      // The page painted nothing readable — but a single-page app often still
-      // ships the whole menu as data in its own script tags.
-      const embedded = isHtml ? extractEmbeddedJson(html) : [];
-      const joined = embedded.join("\n\n");
+    // Best reading of this page, in preference order: what it renders, then
+    // the data it ships without rendering.
+    let best: MenuSource | null =
+      text.length >= MIN_TEXT_CHARS ? { kind: "text", label, text, images } : null;
 
-      if (joined.length >= MIN_TEXT_CHARS) {
-        return { kind: "text", label, text: joined, images, structured: true };
+    if (isHtml && (!best || !looksLikeMenu(text))) {
+      // A single-page app paints nothing but still ships the whole menu — in
+      // its script tags, or in a React Server Components stream.
+      const payload = [...extractEmbeddedJson(html), extractFlightStream(html)]
+        .filter((blob) => blob.length > 0)
+        .join("\n\n")
+        .slice(0, MAX_STRUCTURED_CHARS);
+
+      if (payload.length >= MIN_TEXT_CHARS && (looksLikeMenu(payload) || !best)) {
+        best = { kind: "text", label, text: payload, images, structured: true };
       }
-
-      throw new MenuSourceError(
-        `That page's menu is drawn by JavaScript, so there was no text to read (${url.hostname} sent an empty page). Open it in a browser, save it as a PDF or screenshot, and upload that instead.`,
-        422,
-      );
     }
 
-    return { kind: "text", label, text, images };
+    // Still not a menu? The operator probably pasted the home page or an
+    // "about us" — ask the site itself where its menu lives.
+    if (isHtml && !discovered && Date.now() < deadline && (!best || !looksLikeMenu(best.text))) {
+      for (const candidate of (await discoverMenuUrls(html, url)).slice(0, 2)) {
+        if (Date.now() >= deadline) break;
+        try {
+          const found = await fetchMenuSource(candidate, true, deadline);
+          if (found.kind === "binary" || looksLikeMenu(found.text)) return found;
+        } catch {
+          // That page didn't work out either — try the next signpost.
+        }
+      }
+    }
+
+    if (best) return best;
+
+    throw new MenuSourceError(
+      `That page's menu is drawn by JavaScript, so there was no text to read (${url.hostname} sent an empty page). Open it in a browser, save it as a PDF or screenshot, and upload that instead.`,
+      422,
+    );
   }
 
   await response.body?.cancel();
