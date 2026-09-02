@@ -40,6 +40,12 @@ interface ParsedMenuData {
   name: string;
   type: "pdf" | "excel" | "image";
   size: string;
+  /**
+   * ISO code of the language the scanner found in the file. The import keeps
+   * that language as-is — an Arabic menu imports as Arabic, an English one as
+   * English — so this is shown, not chosen.
+   */
+  language?: string;
   categories: {
     name: string;
     items: {
@@ -47,6 +53,10 @@ interface ParsedMenuData {
       description?: string;
       price: number;
       image?: string;
+      /** English search phrase the scanner wrote for the photo lookup. */
+      imageQuery?: string;
+      /** Which library the photo came from, once one has been found. */
+      imageSource?: string;
       isAvailable: boolean;
     }[];
   }[];
@@ -71,6 +81,19 @@ export default function RestaurantMenuSection({
     }
   };
 
+  // Dishes the uploaded menu has no picture for get one looked up online.
+  const [autoFindImages, setAutoFindImages] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem("nowlny_menu_autoimages") !== "off";
+  });
+
+  const handleToggleAutoImages = (enabled: boolean) => {
+    setAutoFindImages(enabled);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("nowlny_menu_autoimages", enabled ? "on" : "off");
+    }
+  };
+
   // Parsing tool states
   const [customFileName, setCustomFileName] = useState<string>("");
   const [isParsing, setIsParsing] = useState(false);
@@ -78,6 +101,13 @@ export default function RestaurantMenuSection({
   const [parseProgress, setParseProgress] = useState(0);
   const [parsedData, setParsedData] = useState<ParsedMenuData | null>(null);
   const [parseSuccess, setParseSuccess] = useState(false);
+  const [isFindingImages, setIsFindingImages] = useState(false);
+  const [imagesError, setImagesError] = useState<string | null>(null);
+  /**
+   * Photo lookup finishes after the preview is already on screen, so a result
+   * from a previous file must not be written over a newer scan's dishes.
+   */
+  const scanToken = React.useRef(0);
 
   // Custom states for premium error handling and Toast notifications
   const [parsingError, setParsingError] = useState<string | null>(null);
@@ -206,6 +236,88 @@ export default function RestaurantMenuSection({
 
   const filteredItems = getFilteredItems();
 
+  // Flattened preview items — the photo counter and the lookup share this order.
+  const parsedItems = parsedData?.categories.flatMap((cat) => cat.items) ?? [];
+  const parsedItemsWithImage = parsedItems.filter((item) => Boolean(item.image)).length;
+
+  /** Which language the scanner found in the file, and therefore imported in. */
+  const detectedLanguageLabel = (code?: string) => {
+    if (!code) return null;
+    if (code.startsWith("ar")) return t("rmenu.lang_ar");
+    if (code.startsWith("en")) return t("rmenu.lang_en");
+    return code.toUpperCase();
+  };
+
+  /**
+   * Fill in a stock photo for every parsed dish that arrived without one.
+   *
+   * Deliberately a second request, fired once the preview is already visible:
+   * the operator reads the extracted dishes straight away and the pictures
+   * drop in behind them, instead of the scan looking stuck while a handful of
+   * photo libraries are queried.
+   */
+  const findMenuImages = async (data: ParsedMenuData, token: number) => {
+    // `null` holds the slot of an item that already has a picture, so the
+    // response stays aligned with the flattened item order below.
+    const queries = data.categories.flatMap((cat) =>
+      cat.items.map((item) => (item.image ? null : item.imageQuery || item.name)),
+    );
+    if (queries.every((query) => query === null)) return;
+
+    setIsFindingImages(true);
+    setImagesError(null);
+
+    try {
+      const authToken =
+        typeof window !== "undefined" ? localStorage.getItem("token") : null;
+
+      const response = await fetch("/api/menu-images", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+        body: JSON.stringify({ queries }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody.error || t("rmenu.images_failed"));
+      }
+
+      const { images } = await response.json();
+      if (scanToken.current !== token) return; // a newer scan owns the preview now
+
+      setParsedData((prev) => {
+        if (!prev) return prev;
+        let cursor = 0;
+        return {
+          ...prev,
+          categories: prev.categories.map((cat) => ({
+            ...cat,
+            items: cat.items.map((item) => {
+              const found = images?.[cursor++];
+              if (item.image || !found?.url) return item;
+              return { ...item, image: found.url, imageSource: found.source };
+            }),
+          })),
+        };
+      });
+    } catch (err: any) {
+      if (scanToken.current !== token) return;
+      // Non-fatal: the dishes still import, just without pictures.
+      setImagesError(err?.message || t("rmenu.images_failed"));
+    } finally {
+      if (scanToken.current === token) setIsFindingImages(false);
+    }
+  };
+
+  const handleFindImagesNow = () => {
+    if (parsedData && !isFindingImages) {
+      void findMenuImages(parsedData, scanToken.current);
+    }
+  };
+
   // Real Google Gemini 1.5 Flash API scanner
   const runLiveGeminiScan = async (
     fileName: string,
@@ -213,12 +325,18 @@ export default function RestaurantMenuSection({
     fileMime: string,
     fileSize: string,
   ) => {
+    // Invalidates any photo lookup still in flight for the previous file.
+    scanToken.current += 1;
+    const token = scanToken.current;
+
     setIsParsing(true);
     setParseProgress(10);
     setParsingStep("Establishing bridge connection to Gemini AI...");
     setParsedData(null);
     setParseSuccess(false);
     setParsingError(null);
+    setIsFindingImages(false);
+    setImagesError(null);
 
     // Dynamic scanning progress steps simulator
     let currentProgress = 10;
@@ -276,7 +394,7 @@ export default function RestaurantMenuSection({
 
       setTimeout(() => {
         setIsParsing(false);
-        setParsedData({
+        const scanned: ParsedMenuData = {
           name: fileName,
           type: fileMime.includes("pdf")
             ? "pdf"
@@ -286,10 +404,14 @@ export default function RestaurantMenuSection({
               ? "excel"
               : "image",
           size: fileSize,
+          language: parsedResult.language,
           categories: parsedResult.categories || [],
-        });
+        };
+        setParsedData(scanned);
         setParseSuccess(true);
         toast.success(t("rmenu.parsed_ok"));
+
+        if (autoFindImages) void findMenuImages(scanned, token);
       }, 500);
     } catch (err: any) {
       clearInterval(progressInterval);
@@ -761,6 +883,24 @@ t("rmenu.no_categories")}{" "}
                   . If you set <code>GEMINI_API_KEY</code> on your server
                   environment, you can leave this blank!
                 </p>
+
+                <label className="flex items-start gap-2 pt-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoFindImages}
+                    onChange={(e) => handleToggleAutoImages(e.target.checked)}
+                    className="mt-0.5 accent-purple-600"
+                  />
+                  <span>
+                    <span className="text-[10px] font-black text-zinc-700 dark:text-zinc-200 flex items-center gap-1.5">
+                      <ImageIcon className="w-3 h-3" />
+                      {t("rmenu.auto_images")}
+                    </span>
+                    <span className="block text-[9px] text-zinc-400 leading-normal mt-0.5">
+                      {t("rmenu.auto_images_hint")}
+                    </span>
+                  </span>
+                </label>
               </div>
             </div>
 
@@ -834,11 +974,56 @@ t("rmenu.no_categories")}{" "}
                   </div>
                 </div>
 
-                {/* Item count is real; the old "Confidence: 98%" was a literal
-                    that /api/parse-menu never returns. */}
-                <p className="text-[10px] font-black text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/15 shrink-0">
-                  {parsedData.categories.reduce((n, c) => n + c.items.length, 0)} dishes found
+                <div className="flex flex-col items-end gap-1 shrink-0">
+                  {/* Item count is real; the old "Confidence: 98%" was a literal
+                      that /api/parse-menu never returns. */}
+                  <p className="text-[10px] font-black text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/15">
+                    {parsedItems.length} dishes found
+                  </p>
+
+                  {/* Nothing is translated on import — this says which language
+                      the dishes below (and the live menu) will be in. */}
+                  {parsedData.language && (
+                    <p
+                      title={t("rmenu.lang_kept")}
+                      className="text-[9px] font-black text-purple-500 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/15"
+                    >
+                      {detectedLanguageLabel(parsedData.language)}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Photo lookup runs after the dishes are already listed. */}
+              <div className="flex items-center justify-between gap-2 -mt-1">
+                <p className="text-[9px] font-bold text-zinc-400 flex items-center gap-1.5 min-w-0">
+                  {isFindingImages ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin text-purple-500 shrink-0" />
+                      {t("rmenu.finding_images")}
+                    </>
+                  ) : imagesError ? (
+                    <span className="text-red-500 truncate">{imagesError}</span>
+                  ) : (
+                    <>
+                      <ImageIcon className="w-3 h-3 shrink-0" />
+                      {t("rmenu.images_summary", {
+                        count: parsedItemsWithImage,
+                        total: parsedItems.length,
+                      })}
+                    </>
+                  )}
                 </p>
+
+                {!isFindingImages && parsedItemsWithImage < parsedItems.length && (
+                  <button
+                    type="button"
+                    onClick={handleFindImagesNow}
+                    className="text-[9px] font-black text-purple-500 hover:text-purple-600 border border-purple-500/20 hover:bg-purple-500/5 px-2 py-1 rounded-lg transition-all shrink-0"
+                  >
+                    {t("rmenu.find_images_cta")}
+                  </button>
+                )}
               </div>
 
               {/* Extracted category items list (Scrollable) */}
@@ -846,8 +1031,8 @@ t("rmenu.no_categories")}{" "}
                 {parsedData.categories.map((cat, catIdx) => (
                   <div key={catIdx} className="pt-3 first:pt-0 space-y-2">
                     <h4 className="text-[10px] font-black text-purple-500 dark:text-purple-400 uppercase tracking-widest flex items-center gap-1.5">
-                      <FolderPlus className="w-3.5 h-3.5" />
-                      Category: {cat.name}
+                      <FolderPlus className="w-3.5 h-3.5 shrink-0" />
+                      <span dir="auto" className="truncate">Category: {cat.name}</span>
                     </h4>
 
                     <div className="space-y-2">
@@ -856,16 +1041,39 @@ t("rmenu.no_categories")}{" "}
                           key={itemIdx}
                           className="p-3 bg-zinc-50 dark:bg-zinc-950/40 rounded-xl border border-zinc-150 dark:border-zinc-850 flex items-start justify-between gap-3 text-xs"
                         >
-                          <div className="min-w-0">
-                            <p className="font-bold text-zinc-800 dark:text-zinc-200 truncate">
-                              {item.name}
-                            </p>
-                            <p className="text-[10px] text-zinc-400 line-clamp-1 mt-0.5">
-                              {item.description}
-                            </p>
+                          <div className="flex items-start gap-2.5 min-w-0">
+                            {/* Photos arrive a beat after the dishes do, so the
+                                slot is reserved rather than popped in later. */}
+                            {item.image ? (
+                              <img
+                                src={item.image}
+                                alt=""
+                                loading="lazy"
+                                className="w-10 h-10 rounded-lg object-cover bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shrink-0"
+                              />
+                            ) : (
+                              <span className="w-10 h-10 rounded-lg border border-dashed border-zinc-250 dark:border-zinc-800 flex items-center justify-center text-zinc-300 dark:text-zinc-700 shrink-0">
+                                {isFindingImages ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <ImageIcon className="w-3.5 h-3.5" />
+                                )}
+                              </span>
+                            )}
+
+                            {/* dir="auto" so an Arabic import reads right-to-left
+                                even while the admin UI is in English. */}
+                            <div className="min-w-0">
+                              <p dir="auto" className="font-bold text-zinc-800 dark:text-zinc-200 truncate">
+                                {item.name}
+                              </p>
+                              <p dir="auto" className="text-[10px] text-zinc-400 line-clamp-1 mt-0.5">
+                                {item.description}
+                              </p>
+                            </div>
                           </div>
                           <span className="font-extrabold text-orange-500 shrink-0">
-                            ${item.price.toFixed(2)}
+                            ${Number(item.price ?? 0).toFixed(2)}
                           </span>
                         </div>
                       ))}

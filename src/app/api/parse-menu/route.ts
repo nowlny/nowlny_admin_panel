@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { normalizeParsedMenu } from "../../../lib/menuParsing";
 
 /**
  * Gemini menu OCR proxy.
@@ -88,30 +89,48 @@ export async function POST(request: Request) {
       );
     }
 
-    // Prepare prompt instructing Gemini to do structural OCR extraction and return structured JSON
+    // Prepare prompt instructing Gemini to do structural OCR extraction and
+    // return structured JSON. The language rules are the load-bearing part:
+    // without them the model quietly translates Arabic menus into English,
+    // which then goes straight into the storefront customers read.
     const prompt = `
       You are an expert menu digitizer and OCR extractor.
       Analyze the attached menu document (which could be an image of a flyer, a PDF menu, or a spreadsheet).
       Extract all menu items, their descriptions, their prices, and group them into logical categories (e.g., Appetizers, Main Dishes, Drinks, Special Menu, Desserts).
 
-      Requirements:
-      1. Correctly parse and extract all dishes, sweet items, appetizers, and beverages.
-      2. Clean up item titles. If a price is embedded in the title, extract it separately into the 'price' field.
-      3. For 'price', extract it strictly as a floating-point number. Do not include currency symbols. If no price is found, assign 0.00.
-      4. Try to write a concise, appetizing description for each item if none is present or if it's brief.
-      5. Group items into their correct category name.
+      LANGUAGE RULES — these override every other instruction:
+      1. First detect the language the menu is actually written in, and return every human-readable string in THAT SAME language and script.
+      2. NEVER translate and NEVER transliterate. An English menu must come back in English. An Arabic menu must come back in Arabic script (e.g. "شاورما دجاج", not "Chicken Shawarma" and not "Shawarma Djaj").
+      3. This applies to item names, item descriptions AND category names alike. On an Arabic menu, invent Arabic category names such as "المقبلات", "الأطباق الرئيسية", "المشروبات", "الحلويات" — do not fall back to English headings.
+      4. Any description you write yourself must be in the menu's language too. Write Arabic descriptions in clear Modern Standard Arabic.
+      5. If the menu prints the same dish in two languages, pick the language that dominates the document and use it consistently everywhere. Do not mix languages across items.
+      6. Keep the original spelling, diacritics and punctuation of names as printed; only clean up OCR noise, embedded prices and decorative characters.
+
+      Extraction requirements:
+      7. Correctly parse and extract all dishes, sweet items, appetizers, and beverages.
+      8. Clean up item titles. If a price is embedded in the title, extract it separately into the 'price' field.
+      9. For 'price', extract it strictly as a floating-point number. Do not include currency symbols. If no price is found, assign 0.00.
+      10. Write a concise, appetizing description for each item if none is present or if it is very brief (respecting rule 4).
+      11. Group items into their correct category name.
+
+      Image search requirement:
+      12. For every item add an 'imageQuery': a short stock-photo search phrase of 2 to 5 words describing what the dish LOOKS like, so we can find a photo for items the menu has no picture for.
+      13. 'imageQuery' must ALWAYS be written in ENGLISH, even when the rest of the output is Arabic. Translate the dish for this field only (e.g. name "شاورما دجاج" -> imageQuery "chicken shawarma wrap").
+      14. Keep 'imageQuery' generic and visual: no restaurant names, no brand names, no prices, no sizes. Prefer "grilled lamb kebab skewers" over "Chef Special #4".
 
       You must respond strictly with a valid JSON matching this schema:
       {
+        "language": "ISO 639-1 code of the detected menu language, e.g. \"en\" or \"ar\"",
         "categories": [
           {
-            "name": "Category Name",
+            "name": "Category Name, in the menu's language",
             "items": [
               {
-                "name": "Item Name",
-                "description": "Item Description",
+                "name": "Item Name, in the menu's language",
+                "description": "Item Description, in the menu's language",
                 "price": 12.99,
-                "category": "Category Name"
+                "category": "Category Name, in the menu's language",
+                "imageQuery": "english stock photo search phrase"
               }
             ]
           }
@@ -240,7 +259,7 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json(parsedMenu);
+    return NextResponse.json(normalizeParsedMenu(parsedMenu));
 
   } catch (error: any) {
     // `error.message` here can be a stack-revealing internal string.
