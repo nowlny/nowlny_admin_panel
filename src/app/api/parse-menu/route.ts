@@ -16,11 +16,27 @@ import { tryStorefrontMenu } from "../../../lib/storefrontAdapters";
  * fenced off from private address space.
  */
 
-/** Vercel/Next serverless cap. Multi-page PDFs regularly need ~30-45s. */
+/**
+ * Vercel/Next serverless cap. Multi-page PDFs regularly need ~30-45s, and a
+ * whole-site menu more. Must be a literal; keep it in step with
+ * `MENU_SCAN_BUDGET_MS` if that is raised.
+ */
 export const maxDuration = 60;
 
-/** Mirrors `maxDuration`, in milliseconds, for the budget maths below. */
-const TOTAL_BUDGET_MS = 60_000;
+/**
+ * Mirrors `maxDuration`, in milliseconds, for the budget maths below.
+ *
+ * Serverless hosts cap a request at 60s on entry-level plans, but a longer
+ * ceiling elsewhere is worth using — a 250-dish menu genuinely needs it — so
+ * this follows `MENU_SCAN_BUDGET_MS` when the deployment raises the limit.
+ *
+ * Raising it alone does nothing: `maxDuration` above has to go up to match,
+ * and it must stay a literal for Next to read it at build time.
+ */
+const TOTAL_BUDGET_MS = Math.min(
+  Math.max(Number(process.env.MENU_SCAN_BUDGET_MS) || 60_000, 20_000),
+  290_000,
+);
 
 /** Leave ~5s of headroom so a timeout still returns a real message. */
 const RESPONSE_HEADROOM_MS = 5_000;
@@ -39,6 +55,12 @@ const MAX_IMAGE_QUERY_NAMES = 300;
 
 const MODEL_NAME = "gemini-2.5-flash";
 
+/** A 250-dish menu serialises to a lot of JSON — well under the model's cap. */
+const MAX_OUTPUT_TOKENS = 32_768;
+
+/** Past this much source data, the scan is fighting the clock. */
+const LARGE_MENU_CHARS = 50_000;
+
 /**
  * Base64 inflates by ~4/3, so this is roughly a 7.5 MB source document —
  * comfortably above a phone photo or a short menu PDF, and below the point
@@ -54,14 +76,20 @@ const GENERIC_ERROR =
  * contain the request URL (which carries the API key) and walls of Google JSON
  * that mean nothing to an operator.
  */
+/**
+ * A bad key comes back as 400 INVALID_ARGUMENT, not 401 — telling the operator
+ * to "upload a clearer photo" sends them chasing the wrong thing.
+ */
+function looksLikeKeyRejection(errorText: string): boolean {
+  return /api[_ ]key|api key not valid|invalid.{0,12}key/i.test(errorText);
+}
+
 function messageForUpstreamStatus(
   status: number,
   errorText: string,
   retryHint: string,
 ): string {
-  // A bad key comes back as 400 INVALID_ARGUMENT, not 401 — telling the
-  // operator to "upload a clearer photo" sends them chasing the wrong thing.
-  const keyRejected = /api[_ ]key|api key not valid|invalid.{0,12}key/i.test(errorText);
+  const keyRejected = looksLikeKeyRejection(errorText);
 
   if (status === 429)
     return "The AI scanner is rate limited right now. Wait a minute and try again.";
@@ -107,7 +135,13 @@ ${names.map((name, index) => `${index + 1}. ${name}`).join("\n")}`;
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.2,
+            // Naming dishes in English needs no deliberation, and this call
+            // sits between the operator and their menu.
+            thinkingConfig: { thinkingBudget: 0 },
+          },
         }),
         signal: AbortSignal.timeout(IMAGE_QUERY_TIMEOUT_MS),
       },
@@ -284,6 +318,11 @@ export async function POST(request: Request) {
       documents = [{ mimeType: mimeType || "image/png", data: fileData }];
     }
 
+    // On a very large menu, a written-from-scratch description per dish is the
+    // difference between finishing inside the platform's limit and not — and
+    // a payload this size almost always carries its own descriptions anyway.
+    const terseDescriptions = structuredText && pageText.length > LARGE_MENU_CHARS;
+
     // Prepare prompt instructing Gemini to do structural OCR extraction and
     // return structured JSON. The language rules are the load-bearing part:
     // without them the model quietly translates Arabic menus into English,
@@ -329,7 +368,11 @@ export async function POST(request: Request) {
       7. Correctly parse and extract all dishes, sweet items, appetizers, and beverages.
       8. Clean up item titles. If a price is embedded in the title, extract it separately into the 'price' field.
       9. For 'price', extract it strictly as a floating-point number. Do not include currency symbols. If no price is found, assign 0.00.
-      10. Write a concise, appetizing description for each item if none is present or if it is very brief (respecting rule 4).
+      ${
+        terseDescriptions
+          ? `10. Use ONLY the description the source already gives an item (its ingredients text, if that is what it has). Do not write descriptions for items that have none — leave the field out. Getting every dish and price out of a menu this size matters far more than prose.`
+          : `10. Write a concise, appetizing description for each item if none is present or if it is very brief (respecting rule 4).`
+      }
       11. Group items into their correct category name.
 
       Image search requirement:
@@ -379,6 +422,12 @@ ${imageRule}
       );
     }
 
+    // A timeout on a huge linked menu is a different problem from a timeout on
+    // a big upload, and the advice has to match.
+    const timeoutHint = link
+      ? "That menu is very large. Try a link to one section of it, or upload the menu file instead."
+      : "Try a smaller file or a single-page PDF.";
+
     // Advice for a dead end differs by where the menu came from.
     const retryHint = link
       ? "Try a link that opens the menu directly, or upload the menu file instead."
@@ -398,28 +447,55 @@ ${imageRule}
         ];
 
     // Construct request payload for Gemini Multimodal API (supports images, pdfs, and excels)
-    const geminiPayload = {
-      contents: [{ parts }],
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature: 0.1 // Low temperature for high precision OCR extraction
-      }
-    };
-
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
 
-    let response: Response;
-    try {
-      response = await fetch(geminiUrl, {
+    const baseConfig = {
+      responseMimeType: "application/json",
+      temperature: 0.1, // Low temperature for high precision OCR extraction
+      // A 200-dish menu is a lot of JSON; the default ceiling truncates it
+      // mid-object, which then fails to parse and reads as a bad scan.
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+    };
+
+    const attempt = async (
+      generationConfig: Record<string, unknown>,
+      timeoutMs: number,
+    ): Promise<{ response: Response; errorText: string }> => {
+      const response = await fetch(geminiUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(geminiPayload),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts }], generationConfig }),
         // Without this a large PDF hangs until the platform kills the function
         // with an opaque 504 and no JSON body for the client to read.
-        signal: AbortSignal.timeout(upstreamTimeout)
+        signal: AbortSignal.timeout(timeoutMs),
       });
+      return {
+        response,
+        errorText: response.ok ? "" : await response.text().catch(() => ""),
+      };
+    };
+
+    let response: Response;
+    let errorText: string;
+    try {
+      // Thinking is the biggest cost on a long menu: reading 100+ dishes off a
+      // page is extraction, not reasoning, and the deliberation was pushing
+      // whole-menu scans past the time the platform allows.
+      ({ response, errorText } = await attempt(
+        { ...baseConfig, thinkingConfig: { thinkingBudget: 0 } },
+        upstreamTimeout,
+      ));
+
+      // Any 400 that isn't about the key might be the model refusing
+      // `thinkingConfig`, and the wording varies between versions — so retry
+      // plainly rather than reading tea leaves in the error string.
+      if (response.status === 400 && !looksLikeKeyRejection(errorText)) {
+        const remaining =
+          TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS;
+        if (remaining >= MIN_UPSTREAM_TIMEOUT_MS) {
+          ({ response, errorText } = await attempt(baseConfig, remaining));
+        }
+      }
     } catch (fetchError: any) {
       const aborted =
         fetchError?.name === "TimeoutError" || fetchError?.name === "AbortError";
@@ -427,7 +503,7 @@ ${imageRule}
       return NextResponse.json(
         {
           error: aborted
-            ? "The scan took too long to finish. Try a smaller file or a single-page PDF."
+            ? `The scan took too long to finish. ${timeoutHint}`
             : "Couldn't reach the AI scanner. Check your connection and try again."
         },
         { status: aborted ? 504 : 502 }
@@ -435,7 +511,6 @@ ${imageRule}
     }
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
       console.error(
         `[parse-menu] Gemini responded ${response.status}:`,
         errorText.slice(0, 2000),

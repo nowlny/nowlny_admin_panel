@@ -432,6 +432,21 @@ function extractFlightStream(html: string): string {
   return chunks.join("");
 }
 
+/**
+ * Strip the bookkeeping out of a structured payload.
+ *
+ * A page's own data carries a timestamp and a rating counter on every record,
+ * which is a fifth of the bytes and none of the menu. Record *ids* are kept:
+ * they are what ties a dish to its category, and dropping them makes the model
+ * guess the grouping.
+ */
+function compactStructuredPayload(text: string): string {
+  return text
+    .replace(/"[a-zA-Z_]*_at"\s*:\s*(?:"[^"]*"|null)\s*,?/g, "")
+    .replace(/"(average_rating|rating_count|view_count|click_count)"\s*:\s*[\d.]+\s*,?/g, "")
+    .replace(/,\s*}/g, "}");
+}
+
 /** Does this text actually look like a menu, or just a page from the site? */
 function looksLikeMenu(text: string): boolean {
   let hits = 0;
@@ -609,10 +624,11 @@ export async function fetchMenuSource(
     if (isHtml && (!best || !looksLikeMenu(text))) {
       // A single-page app paints nothing but still ships the whole menu — in
       // its script tags, or in a React Server Components stream.
-      const payload = [...extractEmbeddedJson(html), extractFlightStream(html)]
-        .filter((blob) => blob.length > 0)
-        .join("\n\n")
-        .slice(0, MAX_STRUCTURED_CHARS);
+      const payload = compactStructuredPayload(
+        [...extractEmbeddedJson(html), extractFlightStream(html)]
+          .filter((blob) => blob.length > 0)
+          .join("\n\n"),
+      ).slice(0, MAX_STRUCTURED_CHARS);
 
       if (payload.length >= MIN_TEXT_CHARS && (looksLikeMenu(payload) || !best)) {
         best = { kind: "text", label, text: payload, images, structured: true };
