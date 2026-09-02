@@ -409,7 +409,12 @@ export default function RestaurantMenuSection({
       setTimeout(() => {
         setIsParsing(false);
         const scanned: ParsedMenuData = {
-          name: source.kind === "link" ? source.url : source.name,
+          // Platform imports name themselves ("Foron Mallah"); a scanned page
+          // has nothing better to show than the link.
+          name:
+            source.kind === "link"
+              ? parsedResult.label || source.url
+              : source.name,
           type:
             source.kind === "link" || source.fileMime.includes("pdf")
               ? "pdf"

@@ -15,8 +15,15 @@ import { findDishImages } from "../../../lib/dishImages";
 
 export const maxDuration = 60;
 
-/** A very long menu; beyond this the request can't finish inside the budget. */
-const MAX_QUERIES = 200;
+/**
+ * Caps how many photos we go looking for. Counted over the dishes that
+ * actually need one — the caller sends a full-length, index-aligned list, and
+ * a 255-dish menu where most items already have a picture is a small job.
+ */
+const MAX_LOOKUPS = 250;
+
+/** Bounds the payload itself, independent of how many need a lookup. */
+const MAX_QUERIES = 1_000;
 
 /** Long enough for "grilled chicken shawarma wrap", short enough to be a query. */
 const MAX_QUERY_CHARS = 120;
@@ -48,9 +55,7 @@ export async function POST(request: Request) {
 
   if (queries.length > MAX_QUERIES) {
     return NextResponse.json(
-      {
-        error: `That menu has too many dishes to illustrate in one pass (limit ${MAX_QUERIES}). Import it in smaller parts.`,
-      },
+      { error: "That menu is too large to illustrate in one pass. Import it in smaller parts." },
       { status: 413 },
     );
   }
@@ -60,6 +65,15 @@ export async function POST(request: Request) {
   const sanitized = queries.map((query: unknown) =>
     typeof query === "string" ? query.trim().slice(0, MAX_QUERY_CHARS) : null,
   );
+
+  if (sanitized.filter(Boolean).length > MAX_LOOKUPS) {
+    return NextResponse.json(
+      {
+        error: `That menu has too many dishes without a photo to fill in at once (limit ${MAX_LOOKUPS}). Import it in smaller parts.`,
+      },
+      { status: 413 },
+    );
+  }
 
   try {
     const images = await findDishImages(sanitized, useFallback !== false);

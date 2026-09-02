@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { normalizeParsedMenu } from "../../../lib/menuParsing";
 import { fetchMenuSource, MenuSourceError } from "../../../lib/menuSource";
+import { tryStorefrontMenu } from "../../../lib/storefrontAdapters";
 
 /**
  * Gemini menu OCR proxy.
@@ -23,6 +24,14 @@ const UPSTREAM_TIMEOUT_MS = 55_000;
 
 /** Fetching the link has already spent part of the budget by the time we call out. */
 const UPSTREAM_TIMEOUT_AFTER_FETCH_MS = 38_000;
+
+/** Photo phrases are a nice-to-have — never let them hold up the import. */
+const IMAGE_QUERY_TIMEOUT_MS = 20_000;
+
+/** Enough for a very long menu without turning the prompt into a novel. */
+const MAX_IMAGE_QUERY_NAMES = 300;
+
+const MODEL_NAME = "gemini-2.5-flash";
 
 /**
  * Base64 inflates by ~4/3, so this is roughly a 7.5 MB source document —
@@ -63,6 +72,58 @@ function messageForUpstreamStatus(
   return GENERIC_ERROR;
 }
 
+/**
+ * Ask the model for an English stock-photo phrase per dish name.
+ *
+ * Only used on the direct-import path, where the menu came back as structured
+ * data with no `imageQuery` in it. Without this an Arabic menu searches photo
+ * libraries in Arabic, finds nothing, and every dish lands on the same generic
+ * plate. Best-effort by design: any failure just means no phrases.
+ */
+async function generateImageQueries(
+  names: string[],
+  apiKey: string,
+): Promise<Map<string, string>> {
+  const queries = new Map<string, string>();
+  if (names.length === 0) return queries;
+
+  const prompt = `For each numbered dish name below, write a short ENGLISH stock-photo search phrase (2 to 5 words) describing what the dish looks like. Translate where the name is not English. No brand names, no prices, no sizes.
+
+Respond strictly as JSON: {"queries": ["phrase for 1", "phrase for 2", ...]} with exactly ${names.length} entries, in order.
+
+${names.map((name, index) => `${index + 1}. ${name}`).join("\n")}`;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+        }),
+        signal: AbortSignal.timeout(IMAGE_QUERY_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) throw new Error(`status ${response.status}`);
+
+    const result = await response.json();
+    const parsed = JSON.parse(result?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}");
+    const phrases = Array.isArray(parsed?.queries) ? parsed.queries : [];
+
+    names.forEach((name, index) => {
+      const phrase = phrases[index];
+      if (typeof phrase === "string" && phrase.trim()) queries.set(name, phrase.trim());
+    });
+  } catch (error) {
+    // The dish still imports; it just falls back to searching by its own name.
+    console.warn("[parse-menu] image query generation skipped:", error);
+  }
+
+  return queries;
+}
+
 export async function POST(request: Request) {
   // Gate first — before reading the body, so an unauthenticated caller can't
   // even make us buffer a multi-megabyte upload.
@@ -84,6 +145,47 @@ export async function POST(request: Request) {
         { error: "No file or menu link received in request." },
         { status: 400 },
       );
+    }
+
+    // A link to a storefront platform we can read directly never reaches the
+    // model: its own API returns the menu exactly, dish for dish and price for
+    // price, which no amount of prompting can match.
+    if (link) {
+      let adapted;
+      try {
+        adapted = await tryStorefrontMenu(link);
+      } catch (adapterError) {
+        if (adapterError instanceof MenuSourceError) {
+          return NextResponse.json(
+            { error: adapterError.message },
+            { status: adapterError.status },
+          );
+        }
+        throw adapterError;
+      }
+
+      if (adapted) {
+        const menu = normalizeParsedMenu(adapted.data, adapted.images);
+        const photoless = menu.categories
+          .flatMap((category) => category.items)
+          .filter((item) => !item.image);
+
+        // The one thing the model is still better at here: naming, in English,
+        // what a dish looks like so a stock photo can be found for it.
+        const key = customApiKey || process.env.GEMINI_API_KEY;
+        if (key && photoless.length > 0) {
+          const queries = await generateImageQueries(
+            [...new Set(photoless.map((item) => item.name))].slice(0, MAX_IMAGE_QUERY_NAMES),
+            key,
+          );
+          for (const item of photoless) {
+            const phrase = queries.get(item.name);
+            if (phrase) item.imageQuery = phrase;
+          }
+        }
+
+        return NextResponse.json({ ...menu, label: adapted.label });
+      }
     }
 
     // Resolved before anything is fetched — there is no point pulling down a
@@ -229,8 +331,7 @@ ${imageRule}
       }
     };
 
-    const modelName = "gemini-2.5-flash";
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
 
     let response: Response;
     try {
