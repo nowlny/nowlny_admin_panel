@@ -9,12 +9,16 @@
  */
 
 /**
- * Serverless platforms cap a request body at around 4.5 MB, and base64 inflates
- * a file by a third — so this is the largest file that survives the trip.
- * Checked before the file is read, so a 20 MB PDF fails instantly in the
- * browser rather than after a long upload.
+ * The point past which no host will take the upload: `/api/parse-menu` caps the
+ * base64 body at 10 MB, and base64 inflates a file by a third.
+ *
+ * This is deliberately a sanity limit, not the platform's limit. Serverless
+ * hosting rejects bodies over ~4.5 MB while a self-hosted or local server
+ * happily takes far more, and refusing a file in the browser that the server
+ * would have accepted is worse than letting it try — a rejection comes back as
+ * a 413 and is explained below.
  */
-export const MAX_UPLOAD_MB = 3;
+export const MAX_UPLOAD_MB = 7;
 
 export async function readErrorMessage(
   response: Response,
@@ -30,7 +34,9 @@ export async function readErrorMessage(
   }
 
   if (response.status === 413 || /entity too large|payload too large/i.test(body)) {
-    return `That file is too large to send (limit about ${MAX_UPLOAD_MB} MB). Split the PDF into fewer pages, or paste a link to the menu instead.`;
+    // The host refused the body before our route saw it, so the ceiling is
+    // theirs, not ours — usually ~4.5 MB on serverless hosting.
+    return "That file is bigger than this server accepts for one upload. Split the PDF into fewer pages, export it at a lower quality, or paste a link to the menu instead.";
   }
   if (response.status === 504) {
     return "The scan took too long to finish. Try a smaller file, or paste a link to the menu instead.";

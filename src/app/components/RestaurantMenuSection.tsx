@@ -493,6 +493,8 @@ export default function RestaurantMenuSection({
       setCustomFileName(file.name);
       setParsingError(null);
 
+      // Only files nothing could accept are refused here; anything smaller is
+      // attempted, and a host that says no answers with a 413 we explain.
       if (sizeMb > MAX_UPLOAD_MB) {
         setParsingError(
           t("rmenu.file_too_large", {
