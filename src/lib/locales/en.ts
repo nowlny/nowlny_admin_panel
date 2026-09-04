@@ -1273,6 +1273,8 @@ export const en = {
   "rmenu.link_hint": "A menu page, or a direct link to a PDF or photo. Pictures found on the page are attached to the matching dishes.",
   "rmenu.link_invalid": "That doesn't look like a link. It should start with https://",
   "rmenu.step_fetching_link": "Opening the menu link and reading the page…",
+  "rmenu.step_uploading": "Sending the file to Claude…",
+  "rmenu.upload_failed": "That file couldn't be uploaded. Try again.",
   "rmenu.step_reading_page": "Reading the dishes off the page…",
   "rmenu.file_too_large": "That file is {size} MB, past the {limit} MB the scanner can take. Split the PDF into fewer pages, export it at a lower quality, or paste a link to the menu instead.",
   "rmenu.file_too_large_gemini": "That file is {size} MB, past the {limit} MB the Gemini scanner can take — it has to send the whole document inline. Switch the AI scanner to Claude in AI Settings to import files up to 30 MB, or split the PDF into fewer pages.",

@@ -14,24 +14,26 @@ export type AiProvider = "gemini" | "claude";
 /**
  * How big a menu file each scanner can actually take, in MB of original file.
  *
- * The ceilings are the providers', and they are not the same:
+ * The binding constraint is not the model — it is the host. This admin deploys
+ * to Vercel, whose functions refuse a request body over **4.5 MB** at the
+ * infrastructure level; it cannot be raised from `vercel.json` or any
+ * application setting. Anything that travels through `/api/parse-menu` as
+ * base64 is therefore capped at roughly 3 MB of original file, since base64
+ * inflates by a third.
  *
- *  - **Gemini** inlines the document in the `generateContent` body, and that
- *    request is capped at 20 MB. Base64 inflates a file by a third, so ~14 MB
- *    of PDF is the most that fits with room left for the prompt. There is no
- *    way around it short of Google's own Files API, which is a separate flow.
- *  - **Claude** is capped at a 32 MB request the same way, but its Files API
- *    takes files up to 500 MB, costs nothing to use, and is billed identically
- *    once the tokens are read. `claudeMenu.ts` switches to it automatically for
- *    anything large, which is what lets this go to 30 MB.
+ *  - **Gemini** has no way around that. Its own ceiling is higher (a 20 MB
+ *    `generateContent` request, so ~14 MB of PDF), but the file has to reach
+ *    our function first, and on this host it cannot.
+ *  - **Claude** skips the function entirely for anything large: the browser
+ *    uploads to Anthropic's Files API and the scan request carries only an id
+ *    (`lib/claudeDirectUpload.ts`). That is what makes 30 MB real rather than
+ *    a number we print and then fail on.
  *
- * These stay sanity limits, not the host's limit. Serverless hosting rejects
- * bodies over ~4.5 MB while a self-hosted server happily takes far more, and
- * refusing a file in the browser that the server would have accepted is worse
- * than letting it try — a rejection comes back as a 413 and is explained below.
+ * If this ever moves off Vercel, raise `gemini` to 14 — that is the true
+ * provider limit, and the only reason it is 3 here is the host.
  */
 export const MAX_UPLOAD_MB: Record<AiProvider, number> = {
-  gemini: 14,
+  gemini: 3,
   claude: 30,
 };
 

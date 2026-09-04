@@ -36,6 +36,11 @@ import {
   maxUploadMb,
   readErrorMessage,
 } from "../../lib/httpErrors";
+import {
+  DIRECT_UPLOAD_OVER_BYTES,
+  DirectUploadError,
+  uploadMenuFileToClaude,
+} from "../../lib/claudeDirectUpload";
 interface RestaurantMenuSectionProps {
   /** The live API record, not the retired localStorage `Restaurant` fixture. */
   restaurant: RestaurantResponse;
@@ -47,6 +52,9 @@ interface RestaurantMenuSectionProps {
  */
 type ScanSource =
   | { kind: "file"; name: string; base64Data: string; fileMime: string; fileSize: string }
+  // Uploaded straight to Claude because it was past what the server's host
+  // accepts in one request body; only the id travels to /api/parse-menu.
+  | { kind: "claude-file"; name: string; fileId: string; fileSize: string }
   | { kind: "link"; url: string };
 
 interface ParsedMenuData {
@@ -422,10 +430,12 @@ export default function RestaurantMenuSection({
           claudeApiKey,
           ...(source.kind === "link"
             ? { url: source.url }
-            : {
-                fileData: source.base64Data,
-                mimeType: source.fileMime,
-              }),
+            : source.kind === "claude-file"
+              ? { claudeFileId: source.fileId }
+              : {
+                  fileData: source.base64Data,
+                  mimeType: source.fileMime,
+                }),
         }),
       });
 
@@ -452,7 +462,9 @@ export default function RestaurantMenuSection({
               ? parsedResult.label || source.url
               : source.name,
           type:
-            source.kind === "link" || source.fileMime.includes("pdf")
+            source.kind === "link" ||
+            source.kind === "claude-file" ||
+            source.fileMime.includes("pdf")
               ? "pdf"
               : source.fileMime.includes("sheet") ||
                   source.fileMime.includes("excel") ||
@@ -544,6 +556,43 @@ export default function RestaurantMenuSection({
             { size: sizeMb.toFixed(1), limit: String(limitMb) },
           ),
         );
+        e.target.value = "";
+        return;
+      }
+
+      /*
+       * Big files never go through our own server.
+       *
+       * The admin runs on Vercel, whose functions refuse a request body over
+       * 4.5 MB at the infrastructure level — no server-side setting can lift
+       * it. Claude's Files API takes the upload directly instead, and the scan
+       * request then carries nothing but the id.
+       */
+      if (aiProvider === "claude" && file.size > DIRECT_UPLOAD_OVER_BYTES) {
+        setMenuUrl("");
+        void (async () => {
+          setIsParsing(true);
+          setParsingStep(t("rmenu.step_uploading"));
+          try {
+            const fileId = await uploadMenuFileToClaude(file, claudeApiKey);
+            await runLiveGeminiScan({
+              kind: "claude-file",
+              name: file.name,
+              fileId,
+              fileSize: mockSize,
+            });
+          } catch (error) {
+            // `runLiveGeminiScan` owns these once it starts; reaching here
+            // means it never did.
+            setIsParsing(false);
+            setParsingStep("");
+            setParsingError(
+              error instanceof DirectUploadError
+                ? error.message
+                : t("rmenu.upload_failed"),
+            );
+          }
+        })();
         e.target.value = "";
         return;
       }

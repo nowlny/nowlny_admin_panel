@@ -113,6 +113,14 @@ export interface ScanOptions {
   prompt: string;
   /** Uploaded or fetched pages. Empty when the source was text. */
   pages: MenuPage[];
+  /**
+   * Files the browser already uploaded to Anthropic, referenced by id.
+   *
+   * The path exists because a Vercel function's request body caps at 4.5 MB,
+   * so a large menu never reaches this server at all — see
+   * `lib/claudeDirectUpload.ts`.
+   */
+  fileIds?: string[];
   /** Page text, when there were no pages to attach. */
   pageText?: string;
   /** Whether `pageText` is the platform's own JSON rather than prose. */
@@ -129,6 +137,7 @@ export async function scanMenuWithClaude({
   apiKey,
   prompt,
   pages,
+  fileIds,
   pageText,
   structuredText,
   timeoutMs,
@@ -152,6 +161,13 @@ export async function scanMenuWithClaude({
   const encodedBytes = pages.reduce((total, page) => total + page.data.length, 0);
   const useFilesApi = encodedBytes > INLINE_BUDGET_CHARS;
 
+  // A file the browser uploaded is already where it needs to be — all this
+  // request carries is the id. `document` covers PDFs and, for an id, Claude
+  // reads the stored file's own type.
+  const preUploaded: Anthropic.ContentBlockParam[] = (fileIds ?? []).map(
+    (fileId) => ({ type: "document", source: { type: "file", file_id: fileId } }),
+  );
+
   let attachments: Anthropic.ContentBlockParam[];
   try {
     if (useFilesApi) {
@@ -166,10 +182,12 @@ export async function scanMenuWithClaude({
     throw asMenuError(error);
   }
 
+  const allAttachments = [...preUploaded, ...attachments];
+
   // Documents go before the instruction — Claude reads a prompt that follows
   // its attachments more reliably than one that precedes them.
-  const content: Anthropic.ContentBlockParam[] = pages.length
-    ? [...attachments, { type: "text", text: prompt }]
+  const content: Anthropic.ContentBlockParam[] = allAttachments.length
+    ? [...allAttachments, { type: "text", text: prompt }]
     : [
         {
           type: "text",

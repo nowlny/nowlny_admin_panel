@@ -294,12 +294,26 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { fileData, mimeType, customApiKey, claudeApiKey, url } = body;
+    // Set when the browser uploaded the file straight to Claude because it was
+    // past what a Vercel function will accept in a request body.
+    const claudeFileId =
+      typeof body.claudeFileId === "string" ? body.claudeFileId.trim() : "";
     const link = typeof url === "string" ? url.trim() : "";
     // Gemini stays the default so an operator who never opens AI Settings sees
     // no change; Claude is opt-in per request.
     const provider: Provider = body.provider === "claude" ? "claude" : "gemini";
 
-    if (!fileData && !link) {
+    if (claudeFileId && provider !== "claude") {
+      return NextResponse.json(
+        {
+          error:
+            "That file was uploaded to Claude, so the Claude scanner has to read it. Switch the AI scanner in AI Settings.",
+        },
+        { status: 400 },
+      );
+    }
+
+    if (!fileData && !link && !claudeFileId) {
       return NextResponse.json(
         { error: "No file or menu link received in request." },
         { status: 400 },
@@ -406,7 +420,7 @@ export async function POST(request: Request) {
 
     // Skipped entirely when a platform adapter already produced the pages or
     // the text — the upload branch below is only for when there is no link.
-    const needsSource = documents.length === 0 && !pageText;
+    const needsSource = documents.length === 0 && !pageText && !claudeFileId;
 
     if (needsSource && linkToFetch) {
       try {
@@ -585,6 +599,7 @@ ${imageRule}
             mimeType: page.mimeType,
             data: page.data,
           })),
+          fileIds: claudeFileId ? [claudeFileId] : undefined,
           pageText,
           structuredText,
           timeoutMs: Math.max(
