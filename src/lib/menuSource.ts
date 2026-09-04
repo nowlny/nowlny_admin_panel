@@ -15,8 +15,12 @@ import { isIPv4, isIPv6 } from "node:net";
 /** Long enough for a slow restaurant site, short enough to leave Gemini its budget. */
 const FETCH_TIMEOUT_MS = 15_000;
 
-/** Base64 inflates by ~4/3, keeping this under the route's upload ceiling. */
-const MAX_BINARY_BYTES = 6 * 1024 * 1024;
+/**
+ * Base64 inflates by ~4/3, keeping this under the route's upload ceiling. A
+ * linked PDF reaches the model through the same `inlineData` call as an
+ * uploaded one, so this tracks `MAX_UPLOAD_MB`.
+ */
+const MAX_BINARY_BYTES = 12 * 1024 * 1024;
 
 /** A menu page that is bigger than this is not a menu page. */
 const MAX_HTML_BYTES = 3 * 1024 * 1024;

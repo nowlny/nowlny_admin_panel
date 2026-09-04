@@ -62,11 +62,15 @@ const MAX_OUTPUT_TOKENS = 32_768;
 const LARGE_MENU_CHARS = 50_000;
 
 /**
- * Base64 inflates by ~4/3, so this is roughly a 7.5 MB source document —
- * comfortably above a phone photo or a short menu PDF, and below the point
- * where the upstream call cannot finish inside `maxDuration`.
+ * Base64 inflates by ~4/3, so this is roughly a 12.75 MB source document — a
+ * long multi-page menu PDF, not just a phone photo.
+ *
+ * The ceiling above it is Gemini's, not ours: a `generateContent` call carrying
+ * `inlineData` is capped at a 20 MB request, so this leaves ~3 MB of headroom
+ * for the prompt. Keep it in step with `MAX_UPLOAD_MB`, which is what the
+ * browser refuses on, and stay under ~19 MB here or the model answers 413.
  */
-const MAX_FILE_DATA_CHARS = 10 * 1024 * 1024;
+const MAX_FILE_DATA_CHARS = 17 * 1024 * 1024;
 
 const GENERIC_ERROR =
   "Something went wrong while scanning the menu. Please try again.";

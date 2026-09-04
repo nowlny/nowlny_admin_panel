@@ -956,7 +956,7 @@ t("rmenu.no_categories")}{" "}
                   {t("rmenu.drag_drop")}
                 </p>
                 <p className="text-[10px] text-zinc-400">
-                  {t("rmenu.file_types")}
+                  {t("rmenu.file_types", { limit: String(MAX_UPLOAD_MB) })}
                 </p>
               </div>
 

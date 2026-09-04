@@ -2,6 +2,9 @@ import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 import Modal from "./ui/Modal";
+import ImageUploadField from "./ui/ImageUploadField";
+import PhoneNumberInput from "./ui/PhoneNumberInput";
+import { toInternationalPhone } from "../../lib/phone";
 import {
   restaurantsService,
   RestaurantCreate,
@@ -77,6 +80,9 @@ export default function AddRestaurantModal({
 }: AddRestaurantModalProps) {
   const { t } = useI18n();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Submitting mid-upload would create the merchant with no artwork and
+  // silently drop the image the operator just picked.
+  const [uploadsInFlight, setUploadsInFlight] = useState(0);
   const [isDirty, setIsDirty] = useState(false);
   const [formData, setFormData] = useState(EMPTY_FORM);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
@@ -114,6 +120,20 @@ export default function AddRestaurantModal({
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
+  const setImage = (field: "logo" | "backgroundImageUrl") => (url: string) => {
+    setIsDirty(true);
+    setFormData((prev) => ({ ...prev, [field]: url }));
+  };
+
+  const setPhone =
+    (field: "phone" | "ownerPhoneNumber") => (digits: string) => {
+      setIsDirty(true);
+      setFormData((prev) => ({ ...prev, [field]: digits }));
+    };
+
+  const trackUpload = (isUploading: boolean) =>
+    setUploadsInFlight((n) => Math.max(0, n + (isUploading ? 1 : -1)));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -124,7 +144,17 @@ export default function AddRestaurantModal({
       return;
     }
 
+    if (uploadsInFlight > 0) {
+      toast.error(t("upload.wait"));
+      return;
+    }
+
     setIsSubmitting(true);
+
+    // The API stores E.164 and looks the owner account up by it, so the fixed
+    // +961 the operator sees has to be reattached before this leaves.
+    const phone = toInternationalPhone(formData.phone);
+    const ownerPhoneNumber = toInternationalPhone(formData.ownerPhoneNumber);
 
     const payload: RestaurantCreate = {
       name: formData.name.trim(),
@@ -133,14 +163,12 @@ export default function AddRestaurantModal({
       ...(formData.description.trim()
         ? { description: formData.description.trim() }
         : {}),
-      ...(formData.phone.trim() ? { phone: formData.phone.trim() } : {}),
+      ...(phone ? { phone } : {}),
       ...(formData.website.trim() ? { website: formData.website.trim() } : {}),
       ...(formData.ownerFullName.trim()
         ? { ownerFullName: formData.ownerFullName.trim() }
         : {}),
-      ...(formData.ownerPhoneNumber.trim()
-        ? { ownerPhoneNumber: formData.ownerPhoneNumber.trim() }
-        : {}),
+      ...(ownerPhoneNumber ? { ownerPhoneNumber } : {}),
       ...(formData.city.trim() ? { city: formData.city.trim() } : {}),
       ...(formData.address.trim() ? { address: formData.address.trim() } : {}),
       ...(formData.logo.trim() ? { logo: formData.logo.trim() } : {}),
@@ -188,7 +216,7 @@ export default function AddRestaurantModal({
       description={t("rest.add_desc")}
       maxWidth="max-w-2xl"
       // Escape / backdrop stay live until there is typing to lose.
-      dismissable={!isDirty && !isSubmitting}
+      dismissable={!isDirty && !isSubmitting && uploadsInFlight === 0}
       footer={
         <>
           <button
@@ -201,7 +229,7 @@ export default function AddRestaurantModal({
           <button
             type="submit"
             form="add-restaurant-form"
-            disabled={isSubmitting}
+            disabled={isSubmitting || uploadsInFlight > 0}
             className="px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg shadow-sm shadow-orange-500/20 transition-all flex items-center gap-2"
           >
             {isSubmitting ? (
@@ -255,14 +283,10 @@ export default function AddRestaurantModal({
             <label htmlFor="add-rest-phone" className={LABEL_CLASS}>
               {t("rest.phone")}
             </label>
-            <input
+            <PhoneNumberInput
               id="add-rest-phone"
-              name="phone"
-              inputMode="tel"
-              placeholder="+961 71 000 000"
               value={formData.phone}
-              onChange={handleChange}
-              className={FIELD_CLASS}
+              onChange={setPhone("phone")}
             />
           </div>
           <div className="space-y-1.5">
@@ -296,13 +320,10 @@ export default function AddRestaurantModal({
             <label htmlFor="add-rest-owner-phone" className={LABEL_CLASS}>
               {t("rest.owner_phone")}
             </label>
-            <input
+            <PhoneNumberInput
               id="add-rest-owner-phone"
-              name="ownerPhoneNumber"
-              inputMode="tel"
               value={formData.ownerPhoneNumber}
-              onChange={handleChange}
-              className={FIELD_CLASS}
+              onChange={setPhone("ownerPhoneNumber")}
             />
             <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
               {t("rest.owner_hint")}
@@ -434,34 +455,23 @@ export default function AddRestaurantModal({
             />
           </div>
 
-          <div className="space-y-1.5 md:col-span-2">
-            <label htmlFor="add-rest-logo" className={LABEL_CLASS}>
-              {t("common.logo_url")}
-            </label>
-            <input
-              id="add-rest-logo"
-              name="logo"
-              type="url"
-              placeholder="https://"
-              value={formData.logo}
-              onChange={handleChange}
-              className={FIELD_CLASS}
-            />
-          </div>
-          <div className="space-y-1.5 md:col-span-2">
-            <label htmlFor="add-rest-background" className={LABEL_CLASS}>
-              {t("common.background_url")}
-            </label>
-            <input
-              id="add-rest-background"
-              name="backgroundImageUrl"
-              type="url"
-              placeholder="https://"
-              value={formData.backgroundImageUrl}
-              onChange={handleChange}
-              className={FIELD_CLASS}
-            />
-          </div>
+          <ImageUploadField
+            className="md:col-span-2"
+            label={t("common.logo")}
+            value={formData.logo}
+            onChange={setImage("logo")}
+            onUploadingChange={trackUpload}
+            disabled={isSubmitting}
+          />
+          <ImageUploadField
+            className="md:col-span-2"
+            label={t("common.background_image")}
+            aspect="wide"
+            value={formData.backgroundImageUrl}
+            onChange={setImage("backgroundImageUrl")}
+            onUploadingChange={trackUpload}
+            disabled={isSubmitting}
+          />
         </div>
       </form>
     </Modal>

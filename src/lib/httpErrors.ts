@@ -10,7 +10,12 @@
 
 /**
  * The point past which no host will take the upload: `/api/parse-menu` caps the
- * base64 body at 10 MB, and base64 inflates a file by a third.
+ * base64 body at `MAX_FILE_DATA_CHARS`, and base64 inflates a file by a third.
+ *
+ * The real ceiling is Gemini's: a `generateContent` call carrying `inlineData`
+ * is capped at a 20 MB request, so 12 MB of PDF (≈16 MB once base64-encoded)
+ * still leaves room for the prompt. Anything larger has to go through the Files
+ * API, which is a different upload flow entirely.
  *
  * This is deliberately a sanity limit, not the platform's limit. Serverless
  * hosting rejects bodies over ~4.5 MB while a self-hosted or local server
@@ -18,7 +23,7 @@
  * would have accepted is worse than letting it try — a rejection comes back as
  * a 413 and is explained below.
  */
-export const MAX_UPLOAD_MB = 7;
+export const MAX_UPLOAD_MB = 12;
 
 export async function readErrorMessage(
   response: Response,
