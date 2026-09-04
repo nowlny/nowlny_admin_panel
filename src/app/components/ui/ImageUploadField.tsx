@@ -4,9 +4,11 @@ import React, { useEffect, useId, useRef, useState } from "react";
 import { ImageIcon, Loader2, Trash2, Upload } from "lucide-react";
 import {
   ImageUploadError,
+  isHostedImage,
   MAX_IMAGE_BYTES,
   megabytes,
   uploadImage,
+  uploadImageFromUrl,
 } from "../../../lib/cloudinary";
 import { useI18n } from "../../../lib/i18n";
 
@@ -50,9 +52,26 @@ export default function ImageUploadField({
   const reactId = useId();
   const inputId = `image-upload-${reactId}`;
   const fileRef = useRef<HTMLInputElement>(null);
+  const urlRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // The link currently being fetched. Pasting focuses then blurs the box (and
+  // disabling it during the upload blurs it again), so without this the blur
+  // would abort the upload the paste just started and redo it.
+  const pendingUrlRef = useRef<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // What the URL box holds while it is being typed into. Committing on every
+  // keystroke would fire an upload per character.
+  const [draft, setDraft] = useState(value);
+  const [lastValue, setLastValue] = useState(value);
+
+  // Re-seed the box when the value changes from outside — the edit modal fills
+  // it in once the merchant loads. Adjusted during render rather than in an
+  // effect so it doesn't paint the stale link first.
+  if (value !== lastValue) {
+    setLastValue(value);
+    setDraft(value);
+  }
 
   // A modal closed mid-upload would otherwise resolve into an unmounted tree.
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -70,6 +89,7 @@ export default function ImageUploadField({
 
     setError(null);
     abortRef.current?.abort();
+    pendingUrlRef.current = null;
     const controller = new AbortController();
     abortRef.current = controller;
     setUploading(true);
@@ -99,11 +119,55 @@ export default function ImageUploadField({
     }
   };
 
+  /**
+   * Takes whatever is in the URL box and turns it into an image we host.
+   *
+   * A link is only worth what its host keeps serving, so the pasted URL is a
+   * source to copy from, not the value to store. On failure the link is kept —
+   * the operator can still fall back to downloading it and picking the file.
+   */
+  const commitUrl = async (raw: string, { force = false } = {}) => {
+    const candidate = raw.trim();
+
+    if (!candidate || isHostedImage(candidate) || !/^https?:\/\//i.test(candidate)) {
+      setError(null);
+      if (candidate !== value) onChange(candidate);
+      return;
+    }
+    if (candidate === pendingUrlRef.current) return;
+    // Already stored — unless this is a paste, which is the operator asking
+    // again for a link whose fetch failed the first time.
+    if (candidate === value && !force) return;
+
+    setError(null);
+    pendingUrlRef.current = candidate;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setUploading(true);
+    try {
+      onChange(await uploadImageFromUrl(candidate, { signal: controller.signal }));
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      console.error("Image link could not be re-hosted", err);
+      setError(t("upload.link_failed"));
+      onChange(candidate);
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        pendingUrlRef.current = null;
+        setUploading(false);
+      }
+    }
+  };
+
   const handleRemove = () => {
     abortRef.current?.abort();
     abortRef.current = null;
+    pendingUrlRef.current = null;
     setUploading(false);
     setError(null);
+    setDraft("");
     onChange("");
   };
 
@@ -186,16 +250,26 @@ export default function ImageUploadField({
           />
 
           <input
+            ref={urlRef}
             type="url"
             inputMode="url"
             placeholder={t("upload.url_placeholder")}
             aria-label={t("upload.url_label", { field: label })}
-            value={value}
+            value={draft}
             disabled={busy}
             onChange={(e) => {
               setError(null);
-              onChange(e.target.value);
+              setDraft(e.target.value);
             }}
+            // Pasting is the common path, and the link is not in the input yet
+            // while `paste` runs — read it back once the browser has applied it.
+            onPaste={() => {
+              window.setTimeout(
+                () => commitUrl(urlRef.current?.value ?? "", { force: true }),
+                0,
+              );
+            }}
+            onBlur={(e) => commitUrl(e.target.value)}
             className={FIELD_CLASS}
           />
         </div>

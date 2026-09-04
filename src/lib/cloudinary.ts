@@ -53,13 +53,55 @@ export interface UploadImageOptions {
   signal?: AbortSignal;
 }
 
+/** True for links already served by our own Cloudinary cloud. */
+export function isHostedImage(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.hostname === "res.cloudinary.com" &&
+      parsed.pathname.startsWith(`/${CLOUD_NAME}/`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Uploads `file` and resolves to its permanent `https://res.cloudinary.com` URL. */
 export async function uploadImage(
   file: File,
-  { signal }: UploadImageOptions = {},
+  options: UploadImageOptions = {},
 ): Promise<string> {
   assertUploadableImage(file);
+  return send(file, options);
+}
 
+/**
+ * Re-hosts an image that lives somewhere else, by handing Cloudinary the link
+ * and letting it do the fetching.
+ *
+ * A pasted link is not a stored image: Instagram CDN URLs carry an `oe=`
+ * expiry and die within days, and plenty of hosts refuse to be hot-linked at
+ * all, which is why a pasted logo would show in the form and then be broken in
+ * the app. The browser can't fetch it itself — cross-origin reads are blocked
+ * for exactly these hosts — so Cloudinary's server does it instead, and what we
+ * store is a copy we own.
+ */
+export async function uploadImageFromUrl(
+  remoteUrl: string,
+  options: UploadImageOptions = {},
+): Promise<string> {
+  const trimmed = remoteUrl.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new ImageUploadError("type", "That is not an image link.");
+  }
+  return send(trimmed, options);
+}
+
+/** `File` or remote URL — Cloudinary takes either as `file`. */
+async function send(
+  file: File | string,
+  { signal }: UploadImageOptions,
+): Promise<string> {
   const body = new FormData();
   body.append("file", file);
   body.append("upload_preset", UPLOAD_PRESET);
