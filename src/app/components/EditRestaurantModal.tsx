@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 import Modal from "./ui/Modal";
+import ImageUploadField from "./ui/ImageUploadField";
 import {
   restaurantsService,
   RestaurantUpdate,
@@ -74,6 +75,9 @@ export default function EditRestaurantModal({
 }: EditRestaurantModalProps) {
   const { t } = useI18n();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Saving mid-upload would write back the *previous* image URL and throw
+  // away the one the operator just picked.
+  const [uploadsInFlight, setUploadsInFlight] = useState(0);
   const [isDirty, setIsDirty] = useState(false);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [formData, setFormData] = useState(EMPTY_FORM);
@@ -142,6 +146,14 @@ export default function EditRestaurantModal({
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
+  const setImage = (field: "logo" | "backgroundImageUrl") => (url: string) => {
+    setIsDirty(true);
+    setFormData((prev) => ({ ...prev, [field]: url }));
+  };
+
+  const trackUpload = (isUploading: boolean) =>
+    setUploadsInFlight((n) => Math.max(0, n + (isUploading ? 1 : -1)));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!restaurant) return;
@@ -150,6 +162,11 @@ export default function EditRestaurantModal({
     const max = numeric(formData.deliveryTimeMaxMinutes);
     if (min !== undefined && max !== undefined && min > max) {
       toast.error(t("rest.time_invalid"));
+      return;
+    }
+
+    if (uploadsInFlight > 0) {
+      toast.error(t("upload.wait"));
       return;
     }
 
@@ -239,7 +256,7 @@ export default function EditRestaurantModal({
       description={restaurant.name}
       maxWidth="max-w-2xl"
       // Escape / backdrop stay live until there is typing to lose.
-      dismissable={!isDirty && !isSubmitting}
+      dismissable={!isDirty && !isSubmitting && uploadsInFlight === 0}
       footer={
         <>
           <button
@@ -252,7 +269,7 @@ export default function EditRestaurantModal({
           <button
             type="submit"
             form="edit-restaurant-form"
-            disabled={isSubmitting}
+            disabled={isSubmitting || uploadsInFlight > 0}
             className="px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg shadow-sm shadow-orange-500/20 transition-all flex items-center gap-2"
           >
             {isSubmitting ? (
@@ -531,32 +548,23 @@ export default function EditRestaurantModal({
             </h4>
           </div>
 
-          <div className="space-y-1.5 md:col-span-2">
-            <label htmlFor="edit-rest-logo" className={LABEL_CLASS}>
-              {t("common.logo_url")}
-            </label>
-            <input
-              id="edit-rest-logo"
-              name="logo"
-              type="url"
-              value={formData.logo}
-              onChange={handleChange}
-              className={FIELD_CLASS}
-            />
-          </div>
-          <div className="space-y-1.5 md:col-span-2">
-            <label htmlFor="edit-rest-background" className={LABEL_CLASS}>
-              {t("common.background_url")}
-            </label>
-            <input
-              id="edit-rest-background"
-              name="backgroundImageUrl"
-              type="url"
-              value={formData.backgroundImageUrl}
-              onChange={handleChange}
-              className={FIELD_CLASS}
-            />
-          </div>
+          <ImageUploadField
+            className="md:col-span-2"
+            label={t("common.logo")}
+            value={formData.logo}
+            onChange={setImage("logo")}
+            onUploadingChange={trackUpload}
+            disabled={isSubmitting}
+          />
+          <ImageUploadField
+            className="md:col-span-2"
+            label={t("common.background_image")}
+            aspect="wide"
+            value={formData.backgroundImageUrl}
+            onChange={setImage("backgroundImageUrl")}
+            onUploadingChange={trackUpload}
+            disabled={isSubmitting}
+          />
         </div>
       </form>
     </Modal>

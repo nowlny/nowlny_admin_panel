@@ -540,6 +540,151 @@ async function adaptOmega(origin: string, slug: string): Promise<StorefrontResul
   return { kind: "menu", label, data: { categories: withItems }, images };
 }
 
+/* ── MoviYum ──────────────────────────────────────────────────────────────────
+   `https://<store>.moviyum.com`. A Vue app that renders the menu client-side,
+   so fetching the page yields markup with no dishes in it — the operator was
+   told to screenshot the site and upload that instead. It doesn't need OCR at
+   all: the same JSON its own frontend reads is public, and one request to
+   `/api/v1/categories` returns every category with its products nested inside,
+   prices, descriptions and photos included.
+--------------------------------------------------------------------------- */
+
+const MOVIYUM_SUFFIX = ".moviyum.com";
+
+function moviyumOrigin(url: URL): string | null {
+  const host = url.hostname.toLowerCase();
+  if (!host.endsWith(MOVIYUM_SUFFIX)) return null;
+
+  // The bare domain and `www` are the platform's own site, not a storefront.
+  const store = host.slice(0, -MOVIYUM_SUFFIX.length);
+  if (!store || store === "www" || !SLUG.test(store)) return null;
+
+  return `https://${host}`;
+}
+
+/**
+ * The store's own name, for the "Source:" line. Best-effort: it lives in the
+ * `appConfig` blob the page inlines, and the menu import is worth doing with or
+ * without it.
+ */
+async function moviyumStoreName(origin: string): Promise<string> {
+  try {
+    const response = await fetch(origin, {
+      headers: { "User-Agent": BROWSER_UA },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      return "";
+    }
+
+    const html = (await response.text()).slice(0, 200_000);
+    const configured = /\bappName:\s*"([^"]{1,120})"/.exec(html);
+    if (configured) return configured[1].trim();
+
+    const titled = /<title>([^<]{1,160})<\/title>/i.exec(html);
+    return titled ? titled[1].replace(/\s*by\s+MoviYum\s*$/i, "").trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+async function adaptMoviyum(origin: string): Promise<AdaptedMenu> {
+  const payload = asRecord(await getJson(`${origin}/api/v1/categories`));
+  const rawCategories = asArray(payload.data);
+
+  if (rawCategories.length === 0) {
+    throw new MenuSourceError("That store's menu is empty.", 422);
+  }
+
+  const images: string[] = [];
+  const imageRefs = new Map<string, number>();
+
+  const registerImage = (path: string): number | undefined => {
+    const clean = text(path);
+    if (!clean) return undefined;
+
+    let href: string;
+    try {
+      // Uploads come through absolute, but some filenames carry spaces —
+      // `new URL` percent-encodes them so the fetch doesn't 404.
+      href = new URL(clean, origin).href;
+    } catch {
+      return undefined;
+    }
+
+    const existing = imageRefs.get(href);
+    if (existing) return existing;
+
+    images.push(href);
+    imageRefs.set(href, images.length);
+    return images.length;
+  };
+
+  type Item = AdaptedMenu["data"]["categories"][number]["items"][number];
+  const grouped = new Map<string, Item[]>();
+
+  for (const rawCategory of rawCategories) {
+    const category = asRecord(rawCategory);
+    const categoryName = text(category.name);
+    if (!categoryName) continue;
+
+    // A category can be split into sub-categories the storefront renders as
+    // headings; flattened into "Category - Sub" so neither name is lost.
+    const subNames = new Map<string, string>();
+    for (const rawSub of asArray(category.sub_category)) {
+      const sub = asRecord(rawSub);
+      const subName = text(sub.name);
+      if (subName) subNames.set(String(sub.id), subName);
+    }
+
+    for (const rawProduct of asArray(category.products)) {
+      const product = asRecord(rawProduct);
+      const name = text(product.name);
+      if (!name) continue;
+
+      // A discounted dish imports at what a customer actually pays.
+      const listed = Number(product.price);
+      const special = Number(product.special_price);
+      const price =
+        product.has_discount && Number.isFinite(special) && special > 0
+          ? special
+          : Number.isFinite(listed)
+            ? listed
+            : 0;
+
+      const item: Item = {
+        name,
+        description: text(product.description) || undefined,
+        price,
+        imageRef: registerImage(text(product.image)),
+        // `status` is 0 for a dish the store has switched off.
+        isAvailable: Number(product.status) !== 0,
+      };
+
+      const subName = subNames.get(String(product.sub_category_id)) ?? "";
+      const key = subName ? `${categoryName} - ${subName}` : categoryName;
+      const bucket = grouped.get(key);
+      if (bucket) bucket.push(item);
+      else grouped.set(key, [item]);
+    }
+  }
+
+  const categories = [...grouped].map(([name, items]) => ({ name, items }));
+
+  if (categories.length === 0) {
+    throw new MenuSourceError("That store's menu has no dishes in it yet.", 422);
+  }
+
+  const label = await moviyumStoreName(origin);
+  return {
+    label: label || new URL(origin).hostname,
+    data: { categories },
+    images,
+  };
+}
+
 /**
  * Import a menu straight from its platform, when the link points at one we
  * know. Returns null for every other link, which then goes through the
@@ -561,6 +706,9 @@ export async function tryStorefrontMenu(rawUrl: string): Promise<StorefrontResul
 
   const omega = omegaSlug(url);
   if (omega) return adaptOmega(url.origin, omega);
+
+  const moviyum = moviyumOrigin(url);
+  if (moviyum) return { kind: "menu", ...(await adaptMoviyum(moviyum)) };
 
   return null;
 }
