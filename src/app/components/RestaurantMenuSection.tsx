@@ -32,6 +32,9 @@ import { EmptyState, ErrorBanner, ErrorState, Skeleton } from "./ui/States";
 
 import { useI18n } from "../../lib/i18n";
 import { MAX_UPLOAD_MB, readErrorMessage } from "../../lib/httpErrors";
+
+/** Mirrors the route's `Provider`; both scanners answer with the same JSON. */
+type AiProvider = "gemini" | "claude";
 interface RestaurantMenuSectionProps {
   /** The live API record, not the retired localStorage `Restaurant` fixture. */
   restaurant: RestaurantResponse;
@@ -87,6 +90,37 @@ export default function RestaurantMenuSection({
     setGeminiApiKey(key);
     if (typeof window !== "undefined") {
       window.localStorage.setItem("nowlny_gemini_key", key);
+    }
+  };
+
+  // Which scanner runs. Gemini's free tier allows 20 requests a day, which one
+  // afternoon of onboarding exhausts, so the operator can point the scanner at
+  // a Claude key instead without touching the server.
+  const [aiProvider, setAiProvider] = useState<AiProvider>(() => {
+    if (typeof window === "undefined") return "gemini";
+    return window.localStorage.getItem("nowlny_ai_provider") === "claude"
+      ? "claude"
+      : "gemini";
+  });
+
+  const handleUpdateProvider = (next: AiProvider) => {
+    setAiProvider(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("nowlny_ai_provider", next);
+    }
+  };
+
+  const [claudeApiKey, setClaudeApiKey] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem("nowlny_claude_key") || "";
+    }
+    return "";
+  });
+
+  const handleUpdateClaudeKey = (key: string) => {
+    setClaudeApiKey(key);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("nowlny_claude_key", key);
     }
   };
 
@@ -381,15 +415,17 @@ export default function RestaurantMenuSection({
           "Content-Type": "application/json",
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
-        body: JSON.stringify(
-          source.kind === "link"
-            ? { url: source.url, customApiKey: geminiApiKey }
+        body: JSON.stringify({
+          provider: aiProvider,
+          customApiKey: geminiApiKey,
+          claudeApiKey,
+          ...(source.kind === "link"
+            ? { url: source.url }
             : {
                 fileData: source.base64Data,
                 mimeType: source.fileMime,
-                customApiKey: geminiApiKey,
-              },
-        ),
+              }),
+        }),
       });
 
       clearInterval(progressInterval);
@@ -898,35 +934,97 @@ t("rmenu.no_categories")}{" "}
 
               <div className="space-y-2 animate-in slide-in-from-top-2 duration-200">
                 <div className="space-y-1">
-                  <label
-                    htmlFor="gemini-api-key"
-                    className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest block"
-                  >
-                    {t("rmenu.api_key_label")}
-                  </label>
-                  <input
-                    id="gemini-api-key"
-                    type="password"
-                    placeholder={t("rmenu.api_key_placeholder")}
-                    value={geminiApiKey}
-                    onChange={(e) => handleUpdateApiKey(e.target.value)}
-                    className="w-full bg-white dark:bg-zinc-900 border border-zinc-250 dark:border-zinc-850 text-[11px] font-bold text-zinc-850 dark:text-zinc-100 placeholder-zinc-400 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-purple-500 shadow-sm"
-                  />
+                  <span className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest block">
+                    {t("rmenu.provider_label")}
+                  </span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {(["gemini", "claude"] as const).map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => handleUpdateProvider(option)}
+                        aria-pressed={aiProvider === option}
+                        className={`px-3 py-2 rounded-xl text-[10px] font-black transition-colors border ${
+                          aiProvider === option
+                            ? "bg-purple-600 border-purple-600 text-white shadow-sm"
+                            : "bg-white dark:bg-zinc-900 border-zinc-250 dark:border-zinc-850 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                        }`}
+                      >
+                        {t(
+                          option === "gemini"
+                            ? "rmenu.provider_gemini"
+                            : "rmenu.provider_claude",
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <p className="text-[9px] text-zinc-400 leading-normal">
-                  💡 <strong>{t("rmenu.safe_secure")}</strong>: Transmitted securely to
-                  Gemini's API endpoints. Get a free API Key at{" "}
-                  <a
-                    href="https://aistudio.google.com/"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-purple-500 font-bold hover:underline"
-                  >
-                    Google AI Studio
-                  </a>
-                  . If you set <code>GEMINI_API_KEY</code> on your server
-                  environment, you can leave this blank!
-                </p>
+
+                {aiProvider === "gemini" ? (
+                  <>
+                    <div className="space-y-1">
+                      <label
+                        htmlFor="gemini-api-key"
+                        className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest block"
+                      >
+                        {t("rmenu.api_key_label")}
+                      </label>
+                      <input
+                        id="gemini-api-key"
+                        type="password"
+                        placeholder={t("rmenu.api_key_placeholder")}
+                        value={geminiApiKey}
+                        onChange={(e) => handleUpdateApiKey(e.target.value)}
+                        className="w-full bg-white dark:bg-zinc-900 border border-zinc-250 dark:border-zinc-850 text-[11px] font-bold text-zinc-850 dark:text-zinc-100 placeholder-zinc-400 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-purple-500 shadow-sm"
+                      />
+                    </div>
+                    <p className="text-[9px] text-zinc-400 leading-normal">
+                      💡 <strong>{t("rmenu.safe_secure")}</strong>: Transmitted securely to
+                      Gemini's API endpoints. Get a free API Key at{" "}
+                      <a
+                        href="https://aistudio.google.com/"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-purple-500 font-bold hover:underline"
+                      >
+                        Google AI Studio
+                      </a>
+                      . If you set <code>GEMINI_API_KEY</code> on your server
+                      environment, you can leave this blank!
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="space-y-1">
+                      <label
+                        htmlFor="claude-api-key"
+                        className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest block"
+                      >
+                        {t("rmenu.claude_key_label")}
+                      </label>
+                      <input
+                        id="claude-api-key"
+                        type="password"
+                        placeholder={t("rmenu.claude_key_placeholder")}
+                        value={claudeApiKey}
+                        onChange={(e) => handleUpdateClaudeKey(e.target.value)}
+                        className="w-full bg-white dark:bg-zinc-900 border border-zinc-250 dark:border-zinc-850 text-[11px] font-bold text-zinc-850 dark:text-zinc-100 placeholder-zinc-400 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-purple-500 shadow-sm"
+                      />
+                    </div>
+                    <p className="text-[9px] text-zinc-400 leading-normal">
+                      💡 <strong>{t("rmenu.safe_secure")}</strong>: {t("rmenu.claude_key_hint")}{" "}
+                      <a
+                        href="https://console.anthropic.com/settings/keys"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-purple-500 font-bold hover:underline"
+                      >
+                        Anthropic Console
+                      </a>
+                      . <code>ANTHROPIC_API_KEY</code> {t("rmenu.server_key_note")}
+                    </p>
+                  </>
+                )}
 
                 <label className="flex items-start gap-2 pt-1 cursor-pointer">
                   <input

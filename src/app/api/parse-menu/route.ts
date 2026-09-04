@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { normalizeParsedMenu } from "../../../lib/menuParsing";
 import { fetchMenuSource, MenuSourceError } from "../../../lib/menuSource";
 import { tryStorefrontMenu } from "../../../lib/storefrontAdapters";
+import { ClaudeMenuError, scanMenuWithClaude } from "../../../lib/claudeMenu";
 
 /**
  * Gemini menu OCR proxy.
@@ -54,6 +55,9 @@ const IMAGE_QUERY_TIMEOUT_MS = 20_000;
 const MAX_IMAGE_QUERY_NAMES = 300;
 
 const MODEL_NAME = "gemini-2.5-flash";
+
+/** Which scanner runs. Both answer with the same JSON, so only the call differs. */
+export type Provider = "gemini" | "claude";
 
 /** A 250-dish menu serialises to a lot of JSON — well under the model's cap. */
 const MAX_OUTPUT_TOKENS = 32_768;
@@ -286,8 +290,11 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const { fileData, mimeType, customApiKey, url } = body;
+    const { fileData, mimeType, customApiKey, claudeApiKey, url } = body;
     const link = typeof url === "string" ? url.trim() : "";
+    // Gemini stays the default so an operator who never opens AI Settings sees
+    // no change; Claude is opt-in per request.
+    const provider: Provider = body.provider === "claude" ? "claude" : "gemini";
 
     if (!fileData && !link) {
       return NextResponse.json(
@@ -377,12 +384,18 @@ export async function POST(request: Request) {
 
     // Resolved before anything is fetched — there is no point pulling down a
     // menu page we then can't send anywhere.
-    const apiKey = customApiKey || process.env.GEMINI_API_KEY;
+    const apiKey =
+      provider === "claude"
+        ? claudeApiKey || process.env.ANTHROPIC_API_KEY
+        : customApiKey || process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       return NextResponse.json(
         {
-          error: "Gemini API Key is missing. Please paste your Gemini API Key in the 'AI Settings' key box on the screen or set it as GEMINI_API_KEY in your server environment."
+          error:
+            provider === "claude"
+              ? "Claude API key is missing. Paste your Anthropic API key in the 'AI Settings' key box on the screen, or set ANTHROPIC_API_KEY in your server environment."
+              : "Gemini API Key is missing. Please paste your Gemini API Key in the 'AI Settings' key box on the screen or set it as GEMINI_API_KEY in your server environment.",
         },
         { status: 400 }
       );
@@ -549,150 +562,186 @@ ${imageRule}
       ? "Try a link that opens the menu directly, or upload the menu file instead."
       : "Try a clearer photo, or a text-based PDF instead of a scan.";
 
-    const parts = documents.length
-      ? [
-          { text: prompt },
-          ...documents.map((page) => ({
-            inlineData: { mimeType: page.mimeType, data: page.data },
+    /*
+     * One scan, either provider.
+     *
+     * Everything downstream — parsing the JSON, normalising it, looking up
+     * photos — is provider-agnostic, so the seam is narrow: each branch's job
+     * is to end up holding the model's raw answer.
+     */
+    let textResponse: string | undefined;
+
+    if (provider === "claude") {
+      try {
+        textResponse = await scanMenuWithClaude({
+          apiKey,
+          prompt,
+          pages: documents.map((page) => ({
+            mimeType: page.mimeType,
+            data: page.data,
           })),
-        ]
-      : [
-          {
-            text: `${prompt}\n\n--- ${structuredText ? "MENU PAGE DATA (JSON)" : "MENU PAGE TEXT"} ---\n${pageText}`,
-          },
-        ];
-
-    // Construct request payload for Gemini Multimodal API (supports images, pdfs, and excels)
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
-
-    const baseConfig = {
-      responseMimeType: "application/json",
-      temperature: 0.1, // Low temperature for high precision OCR extraction
-      // A 200-dish menu is a lot of JSON; the default ceiling truncates it
-      // mid-object, which then fails to parse and reads as a bad scan.
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
-    };
-
-    const attempt = async (
-      generationConfig: Record<string, unknown>,
-      timeoutMs: number,
-    ): Promise<{ response: Response; errorText: string }> => {
-      const response = await fetch(geminiUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts }], generationConfig }),
-        // Without this a large PDF hangs until the platform kills the function
-        // with an opaque 504 and no JSON body for the client to read.
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      return {
-        response,
-        errorText: response.ok ? "" : await response.text().catch(() => ""),
-      };
-    };
-
-    let response: Response;
-    let errorText: string;
-    try {
-      // Thinking is the biggest cost on a long menu: reading 100+ dishes off a
-      // page is extraction, not reasoning, and the deliberation was pushing
-      // whole-menu scans past the time the platform allows.
-      ({ response, errorText } = await attempt(
-        { ...baseConfig, thinkingConfig: { thinkingBudget: 0 } },
-        upstreamTimeout,
-      ));
-
-      // Any 400 that isn't about the key might be the model refusing
-      // `thinkingConfig`, and the wording varies between versions — so retry
-      // plainly rather than reading tea leaves in the error string.
-      if (response.status === 400 && !looksLikeKeyRejection(errorText)) {
-        const remaining =
-          TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS;
-        if (remaining >= MIN_UPSTREAM_TIMEOUT_MS) {
-          ({ response, errorText } = await attempt(baseConfig, remaining));
-        }
-      }
-
-      // A per-minute limit is the one quota that clears on its own, and Google
-      // says exactly how long it needs. Waiting it out here turns a failed
-      // import the operator has to notice and redo into a slower one that
-      // simply works — but only when the wait plus a real attempt still fit in
-      // the budget, since a serverless host kills the request at `maxDuration`.
-      if (response.status === 429) {
-        const { retryDelaySeconds } = readQuotaFailure(errorText);
-        const remaining =
-          TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS;
-        const waitMs = (retryDelaySeconds ?? 0) * 1000;
-        if (
-          waitMs > 0 &&
-          remaining - waitMs >= MIN_UPSTREAM_TIMEOUT_MS
-        ) {
-          console.warn(
-            `[parse-menu] rate limited; waiting ${retryDelaySeconds}s before one retry`,
+          pageText,
+          structuredText,
+          timeoutMs: Math.max(
+            MIN_UPSTREAM_TIMEOUT_MS,
+            TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS,
+          ),
+        });
+      } catch (error) {
+        if (error instanceof ClaudeMenuError) {
+          return NextResponse.json(
+            { error: error.message },
+            { status: error.status },
           );
-          await new Promise((resolve) => setTimeout(resolve, waitMs));
-          ({ response, errorText } = await attempt(
-            { ...baseConfig, thinkingConfig: { thinkingBudget: 0 } },
-            remaining - waitMs,
-          ));
         }
+        throw error;
       }
-    } catch (fetchError: any) {
-      const aborted =
-        fetchError?.name === "TimeoutError" || fetchError?.name === "AbortError";
-      console.error("[parse-menu] upstream request failed:", fetchError);
-      return NextResponse.json(
-        {
-          error: aborted
-            ? `The scan took too long to finish. ${timeoutHint}`
-            : "Couldn't reach the AI scanner. Check your connection and try again."
-        },
-        { status: aborted ? 504 : 502 }
-      );
-    }
+    } else {
+      const parts = documents.length
+        ? [
+            { text: prompt },
+            ...documents.map((page) => ({
+              inlineData: { mimeType: page.mimeType, data: page.data },
+            })),
+          ]
+        : [
+            {
+              text: `${prompt}\n\n--- ${structuredText ? "MENU PAGE DATA (JSON)" : "MENU PAGE TEXT"} ---\n${pageText}`,
+            },
+          ];
 
-    if (!response.ok) {
-      console.error(
-        `[parse-menu] Gemini responded ${response.status}:`,
-        errorText.slice(0, 2000),
-      );
-      return NextResponse.json(
-        { error: messageForUpstreamStatus(response.status, errorText, retryHint) },
-        { status: response.status >= 500 ? 502 : response.status }
-      );
-    }
+      // Construct request payload for Gemini Multimodal API (supports images, pdfs, and excels)
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
 
-    const result = await response.json();
+      const baseConfig = {
+        responseMimeType: "application/json",
+        temperature: 0.1, // Low temperature for high precision OCR extraction
+        // A 200-dish menu is a lot of JSON; the default ceiling truncates it
+        // mid-object, which then fails to parse and reads as a bad scan.
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+      };
 
-    // Extract the raw text from the Gemini model's response candidate
-    const candidates = result.candidates || [];
-    if (candidates.length === 0) {
-      console.error(
-        "[parse-menu] no candidates returned:",
-        JSON.stringify(result).slice(0, 2000),
-      );
-      return NextResponse.json(
-        { error: `The AI scanner returned nothing for that menu. ${retryHint}` },
-        { status: 502 }
-      );
-    }
+      const attempt = async (
+        generationConfig: Record<string, unknown>,
+        timeoutMs: number,
+      ): Promise<{ response: Response; errorText: string }> => {
+        const response = await fetch(geminiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ parts }], generationConfig }),
+          // Without this a large PDF hangs until the platform kills the function
+          // with an opaque 504 and no JSON body for the client to read.
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        return {
+          response,
+          errorText: response.ok ? "" : await response.text().catch(() => ""),
+        };
+      };
 
-    const textResponse = candidates[0]?.content?.parts?.[0]?.text;
-    if (!textResponse) {
-      console.error(
-        "[parse-menu] empty candidate content:",
-        JSON.stringify(candidates[0]).slice(0, 2000),
-      );
-      return NextResponse.json(
-        { error: `The AI scanner returned an empty result. ${retryHint}` },
-        { status: 502 }
-      );
+      let response: Response;
+      let errorText: string;
+      try {
+        // Thinking is the biggest cost on a long menu: reading 100+ dishes off a
+        // page is extraction, not reasoning, and the deliberation was pushing
+        // whole-menu scans past the time the platform allows.
+        ({ response, errorText } = await attempt(
+          { ...baseConfig, thinkingConfig: { thinkingBudget: 0 } },
+          upstreamTimeout,
+        ));
+
+        // Any 400 that isn't about the key might be the model refusing
+        // `thinkingConfig`, and the wording varies between versions — so retry
+        // plainly rather than reading tea leaves in the error string.
+        if (response.status === 400 && !looksLikeKeyRejection(errorText)) {
+          const remaining =
+            TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS;
+          if (remaining >= MIN_UPSTREAM_TIMEOUT_MS) {
+            ({ response, errorText } = await attempt(baseConfig, remaining));
+          }
+        }
+
+        // A per-minute limit is the one quota that clears on its own, and Google
+        // says exactly how long it needs. Waiting it out here turns a failed
+        // import the operator has to notice and redo into a slower one that
+        // simply works — but only when the wait plus a real attempt still fit in
+        // the budget, since a serverless host kills the request at `maxDuration`.
+        if (response.status === 429) {
+          const { retryDelaySeconds } = readQuotaFailure(errorText);
+          const remaining =
+            TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS;
+          const waitMs = (retryDelaySeconds ?? 0) * 1000;
+          if (
+            waitMs > 0 &&
+            remaining - waitMs >= MIN_UPSTREAM_TIMEOUT_MS
+          ) {
+            console.warn(
+              `[parse-menu] rate limited; waiting ${retryDelaySeconds}s before one retry`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+            ({ response, errorText } = await attempt(
+              { ...baseConfig, thinkingConfig: { thinkingBudget: 0 } },
+              remaining - waitMs,
+            ));
+          }
+        }
+      } catch (fetchError: any) {
+        const aborted =
+          fetchError?.name === "TimeoutError" || fetchError?.name === "AbortError";
+        console.error("[parse-menu] upstream request failed:", fetchError);
+        return NextResponse.json(
+          {
+            error: aborted
+              ? `The scan took too long to finish. ${timeoutHint}`
+              : "Couldn't reach the AI scanner. Check your connection and try again."
+          },
+          { status: aborted ? 504 : 502 }
+        );
+      }
+
+      if (!response.ok) {
+        console.error(
+          `[parse-menu] Gemini responded ${response.status}:`,
+          errorText.slice(0, 2000),
+        );
+        return NextResponse.json(
+          { error: messageForUpstreamStatus(response.status, errorText, retryHint) },
+          { status: response.status >= 500 ? 502 : response.status }
+        );
+      }
+
+      const result = await response.json();
+
+      // Extract the raw text from the Gemini model's response candidate
+      const candidates = result.candidates || [];
+      if (candidates.length === 0) {
+        console.error(
+          "[parse-menu] no candidates returned:",
+          JSON.stringify(result).slice(0, 2000),
+        );
+        return NextResponse.json(
+          { error: `The AI scanner returned nothing for that menu. ${retryHint}` },
+          { status: 502 }
+        );
+      }
+
+      textResponse = candidates[0]?.content?.parts?.[0]?.text;
+      if (!textResponse) {
+        console.error(
+          "[parse-menu] empty candidate content:",
+          JSON.stringify(candidates[0]).slice(0, 2000),
+        );
+        return NextResponse.json(
+          { error: `The AI scanner returned an empty result. ${retryHint}` },
+          { status: 502 }
+        );
+      }
     }
 
     // Parse the JSON returned by the model
     let parsedMenu;
     try {
-      parsedMenu = JSON.parse(textResponse.trim());
+      parsedMenu = JSON.parse(String(textResponse).trim());
     } catch {
       // In case there is some stray text wrap, try to extract JSON block using regex
       const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
