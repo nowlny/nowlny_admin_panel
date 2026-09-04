@@ -88,6 +88,107 @@ function looksLikeKeyRejection(errorText: string): boolean {
   return /api[_ ]key|api key not valid|invalid.{0,12}key/i.test(errorText);
 }
 
+/**
+ * What Google actually said in a 429.
+ *
+ * A `RESOURCE_EXHAUSTED` body carries a `QuotaFailure` naming the quota that
+ * was hit and a `RetryInfo` saying how long to wait. Collapsing all of that
+ * into "wait a minute" sent an operator chasing a new Google account for a key
+ * whose project simply had no quota to begin with, so the specifics are read
+ * out and reported.
+ */
+export interface QuotaFailure {
+  /** e.g. `GenerateRequestsPerDayPerProjectPerModel-FreeTier`. */
+  quotaId: string;
+  /** The allowance itself. `"0"` means the project was never granted any. */
+  quotaValue: string;
+  /** Seconds Google asks us to wait, when it says. */
+  retryDelaySeconds: number | null;
+  /** Google's own sentence, kept so nothing is hidden from the operator. */
+  message: string;
+}
+
+export function readQuotaFailure(errorText: string): QuotaFailure {
+  const empty: QuotaFailure = {
+    quotaId: "",
+    quotaValue: "",
+    retryDelaySeconds: null,
+    message: "",
+  };
+  if (!errorText) return empty;
+
+  try {
+    const error = JSON.parse(errorText)?.error;
+    if (!error) return empty;
+
+    const details: unknown[] = Array.isArray(error.details) ? error.details : [];
+    const violation = details
+      .flatMap((detail) => {
+        const record = detail as { violations?: unknown };
+        return Array.isArray(record?.violations) ? record.violations : [];
+      })
+      .find(Boolean) as { quotaId?: string; quotaValue?: string } | undefined;
+
+    const retry = details.find((detail) =>
+      String((detail as { "@type"?: string })?.["@type"] ?? "").endsWith("RetryInfo"),
+    ) as { retryDelay?: string } | undefined;
+
+    // RetryInfo serialises as a duration string — "51s", occasionally "1.5s".
+    const seconds = Number(String(retry?.retryDelay ?? "").replace(/s$/, ""));
+
+    return {
+      quotaId: String(violation?.quotaId ?? ""),
+      quotaValue: String(violation?.quotaValue ?? ""),
+      retryDelaySeconds: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
+      message: typeof error.message === "string" ? error.message : "",
+    };
+  } catch {
+    return empty;
+  }
+}
+
+function messageForQuota(errorText: string): string {
+  const { quotaId, quotaValue, retryDelaySeconds, message } =
+    readQuotaFailure(errorText);
+
+  // An allowance of zero is not a rate limit at all: the key's project has no
+  // quota for this model, which is what a project with no billing and no free
+  // tier looks like. Waiting changes nothing, and neither does a new account.
+  if (quotaValue === "0") {
+    return (
+      "That Gemini key's project has no quota for this model (its limit is 0), " +
+      "so no amount of waiting will help. Open the project in AI Studio and " +
+      "enable billing on it, then try again."
+    );
+  }
+
+  if (/PerDay/i.test(quotaId)) {
+    const allowance = quotaValue ? ` (${quotaValue} requests)` : "";
+    return (
+      `Today's Gemini quota for this key is used up${allowance}. It resets at ` +
+      "midnight Pacific time. To scan sooner, use a different key or enable " +
+      "billing on this one's project."
+    );
+  }
+
+  if (retryDelaySeconds) {
+    return `The AI scanner is rate limited right now. Try again in about ${Math.ceil(
+      retryDelaySeconds,
+    )} seconds.`;
+  }
+
+  if (/TokensPerMinute|InputToken/i.test(quotaId)) {
+    return (
+      "That file is too big for this key's per-minute token allowance. Split " +
+      "the PDF into fewer pages, or paste a link to the menu instead."
+    );
+  }
+
+  return message
+    ? `The AI scanner is rate limited right now. Google said: ${message}`
+    : "The AI scanner is rate limited right now. Wait a minute and try again.";
+}
+
 function messageForUpstreamStatus(
   status: number,
   errorText: string,
@@ -95,8 +196,7 @@ function messageForUpstreamStatus(
 ): string {
   const keyRejected = looksLikeKeyRejection(errorText);
 
-  if (status === 429)
-    return "The AI scanner is rate limited right now. Wait a minute and try again.";
+  if (status === 429) return messageForQuota(errorText);
   if (status === 400)
     return keyRejected
       ? "The Gemini API key was rejected. Check the key in AI Settings."
@@ -510,6 +610,31 @@ ${imageRule}
           TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS;
         if (remaining >= MIN_UPSTREAM_TIMEOUT_MS) {
           ({ response, errorText } = await attempt(baseConfig, remaining));
+        }
+      }
+
+      // A per-minute limit is the one quota that clears on its own, and Google
+      // says exactly how long it needs. Waiting it out here turns a failed
+      // import the operator has to notice and redo into a slower one that
+      // simply works — but only when the wait plus a real attempt still fit in
+      // the budget, since a serverless host kills the request at `maxDuration`.
+      if (response.status === 429) {
+        const { retryDelaySeconds } = readQuotaFailure(errorText);
+        const remaining =
+          TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS;
+        const waitMs = (retryDelaySeconds ?? 0) * 1000;
+        if (
+          waitMs > 0 &&
+          remaining - waitMs >= MIN_UPSTREAM_TIMEOUT_MS
+        ) {
+          console.warn(
+            `[parse-menu] rate limited; waiting ${retryDelaySeconds}s before one retry`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          ({ response, errorText } = await attempt(
+            { ...baseConfig, thinkingConfig: { thinkingBudget: 0 } },
+            remaining - waitMs,
+          ));
         }
       }
     } catch (fetchError: any) {
