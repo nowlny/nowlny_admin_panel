@@ -1275,6 +1275,7 @@ export const en = {
   "rmenu.step_fetching_link": "Opening the menu link and reading the page…",
   "rmenu.step_reading_page": "Reading the dishes off the page…",
   "rmenu.file_too_large": "That file is {size} MB, past the {limit} MB the scanner can take. Split the PDF into fewer pages, export it at a lower quality, or paste a link to the menu instead.",
+  "rmenu.file_too_large_gemini": "That file is {size} MB, past the {limit} MB the Gemini scanner can take — it has to send the whole document inline. Switch the AI scanner to Claude in AI Settings to import files up to 30 MB, or split the PDF into fewer pages.",
   "stories.skipping": "Skipping to the next one…",
   "stories.load_error": "This story couldn't be loaded.",
   "error.title": "Something went wrong",

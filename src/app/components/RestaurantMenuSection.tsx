@@ -31,10 +31,11 @@ import { useConfirm } from "./ui/ConfirmDialog";
 import { EmptyState, ErrorBanner, ErrorState, Skeleton } from "./ui/States";
 
 import { useI18n } from "../../lib/i18n";
-import { MAX_UPLOAD_MB, readErrorMessage } from "../../lib/httpErrors";
-
-/** Mirrors the route's `Provider`; both scanners answer with the same JSON. */
-type AiProvider = "gemini" | "claude";
+import {
+  type AiProvider,
+  maxUploadMb,
+  readErrorMessage,
+} from "../../lib/httpErrors";
 interface RestaurantMenuSectionProps {
   /** The live API record, not the retired localStorage `Restaurant` fixture. */
   restaurant: RestaurantResponse;
@@ -529,14 +530,19 @@ export default function RestaurantMenuSection({
       setCustomFileName(file.name);
       setParsingError(null);
 
-      // Only files nothing could accept are refused here; anything smaller is
-      // attempted, and a host that says no answers with a 413 we explain.
-      if (sizeMb > MAX_UPLOAD_MB) {
+      // Only files the selected scanner could never accept are refused here;
+      // anything smaller is attempted, and a host that says no answers with a
+      // 413 we explain. Claude takes more than Gemini, so the ceiling moves
+      // with the picker rather than being one number for both.
+      const limitMb = maxUploadMb(aiProvider);
+      if (sizeMb > limitMb) {
         setParsingError(
-          t("rmenu.file_too_large", {
-            size: sizeMb.toFixed(1),
-            limit: String(MAX_UPLOAD_MB),
-          }),
+          t(
+            aiProvider === "gemini"
+              ? "rmenu.file_too_large_gemini"
+              : "rmenu.file_too_large",
+            { size: sizeMb.toFixed(1), limit: String(limitMb) },
+          ),
         );
         e.target.value = "";
         return;
@@ -1054,7 +1060,7 @@ t("rmenu.no_categories")}{" "}
                   {t("rmenu.drag_drop")}
                 </p>
                 <p className="text-[10px] text-zinc-400">
-                  {t("rmenu.file_types", { limit: String(MAX_UPLOAD_MB) })}
+                  {t("rmenu.file_types", { limit: String(maxUploadMb(aiProvider)) })}
                 </p>
               </div>
 

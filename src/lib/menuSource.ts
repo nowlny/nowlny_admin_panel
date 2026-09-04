@@ -18,9 +18,10 @@ const FETCH_TIMEOUT_MS = 15_000;
 /**
  * Base64 inflates by ~4/3, keeping this under the route's upload ceiling. A
  * linked PDF reaches the model through the same `inlineData` call as an
- * uploaded one, so this tracks `MAX_UPLOAD_MB`.
+ * uploaded one, so this tracks the largest `MAX_UPLOAD_MB` — a linked PDF this
+ * big only gets through on the Claude scanner, and Gemini answers 413.
  */
-const MAX_BINARY_BYTES = 12 * 1024 * 1024;
+const MAX_BINARY_BYTES = 30 * 1024 * 1024;
 
 /** A menu page that is bigger than this is not a menu page. */
 const MAX_HTML_BYTES = 3 * 1024 * 1024;

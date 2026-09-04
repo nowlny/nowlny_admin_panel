@@ -66,15 +66,18 @@ const MAX_OUTPUT_TOKENS = 32_768;
 const LARGE_MENU_CHARS = 50_000;
 
 /**
- * Base64 inflates by ~4/3, so this is roughly a 12.75 MB source document — a
- * long multi-page menu PDF, not just a phone photo.
+ * The base64 ceiling per scanner — keep these in step with `MAX_UPLOAD_MB`,
+ * which is what the browser refuses on. Base64 inflates a file by ~4/3, so
+ * these are roughly 14 MB and 30 MB of original document.
  *
- * The ceiling above it is Gemini's, not ours: a `generateContent` call carrying
- * `inlineData` is capped at a 20 MB request, so this leaves ~3 MB of headroom
- * for the prompt. Keep it in step with `MAX_UPLOAD_MB`, which is what the
- * browser refuses on, and stay under ~19 MB here or the model answers 413.
+ * They differ because the providers do: Gemini has to inline the document in a
+ * request capped at 20 MB, while Claude uploads anything large to its Files API
+ * first and sends only an id. See `MAX_UPLOAD_MB` in `lib/httpErrors.ts`.
  */
-const MAX_FILE_DATA_CHARS = 17 * 1024 * 1024;
+const MAX_FILE_DATA_CHARS: Record<Provider, number> = {
+  gemini: 19 * 1024 * 1024,
+  claude: 41 * 1024 * 1024,
+};
 
 const GENERIC_ERROR =
   "Something went wrong while scanning the menu. Please try again.";
@@ -434,11 +437,13 @@ export async function POST(request: Request) {
         );
       }
 
-      if (fileData.length > MAX_FILE_DATA_CHARS) {
+      if (fileData.length > MAX_FILE_DATA_CHARS[provider]) {
         return NextResponse.json(
           {
             error:
-              "That file is too large to scan. Split a long PDF into fewer pages, or paste a link to the menu instead.",
+              provider === "claude"
+                ? "That file is too large to scan. Split a long PDF into fewer pages, or paste a link to the menu instead."
+                : "That file is too large for the Gemini scanner, which has to send it inline. Switch the scanner to Claude in AI Settings, split the PDF into fewer pages, or paste a link to the menu instead.",
           },
           { status: 413 },
         );

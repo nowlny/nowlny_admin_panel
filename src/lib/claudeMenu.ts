@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic, { toFile } from "@anthropic-ai/sdk";
 
 /**
  * Menu OCR through Claude, as an alternative to Gemini.
@@ -18,6 +18,17 @@ const MODEL = "claude-opus-5";
  * request open past its own timeout heuristics.
  */
 const MAX_OUTPUT_TOKENS = 32_000;
+
+/**
+ * Past this much base64, the pages are uploaded to the Files API and referenced
+ * by id instead of being inlined.
+ *
+ * A `messages` request is capped at 32 MB, and base64 inflates a file by a
+ * third — so a 30 MB menu PDF becomes a 40 MB request and is refused outright.
+ * The Files API takes files up to 500 MB and costs nothing to use; only the
+ * tokens are billed, exactly as with an inline document.
+ */
+const INLINE_BUDGET_CHARS = 18 * 1024 * 1024;
 
 /** What Claude accepts as an image block. Anything else has to go as a PDF. */
 const IMAGE_TYPES = new Set([
@@ -46,6 +57,32 @@ export class ClaudeMenuError extends Error {
 /** True for a file Claude can actually read as a document. */
 export function claudeCanRead(mimeType: string): boolean {
   return mimeType === "application/pdf" || IMAGE_TYPES.has(mimeType);
+}
+
+/**
+ * Uploads one page and returns a block that points at it.
+ *
+ * Uploads are sequential on purpose: these are multi-megabyte bodies, and
+ * firing them in parallel on a serverless function is how you exhaust its
+ * memory rather than how you save time.
+ */
+async function toUploadedBlock(
+  client: Anthropic,
+  page: MenuPage,
+  index: number,
+): Promise<Anthropic.ContentBlockParam> {
+  const isPdf = page.mimeType === "application/pdf";
+  const uploaded = await client.files.upload({
+    file: await toFile(
+      Buffer.from(page.data, "base64"),
+      `menu-${index + 1}.${isPdf ? "pdf" : page.mimeType.split("/")[1]}`,
+      { type: page.mimeType },
+    ),
+  });
+
+  return isPdf
+    ? { type: "document", source: { type: "file", file_id: uploaded.id } }
+    : { type: "image", source: { type: "file", file_id: uploaded.id } };
 }
 
 function toContentBlock(page: MenuPage): Anthropic.ContentBlockParam {
@@ -112,10 +149,27 @@ export async function scanMenuWithClaude({
     maxRetries: 0,
   });
 
+  const encodedBytes = pages.reduce((total, page) => total + page.data.length, 0);
+  const useFilesApi = encodedBytes > INLINE_BUDGET_CHARS;
+
+  let attachments: Anthropic.ContentBlockParam[];
+  try {
+    if (useFilesApi) {
+      attachments = [];
+      for (const [index, page] of pages.entries()) {
+        attachments.push(await toUploadedBlock(client, page, index));
+      }
+    } else {
+      attachments = pages.map(toContentBlock);
+    }
+  } catch (error) {
+    throw asMenuError(error);
+  }
+
   // Documents go before the instruction — Claude reads a prompt that follows
   // its attachments more reliably than one that precedes them.
   const content: Anthropic.ContentBlockParam[] = pages.length
-    ? [...pages.map(toContentBlock), { type: "text", text: prompt }]
+    ? [...attachments, { type: "text", text: prompt }]
     : [
         {
           type: "text",
