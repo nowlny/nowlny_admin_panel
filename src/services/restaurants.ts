@@ -168,7 +168,11 @@ export interface RestaurantCreate {
   deliveryFee?: number;
   deliveryTimeMinMinutes?: number;
   deliveryTimeMaxMinutes?: number;
-  openingHours?: { entries: OpeningHourEntry[] };
+  /**
+   * The API accepts a bare array or `{ entries: [...] }`; the forms send the
+   * array. A day left out is closed.
+   */
+  openingHours?: OpeningHourEntry[];
   status?: RestaurantStatus;
   currencyId?: string;
   deliveryZones?: DeliveryZonePayload[];
