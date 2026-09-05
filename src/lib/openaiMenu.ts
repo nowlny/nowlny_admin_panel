@@ -203,18 +203,52 @@ export async function scanMenuWithOpenAi({
   return text;
 }
 
-/** Turns an API failure into something an operator can act on. */
-function messageForStatus(status: number, errorText: string): string {
-  if (status === 401 || status === 403) {
-    return "The OpenAI API key was rejected. Check the key in AI Settings.";
+/** What OpenAI put in the error body, when it is shaped the documented way. */
+function readApiError(errorText: string): { code: string; message: string } {
+  try {
+    const error = JSON.parse(errorText)?.error;
+    return {
+      code: typeof error?.code === "string" ? error.code : "",
+      message: typeof error?.message === "string" ? error.message : "",
+    };
+  } catch {
+    return { code: "", message: "" };
   }
-  if (status === 404 && /model/i.test(errorText)) {
-    return `This account can't use the "${MODEL}" model. Set OPENAI_MENU_MODEL on the server to one it can.`;
+}
+
+/**
+ * Turns an API failure into something an operator can act on.
+ *
+ * Exported for the tests, and written around one lesson: a 401/403 is not
+ * always a bad key. OpenAI returns 403 for a region it does not serve, and
+ * "check the key in AI Settings" then sends someone to re-paste a key that was
+ * never the problem. So the reason OpenAI gave is read, and when it is not one
+ * we recognise, its own sentence is passed through rather than replaced.
+ */
+export function messageForStatus(status: number, errorText: string): string {
+  const { code, message } = readApiError(errorText);
+  const said = message ? ` OpenAI said: ${message.slice(0, 220)}` : "";
+
+  if (code === "unsupported_country_region_territory" || /country, region/i.test(message)) {
+    return (
+      "OpenAI doesn't serve the country this server is in, so the key can't be used from here. " +
+      "Switch the AI scanner to Gemini or Claude in AI Settings."
+    );
+  }
+  if (code === "insufficient_quota" || /quota|billing/i.test(message)) {
+    return "That OpenAI key has no credit left. Add billing to the account, or switch the scanner in AI Settings.";
+  }
+  if (code === "model_not_found" || (status === 404 && /model/i.test(errorText))) {
+    return `This account can't use the "${MODEL}" model. Set OPENAI_MENU_MODEL on the server to one it can.${said}`;
+  }
+  if (code === "invalid_api_key" || status === 401) {
+    return `The OpenAI API key was rejected.${said || " Check the key in AI Settings."}`;
+  }
+  if (status === 403) {
+    return `OpenAI refused that request.${said || " The key may not have access to this model."}`;
   }
   if (status === 429) {
-    return /quota|billing/i.test(errorText)
-      ? "That OpenAI key has no credit left. Add billing to the account, or switch the scanner in AI Settings."
-      : "OpenAI is rate limited right now. Wait a moment and try again.";
+    return `OpenAI is rate limited right now. Wait a moment and try again.${said}`;
   }
   if (status === 413) {
     return "That file is too large for OpenAI to read in one request. Upload the menu as a PDF so it can be read a few pages at a time.";
@@ -222,5 +256,7 @@ function messageForStatus(status: number, errorText: string): string {
   if (status >= 500) {
     return "OpenAI is temporarily unavailable. Please try again shortly.";
   }
-  return "OpenAI couldn't read that menu. Try a clearer photo, or a text-based PDF instead of a scan.";
+  // A 400 is usually the request, not the menu — passing the parameter name
+  // through is the difference between a fix and a guess.
+  return `OpenAI couldn't read that menu.${said}`;
 }
