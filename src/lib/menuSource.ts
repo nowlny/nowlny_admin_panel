@@ -1,5 +1,10 @@
 import { lookup } from "node:dns/promises";
 import { isIPv4, isIPv6 } from "node:net";
+import { MenuSourceError } from "./menuSourceError";
+import { fetchPublic } from "./httpFallback";
+import { adaptSelfHostedStorec, type AdaptedMenu } from "./storefrontAdapters";
+
+export { MenuSourceError } from "./menuSourceError";
 
 /**
  * Fetches a menu the operator pasted a link to, so it can be scanned the same
@@ -75,6 +80,8 @@ const USER_AGENT =
   "Chrome/131.0.0.0 Safari/537.36 NowlnyMenuImporter/1.0 (+https://nowlny.com)";
 
 export type MenuSource =
+  /** Read from the site's own API and mapped field for field — no model needed. */
+  | ({ kind: "menu" } & AdaptedMenu)
   | { kind: "binary"; label: string; mimeType: string; base64: string }
   | {
       kind: "text";
@@ -95,17 +102,6 @@ export type MenuSource =
        */
       imageBase?: string;
     };
-
-/** Carries a message that is safe to show the operator, unlike a raw fetch error. */
-export class MenuSourceError extends Error {
-  readonly status: number;
-
-  constructor(message: string, status = 400) {
-    super(message);
-    this.name = "MenuSourceError";
-    this.status = status;
-  }
-}
 
 function isPrivateIPv4(address: string): boolean {
   const parts = address.split(".").map(Number);
@@ -568,7 +564,7 @@ function collectRelativeImagePaths(payload: string): string[] {
 /** Does this URL actually serve an image? One probe, one answer. */
 async function servesImage(url: string): Promise<boolean> {
   try {
-    const response = await fetch(url, {
+    const response = await fetchPublic(url, {
       method: "GET",
       // A single byte is enough to see the status and content type.
       headers: { "User-Agent": USER_AGENT, Range: "bytes=0-0" },
@@ -596,6 +592,9 @@ async function findImageBase(
   payload: string,
   html: string,
   pageUrl: URL,
+  loadBundles: BundleLoader,
+  /** Origins worth trying before anything is guessed — e.g. the site's own backend. */
+  preferredBases: string[] = [],
 ): Promise<string | undefined> {
   const [sample] = collectRelativeImagePaths(payload);
   if (!sample) return undefined;
@@ -613,31 +612,10 @@ async function findImageBase(
 
   if (hosts.length === 0) {
     // The hostname lives in an environment variable compiled into a bundle.
-    const scripts = [...html.matchAll(/<script[^>]+src="([^"]+\.js)"/gi)]
-      .map((match) => match[1])
-      // The client that talks to the store is set up in the root layout.
-      .sort((a, b) => Number(b.includes("layout")) - Number(a.includes("layout")))
-      .slice(0, MAX_CHUNKS_SCANNED);
-
-    const bundles = await Promise.all(
-      scripts.map(async (src) => {
-        try {
-          const response = await fetch(new URL(src, pageUrl), {
-            headers: { "User-Agent": USER_AGENT },
-            signal: AbortSignal.timeout(IMAGE_PROBE_TIMEOUT_MS),
-            cache: "no-store",
-          });
-          return response.ok ? (await response.text()).slice(0, MAX_HTML_BYTES) : "";
-        } catch {
-          return "";
-        }
-      }),
-    );
-
-    hosts = [...new Set(bundles.join("").match(STORAGE_HOST) ?? [])];
+    hosts = [...new Set((await loadBundles()).join("").match(STORAGE_HOST) ?? [])];
   }
 
-  const bases: string[] = [];
+  const bases: string[] = [...preferredBases];
   const folder = sample.split("/")[0];
 
   for (const host of hosts.slice(0, 2)) {
@@ -665,6 +643,210 @@ async function findImageBase(
   }
 
   return undefined;
+}
+
+/* ── Single-page apps that fetch their menu from an API ──────────────────────
+   A React or Vue storefront ships an empty `<div id="root">` and asks its
+   backend for the menu once it runs — a backend that is often on a bare IP,
+   compiled into the bundle as `API_URL: "https://…/api"`. The bundle is public
+   and so is the API, so we read the constant and ask the API ourselves.
+--------------------------------------------------------------------------- */
+
+/** The site's own scripts, fetched once and shared by every reader below. */
+type BundleLoader = () => Promise<string[]>;
+
+function bundleLoader(html: string, pageUrl: URL): BundleLoader {
+  let pending: Promise<string[]> | null = null;
+  return () => {
+    pending ??= Promise.all(
+      [...html.matchAll(/<script\b[^>]+\bsrc\s*=\s*["']([^"']+\.js(?:\?[^"']*)?)["']/gi)]
+        .map((match) => decodeEntities(match[1]))
+        // The client that talks to the backend is set up in the root layout.
+        .sort((a, b) => Number(b.includes("layout")) - Number(a.includes("layout")))
+        .slice(0, MAX_CHUNKS_SCANNED)
+        .map(async (src) => {
+          try {
+            // Same rule as the page itself: a script tag can point anywhere.
+            const target = await assertPublicUrl(new URL(src, pageUrl).href);
+            const response = await fetch(target, {
+              headers: { "User-Agent": USER_AGENT },
+              signal: AbortSignal.timeout(IMAGE_PROBE_TIMEOUT_MS),
+              cache: "no-store",
+            });
+            return response.ok ? (await response.text()).slice(0, MAX_HTML_BYTES) : "";
+          } catch {
+            return "";
+          }
+        }),
+    );
+    return pending;
+  };
+}
+
+/** Names a bundle gives the address of its backend. */
+const API_BASE_NAMES =
+  "API_URL|API_BASE_URL|API_BASE|API_ENDPOINT|BASE_URL|BACKEND_URL|SERVER_URL|" +
+  "apiUrl|apiURL|apiBaseUrl|apiBase|baseURL|baseUrl|backendUrl|serverUrl|" +
+  "REACT_APP_API_URL|VITE_API_URL|NEXT_PUBLIC_API_URL";
+
+const API_BASE_ASSIGNMENT = new RegExp(
+  `\\b(${API_BASE_NAMES})\\s*[:=]\\s*["'](https?:\\/\\/[^"'\\s]{4,200}?)["']`,
+  "g",
+);
+
+/** `"".concat(config.API_URL, "/sections")` — the paths a bundle appends to its base. */
+const API_PATH_USE = new RegExp(
+  `\\.(?:${API_BASE_NAMES})\\s*,\\s*["'](\\/[A-Za-z0-9_\\-./]{1,80})["']`,
+  "g",
+);
+
+/** Endpoints worth asking: the ones whose name says "menu". */
+const MENU_ENDPOINT = /(menu|categor|section|product|item|dish|food|meal)/i;
+
+/** The empty element a React/Vue/Next app renders itself into. */
+const SPA_MOUNT_POINT = /\bid=["'](?:root|app|__next|__nuxt|q-app|svelte)["']/i;
+
+/** Each probe is a request to someone else's server; a handful is plenty. */
+const MAX_API_PROBES = 4;
+
+/** A menu API answers in kilobytes; anything bigger is not a menu. */
+const MAX_API_PROBE_BYTES = 8 * 1024 * 1024;
+
+interface SpaApi {
+  apiUrl: string;
+  /** Where uploads are served from — usually the API host without `/api`. */
+  serverUrl: string;
+  /** Paths the bundle appends to `apiUrl`, in the order they appear. */
+  paths: string[];
+}
+
+function discoverSpaApi(bundles: string[]): SpaApi | null {
+  const code = bundles.join("\n");
+  const bases = new Map<string, string>();
+  for (const match of code.matchAll(API_BASE_ASSIGNMENT)) {
+    if (!bases.has(match[1])) bases.set(match[1], match[2].replace(/\/+$/, ""));
+  }
+  if (bases.size === 0) return null;
+
+  const entries = [...bases.entries()];
+  const apiUrl =
+    entries.find(([name, url]) => /api|backend/i.test(name) && /\/api\b/i.test(url))?.[1] ??
+    entries.find(([name]) => /api|backend/i.test(name))?.[1] ??
+    entries[0][1];
+
+  let serverUrl = entries.find(([name]) => /server/i.test(name))?.[1];
+  if (!serverUrl) {
+    try {
+      serverUrl = new URL(apiUrl).origin;
+    } catch {
+      return null;
+    }
+  }
+
+  const paths = [...new Set([...code.matchAll(API_PATH_USE)].map((match) => match[1]))];
+  return { apiUrl, serverUrl, paths };
+}
+
+/** One JSON read of an address that came out of a bundle. Null on any trouble. */
+async function probeJson(url: URL): Promise<unknown | null> {
+  try {
+    const response = await fetchPublic(url, {
+      // A redirect could point anywhere, including inside — this URL was
+      // vetted, its destination was not.
+      redirect: "manual",
+      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      signal: AbortSignal.timeout(DISCOVERY_FETCH_TIMEOUT_MS),
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      return null;
+    }
+    const body = await readCapped(response, MAX_API_PROBE_BYTES, "menu");
+    return JSON.parse(new TextDecoder("utf-8").decode(body));
+  } catch {
+    return null;
+  }
+}
+
+function pageTitle(html: string): string {
+  const match = /<title[^>]*>([^<]{1,160})<\/title>/i.exec(html);
+  return match ? decodeEntities(match[1]).trim() : "";
+}
+
+/**
+ * Read a single-page app's menu from the API its own code calls.
+ *
+ * A self-hosted copy of the storec app is recognised by its payload and mapped
+ * exactly, the way a storec.app link is. Any other backend that answers with
+ * prices is handed to the model as data, the same as a page that embeds its
+ * JSON. Null when the bundle names no backend, or nothing it names is a menu.
+ */
+async function readSpaMenu(
+  loadBundles: BundleLoader,
+  pageUrl: URL,
+  title: string,
+  deadline: number,
+): Promise<MenuSource | null> {
+  const api = discoverSpaApi(await loadBundles());
+  if (!api || Date.now() >= deadline) return null;
+
+  let apiUrl: URL;
+  let serverUrl: URL;
+  try {
+    // An address out of someone else's JavaScript gets the same treatment as
+    // the link the operator pasted.
+    apiUrl = await assertPublicUrl(api.apiUrl);
+    serverUrl = await assertPublicUrl(api.serverUrl);
+  } catch {
+    return null;
+  }
+
+  const label = title || pageUrl.hostname;
+  const base = apiUrl.href.replace(/\/+$/, "");
+  const serverBase = `${serverUrl.href.replace(/\/+$/, "")}/`;
+
+  if (api.paths.length === 0 || api.paths.some((path) => /^\/menu\/categories\/?$/.test(path))) {
+    const adapted = await adaptSelfHostedStorec(base, serverBase, label);
+    if (adapted) return { kind: "menu", ...adapted };
+  }
+
+  const candidates = api.paths
+    .filter((path) => MENU_ENDPOINT.test(path))
+    // "/menu…" before "/sections"; shorter before longer.
+    .sort((a, b) => Number(/menu/i.test(b)) - Number(/menu/i.test(a)) || a.length - b.length)
+    .slice(0, MAX_API_PROBES);
+
+  for (const path of candidates) {
+    if (Date.now() >= deadline) break;
+
+    let target: URL;
+    try {
+      target = await assertPublicUrl(`${base}${path}`);
+    } catch {
+      continue;
+    }
+
+    const payload = await probeJson(target);
+    if (payload === null) continue;
+
+    // Upload paths from a Windows-hosted backend arrive as `uploads\\images\\…`.
+    const json = compactStructuredPayload(JSON.stringify(payload))
+      .replace(/\\\\/g, "/")
+      .slice(0, MAX_STRUCTURED_CHARS);
+    if (json.length < MIN_TEXT_CHARS || !looksLikeMenu(json)) continue;
+
+    return {
+      kind: "text",
+      label,
+      text: json,
+      images: [],
+      structured: true,
+      imageBase: await findImageBase(json, "", pageUrl, loadBundles, [serverBase]),
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -760,6 +942,7 @@ export async function fetchMenuSource(
     const body = await readCapped(response, MAX_HTML_BYTES, "page");
     const html = new TextDecoder("utf-8").decode(body);
     const isHtml = contentType.includes("html") || /<html|<body|<div/i.test(html.slice(0, 2000));
+    const loadBundles = bundleLoader(html, url);
 
     const { text, images } = isHtml
       ? htmlToMenuText(html, url)
@@ -767,7 +950,7 @@ export async function fetchMenuSource(
 
     // Best reading of this page, in preference order: what it renders, then
     // the data it ships without rendering.
-    let best: MenuSource | null =
+    let best: Extract<MenuSource, { kind: "text" }> | null =
       text.length >= MIN_TEXT_CHARS ? { kind: "text", label, text, images } : null;
 
     if (isHtml && (!best || !looksLikeMenu(text))) {
@@ -786,9 +969,22 @@ export async function fetchMenuSource(
           text: payload,
           images,
           structured: true,
-          imageBase: await findImageBase(payload, html, url),
+          imageBase: await findImageBase(payload, html, url, loadBundles),
         };
       }
+    }
+
+    // Nothing rendered and nothing embedded: a single-page app that fetches
+    // its menu from a backend at runtime. Its bundle says where that is. Only
+    // pages that look like an app shell are worth the bundle download.
+    if (
+      isHtml &&
+      Date.now() < deadline &&
+      (!best || !looksLikeMenu(best.text)) &&
+      (!best || SPA_MOUNT_POINT.test(html))
+    ) {
+      const fromApi = await readSpaMenu(loadBundles, url, pageTitle(html), deadline);
+      if (fromApi) return fromApi;
     }
 
     // Still not a menu? The operator probably pasted the home page or an
@@ -798,7 +994,7 @@ export async function fetchMenuSource(
         if (Date.now() >= deadline) break;
         try {
           const found = await fetchMenuSource(candidate, true, deadline);
-          if (found.kind === "binary" || looksLikeMenu(found.text)) return found;
+          if (found.kind !== "text" || looksLikeMenu(found.text)) return found;
         } catch {
           // That page didn't work out either — try the next signpost.
         }

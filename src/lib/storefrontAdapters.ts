@@ -1,4 +1,5 @@
-import { MenuSourceError } from "./menuSource";
+import { MenuSourceError } from "./menuSourceError";
+import { fetchPublic } from "./httpFallback";
 
 /**
  * Direct importers for storefront platforms whose menus we can read exactly.
@@ -60,11 +61,20 @@ export interface AdaptedMenu {
   images: string[];
 }
 
-async function getJson(url: string): Promise<unknown> {
+async function getJson(
+  url: string,
+  /**
+   * Off for an address that came out of someone else's JavaScript: the caller
+   * vetted *this* URL against private address space, not wherever it might
+   * redirect to. A 3xx then simply reads as "not ok".
+   */
+  { followRedirects = true }: { followRedirects?: boolean } = {},
+): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetch(url, {
-      headers: { Accept: "application/json" },
+    response = await fetchPublic(url, {
+      headers: { Accept: "application/json", "User-Agent": BROWSER_UA },
+      redirect: followRedirects ? "follow" : "manual",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       cache: "no-store",
     });
@@ -118,6 +128,8 @@ function byOrder(a: unknown, b: unknown): number {
 }
 
 const ARABIC = /[؀-ۿ]/;
+const ARABIC_LETTERS = /[؀-ۿ]/g;
+const LATIN_LETTERS = /[A-Za-z]/g;
 
 /**
  * Sizes come through as bare `s`/`m`/`l`, which would import as a dish called
@@ -155,12 +167,61 @@ function storecSlug(url: URL): string | null {
   return slug && SLUG.test(slug) ? slug : null;
 }
 
-async function adaptStorec(slug: string): Promise<AdaptedMenu> {
-  const payload = asRecord(await getJson(`https://storec.app/api/menu/categories/${slug}`));
-  const rawCategories = asArray(asRecord(payload.menu).categories);
+/**
+ * Does this look like what storec's menu endpoint answers with? The hosted
+ * platform and a restaurant running its own copy of the app share the shape.
+ */
+export function isStorecMenuPayload(payload: unknown): boolean {
+  return asArray(asRecord(asRecord(payload).menu).categories).some((rawCategory) =>
+    asArray(asRecord(rawCategory).items).some((rawItem) => {
+      const item = asRecord(rawItem);
+      return "title" in item && ("priceOptions" in item || "images" in item);
+    }),
+  );
+}
+
+/**
+ * Map a storec menu payload field for field.
+ *
+ * `imageOrigin` is where the relative upload paths live: storec.app itself for
+ * a hosted store, the site's own backend for a self-hosted one — which stores
+ * them with Windows separators (`uploads\images\x.jpeg`).
+ *
+ * A payload can carry several branches, each with its own copy of every
+ * category. The admin imports into one restaurant, so the branch with the most
+ * dishes is taken and named in the label; the operator can see which one they
+ * got rather than receiving every category twice.
+ */
+function mapStorecMenu(
+  payload: Record<string, unknown>,
+  imageOrigin: string,
+  label: string,
+): AdaptedMenu {
+  let rawCategories = asArray(asRecord(payload.menu).categories);
 
   if (rawCategories.length === 0) {
     throw new MenuSourceError("That store's menu is empty.", 422);
+  }
+
+  const dishesPerBranch = new Map<string, number>();
+  for (const rawCategory of rawCategories) {
+    const category = asRecord(rawCategory);
+    const branch = text(category.branchCode);
+    if (branch) {
+      dishesPerBranch.set(
+        branch,
+        (dishesPerBranch.get(branch) ?? 0) + asArray(category.items).length,
+      );
+    }
+  }
+
+  let branchLabel = "";
+  if (dishesPerBranch.size > 1) {
+    const [primary] = [...dishesPerBranch.entries()].sort((a, b) => b[1] - a[1])[0];
+    rawCategories = rawCategories.filter(
+      (rawCategory) => text(asRecord(rawCategory).branchCode) === primary,
+    );
+    branchLabel = primary.replace(/[_-]+/g, " ");
   }
 
   const images: string[] = [];
@@ -168,10 +229,15 @@ async function adaptStorec(slug: string): Promise<AdaptedMenu> {
 
   /** Uploads are stored as paths relative to the site root. */
   const registerImage = (path: string): number | undefined => {
-    const clean = text(path);
+    const clean = text(path).replace(/\\/g, "/");
     if (!clean) return undefined;
 
-    const href = new URL(clean, "https://storec.app/").href;
+    let href: string;
+    try {
+      href = new URL(clean, imageOrigin).href;
+    } catch {
+      return undefined;
+    }
     const existing = imageRefs.get(href);
     if (existing) return existing;
 
@@ -180,9 +246,15 @@ async function adaptStorec(slug: string): Promise<AdaptedMenu> {
     return images.length;
   };
 
-  const arabic = ARABIC.test(
-    rawCategories.map((category) => text(asRecord(category).title)).join(""),
-  );
+  // Size labels follow the menu's main language. Bilingual menus put Arabic in
+  // a title here and there, so one Arabic word must not flip an English menu.
+  const names = rawCategories
+    .flatMap((rawCategory) => [
+      text(asRecord(rawCategory).title),
+      ...asArray(asRecord(rawCategory).items).map((rawItem) => text(asRecord(rawItem).title)),
+    ])
+    .join(" ");
+  const arabic = (names.match(ARABIC_LETTERS)?.length ?? 0) > (names.match(LATIN_LETTERS)?.length ?? 0);
 
   const categories = rawCategories
     .slice()
@@ -234,11 +306,46 @@ async function adaptStorec(slug: string): Promise<AdaptedMenu> {
     throw new MenuSourceError("That store's menu has no dishes in it yet.", 422);
   }
 
+  return {
+    label: branchLabel ? `${label} (${branchLabel})` : label,
+    data: { categories },
+    images,
+  };
+}
+
+async function adaptStorec(slug: string): Promise<AdaptedMenu> {
+  const payload = asRecord(await getJson(`https://storec.app/api/menu/categories/${slug}`));
   const details = asRecord(
     await getJson(`https://storec.app/api/storeDetails/${slug}`).catch(() => ({})),
   );
+  return mapStorecMenu(payload, "https://storec.app/", text(details.name) || slug);
+}
 
-  return { label: text(details.name) || slug, data: { categories }, images };
+/**
+ * A restaurant running its own copy of the storec app, on its own domain, with
+ * the backend somewhere else entirely. The page is the usual empty React
+ * shell; `apiUrl` and `serverUrl` are the constants its bundle was built with,
+ * found and vetted against private address space by `menuSource`.
+ *
+ * Returns null when the backend is not storec after all, so the caller can go
+ * on looking; a storec backend with nothing on it is reported as such.
+ */
+export async function adaptSelfHostedStorec(
+  apiUrl: string,
+  serverUrl: string,
+  label: string,
+): Promise<AdaptedMenu | null> {
+  let payload: unknown;
+  try {
+    payload = await getJson(`${apiUrl.replace(/\/+$/, "")}/menu/categories`, {
+      followRedirects: false,
+    });
+  } catch {
+    return null;
+  }
+
+  if (!isStorecMenuPayload(payload)) return null;
+  return mapStorecMenu(asRecord(payload), `${serverUrl.replace(/\/+$/, "")}/`, label);
 }
 
 

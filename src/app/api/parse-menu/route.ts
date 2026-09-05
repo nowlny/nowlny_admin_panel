@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { normalizeParsedMenu } from "../../../lib/menuParsing";
 import { fetchMenuSource, MenuSourceError } from "../../../lib/menuSource";
-import { tryStorefrontMenu } from "../../../lib/storefrontAdapters";
+import { tryStorefrontMenu, type AdaptedMenu } from "../../../lib/storefrontAdapters";
 import { ClaudeMenuError, scanMenuWithClaude } from "../../../lib/claudeMenu";
 
 /**
@@ -275,6 +275,45 @@ ${names.map((name, index) => `${index + 1}. ${name}`).join("\n")}`;
   return queries;
 }
 
+/**
+ * Answer with a menu read straight from its source — no OCR, no model in the
+ * loop. The model is only asked for photo-search phrases for dishes without a
+ * picture, and only when there is a key to ask it with.
+ */
+async function respondWithImportedMenu(
+  adapted: AdaptedMenu,
+  geminiKey: string | undefined,
+): Promise<NextResponse> {
+  const menu = normalizeParsedMenu(adapted.data, adapted.images);
+
+  // Same rule as the model path: an empty menu is a failure.
+  if (menu.categories.every((category) => category.items.length === 0)) {
+    return NextResponse.json(
+      { error: "That store's menu has no dishes in it yet." },
+      { status: 422 },
+    );
+  }
+
+  const photoless = menu.categories
+    .flatMap((category) => category.items)
+    .filter((item) => !item.image);
+
+  // The one thing the model is still better at here: naming, in English,
+  // what a dish looks like so a stock photo can be found for it.
+  if (geminiKey && photoless.length > 0) {
+    const queries = await generateImageQueries(
+      [...new Set(photoless.map((item) => item.name))].slice(0, MAX_IMAGE_QUERY_NAMES),
+      geminiKey,
+    );
+    for (const item of photoless) {
+      const phrase = queries.get(item.name);
+      if (phrase) item.imageQuery = phrase;
+    }
+  }
+
+  return NextResponse.json({ ...menu, label: adapted.label });
+}
+
 export async function POST(request: Request) {
   // Fetching a link or a QR menu's pages spends part of the budget before we
   // ever reach the model, and how much varies wildly — so the model gets
@@ -352,35 +391,7 @@ export async function POST(request: Request) {
       }
 
       if (adapted?.kind === "menu") {
-        const menu = normalizeParsedMenu(adapted.data, adapted.images);
-
-        // Same rule as the model path below: an empty menu is a failure.
-        if (menu.categories.every((category) => category.items.length === 0)) {
-          return NextResponse.json(
-            { error: "That store's menu has no dishes in it yet." },
-            { status: 422 },
-          );
-        }
-
-        const photoless = menu.categories
-          .flatMap((category) => category.items)
-          .filter((item) => !item.image);
-
-        // The one thing the model is still better at here: naming, in English,
-        // what a dish looks like so a stock photo can be found for it.
-        const key = customApiKey || process.env.GEMINI_API_KEY;
-        if (key && photoless.length > 0) {
-          const queries = await generateImageQueries(
-            [...new Set(photoless.map((item) => item.name))].slice(0, MAX_IMAGE_QUERY_NAMES),
-            key,
-          );
-          for (const item of photoless) {
-            const phrase = queries.get(item.name);
-            if (phrase) item.imageQuery = phrase;
-          }
-        }
-
-        return NextResponse.json({ ...menu, label: adapted.label });
+        return respondWithImportedMenu(adapted, customApiKey || process.env.GEMINI_API_KEY);
       }
 
       if (adapted?.kind === "documents") {
@@ -425,6 +436,10 @@ export async function POST(request: Request) {
     if (needsSource && linkToFetch) {
       try {
         const source = await fetchMenuSource(linkToFetch);
+        // The page turned out to be a storefront whose API we can read exactly.
+        if (source.kind === "menu") {
+          return respondWithImportedMenu(source, customApiKey || process.env.GEMINI_API_KEY);
+        }
         sourceLabel = sourceLabel || source.label;
         if (source.kind === "binary") {
           documents = [{ mimeType: source.mimeType, data: source.base64 }];
