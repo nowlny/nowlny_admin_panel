@@ -697,11 +697,17 @@ export async function POST(request: Request) {
       ? `
       Pasted payload rules:
       17. Ignore everything in the payload that is not a dish: theme, colours, settings, banners, carousels, page sections, opening hours, branches and analytics.
-      18. Ignore option groups, modifiers, add-ons and extras — keys like "optionGroups", "choices", "addons", "modifiers". Those are ways to customise a dish, not dishes. Never import one as a menu item.
-      19. When a dish carries several sizes or price options, return ONE ITEM PER SIZE and put the size in that item's name (e.g. "Margherita - Large"). Spell the size out in the menu's language; never leave a bare code like "l" or "m".
-      20. When a dish carries both a list price and a final or discounted one, use the price the payload marks as final or current.
-      21. When the payload marks a dish as unavailable, sold out or hidden, still return it and add "isAvailable": false to that item. Leave the field out otherwise.
-      22. Return every dish in the payload. Do not summarise, sample or stop early.`
+      18. When a dish carries several sizes or price options, return ONE ITEM PER SIZE and put the size in that item's name (e.g. "Margherita - Large"). Spell the size out in the menu's language; never leave a bare code like "l" or "m".
+      19. When a dish carries both a list price and a final or discounted one, use the price the payload marks as final or current.
+      20. When the payload marks a dish as unavailable, sold out or hidden, still return it and add "isAvailable": false to that item. Leave the field out otherwise.
+      21. Return every dish in the payload. Do not summarise, sample or stop early.
+
+      Modifiers — the choices a customer makes about a dish:
+      22. Option groups, modifiers, add-ons and extras (keys like "optionGroups", "choices", "addons", "modifiers", "variations") are NEVER menu items of their own. Never return "Oat Dough" or "Add pickles" as a dish. They belong in that dish's "optionGroups" instead.
+      23. For each such group give its "name" and its "options", each option with a "name" and a "price".
+      24. An option's "price" is what the choice ADDS to the dish, not a total: a free choice is 0, and a choice the payload prices at null, "" or 0 is 0.
+      25. Set "type" to "radio" when the customer picks exactly one (sizes, dough, cooking level) and "checkbox" when they may pick several (toppings, extras, sauces). Set "isRequired" to true only when the payload says the group must be answered.
+      26. Keep the group and option names in the menu's own language, exactly like dish names.`
       : "";
 
     const prompt = `
@@ -747,6 +753,10 @@ ${imageRule}${pastedRules}
                 "price": 12.99,
                 "category": "Category Name, in the menu's language",
                 "imageQuery": "english stock photo search phrase"${
+                  pastedJson
+                    ? ',\n                "optionGroups": [{ "name": "Group name, in the menu\'s language", "type": "radio", "isRequired": false, "options": [{ "name": "Choice name", "price": 0 }] }]'
+                    : ""
+                }${
                   structuredText
                     ? ',\n                "image": "exactly as written in the data"'
                     : sourceImages.length

@@ -53,6 +53,29 @@ export interface MenuOptionGroup {
   options?: MenuOption[];
 }
 
+/**
+ * One choice inside an option group, as the API takes it.
+ *
+ * `price` is a *surcharge* — what this choice adds to the dish's own price,
+ * not what the choice costs on its own. A free choice is 0.
+ */
+export interface MenuOptionPayload {
+  name: string;
+  price?: number;
+  sortOrder?: number;
+}
+
+export interface MenuOptionGroupPayload {
+  menuItemId: string;
+  name: string;
+  /** `radio` = pick exactly one, `checkbox` = pick any number. */
+  type: "radio" | "checkbox";
+  isRequired?: boolean;
+  sortOrder?: number;
+  /** Created in the same request as the group, rather than one call each. */
+  options?: MenuOptionPayload[];
+}
+
 export interface MenuItemPayload {
   sectionId?: string;
   name?: string;
@@ -136,7 +159,7 @@ export const menuService = {
 
   // ─── Option groups ─────────────────────────────────────────────────────────
 
-  createOptionGroup: (data: Partial<MenuOptionGroup>) =>
+  createOptionGroup: (data: MenuOptionGroupPayload) =>
     apiClient<MenuOptionGroup>("/api/v1/menu/option-groups", {
       method: "POST",
       body: JSON.stringify(data),

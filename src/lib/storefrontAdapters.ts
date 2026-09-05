@@ -55,6 +55,13 @@ export interface AdaptedMenu {
         /** 1-based index into `images`. */
         imageRef?: number;
         isAvailable: boolean;
+        /** Modifiers, in the shape `normalizeParsedMenu` reads. */
+        optionGroups?: {
+          name: string;
+          type: "radio" | "checkbox";
+          isRequired: boolean;
+          options: { name: string; price: number }[];
+        }[];
       }[];
     }[];
   };
@@ -445,9 +452,56 @@ export function mapCategoryItemsMenu(
           const listed = Number(item.price);
           const price = Number.isFinite(final) ? final : Number.isFinite(listed) ? listed : 0;
 
-          // `optionGroups` is deliberately untouched: those are ways to
-          // customise a dish, and the menu we import into has no place for
-          // them. Importing them would multiply a 90-dish menu into 1,200 rows.
+          /*
+           * Modifiers map straight across: this platform's choices are priced
+           * the way ours are — as what they add to the dish, free ones at
+           * zero — so "Replace Dough / Oat Dough +100,000" survives the import
+           * as the same question the customer was being asked before.
+           *
+           * `required` is the only thing said about how many may be picked, so
+           * a group that must be answered becomes a single choice and every
+           * other group stays multi-select.
+           */
+          const optionGroups = asArray(item.optionGroups)
+            .slice()
+            .sort(bySort)
+            .flatMap((rawGroup) => {
+              const group = asRecord(rawGroup);
+              const groupName = localized(group, "name");
+              if (!groupName) return [];
+
+              const options = asArray(group.choices)
+                .slice()
+                .sort(bySort)
+                .flatMap((rawChoice) => {
+                  const choice = asRecord(rawChoice);
+                  const choiceName = localized(choice, "name");
+                  // A sold-out choice would import as one nobody can pick:
+                  // our options carry no availability of their own.
+                  if (!choiceName || choice.available === false) return [];
+
+                  const surcharge = Number(choice.price);
+                  return [
+                    {
+                      name: choiceName,
+                      price: Number.isFinite(surcharge) && surcharge > 0 ? surcharge : 0,
+                    },
+                  ];
+                });
+
+              if (options.length === 0) return [];
+
+              const isRequired = group.required === true;
+              return [
+                {
+                  name: groupName,
+                  type: (isRequired ? "radio" : "checkbox") as "radio" | "checkbox",
+                  isRequired,
+                  options,
+                },
+              ];
+            });
+
           return [
             {
               name,
@@ -455,6 +509,7 @@ export function mapCategoryItemsMenu(
               price,
               imageRef: registerImage(text(item.image)),
               isAvailable: item.available !== false,
+              ...(optionGroups.length ? { optionGroups } : {}),
             },
           ];
         });

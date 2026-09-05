@@ -10,6 +10,25 @@
 /** Arabic, Persian and Urdu letters — enough to tell the script apart. */
 const ARABIC_SCRIPT = /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/;
 
+/** One choice a customer can pick. `price` is what it adds to the dish. */
+export interface NormalizedOption {
+  name: string;
+  price: number;
+}
+
+/**
+ * A set of choices attached to a dish — "Replace Dough", "Add Ingredients".
+ *
+ * `radio` means pick exactly one, `checkbox` any number, matching what the
+ * platform's own option groups mean.
+ */
+export interface NormalizedOptionGroup {
+  name: string;
+  type: "radio" | "checkbox";
+  isRequired: boolean;
+  options: NormalizedOption[];
+}
+
 export interface NormalizedItem {
   name: string;
   description?: string;
@@ -18,6 +37,69 @@ export interface NormalizedItem {
   imageQuery?: string;
   image?: string;
   isAvailable: boolean;
+  /** Left out entirely when the dish has no modifiers. */
+  optionGroups?: NormalizedOptionGroup[];
+}
+
+/**
+ * Ceilings on what one dish can carry out of a source we do not control.
+ *
+ * A menu with 40 groups on a dish is a payload we have misread, and creating
+ * them means one API call each against the restaurant being onboarded.
+ */
+const MAX_GROUPS_PER_ITEM = 20;
+const MAX_OPTIONS_PER_GROUP = 60;
+
+/**
+ * Shape whatever modifiers came back — from an adapter or from the model —
+ * into groups the platform can create.
+ *
+ * A group with nothing in it is dropped rather than created empty: it would
+ * reach the storefront as a heading a customer can't answer.
+ */
+function normalizeOptionGroups(value: unknown): NormalizedOptionGroup[] {
+  return asArray(value)
+    .slice(0, MAX_GROUPS_PER_ITEM)
+    .map((rawGroup): NormalizedOptionGroup | null => {
+      const group = asRecord(rawGroup);
+      const name = asText(group.name, 120);
+      if (!name) return null;
+
+      const isRequired = group.isRequired === true;
+      const seen = new Set<string>();
+
+      const options = asArray(group.options)
+        .slice(0, MAX_OPTIONS_PER_GROUP)
+        .map((rawOption): NormalizedOption | null => {
+          const option = asRecord(rawOption);
+          const optionName = asText(option.name, 120);
+          if (!optionName) return null;
+
+          // The same choice twice would reach the storefront as two identical
+          // radio buttons.
+          const key = optionName.toLowerCase();
+          if (seen.has(key)) return null;
+          seen.add(key);
+
+          return { name: optionName, price: parsePrice(option.price) };
+        })
+        .filter((option): option is NormalizedOption => option !== null);
+
+      if (options.length === 0) return null;
+
+      // A source that says which kind it is wins; otherwise a group the
+      // customer *must* answer can only sensibly be a single choice.
+      const claimed = asText(group.type, 10).toLowerCase();
+      const type =
+        claimed === "radio" || claimed === "checkbox"
+          ? (claimed as "radio" | "checkbox")
+          : isRequired
+            ? "radio"
+            : "checkbox";
+
+      return { name, type, isRequired, options };
+    })
+    .filter((group): group is NormalizedOptionGroup => group !== null);
 }
 
 function asText(value: unknown, maxChars: number): string {
@@ -159,6 +241,12 @@ export function normalizeParsedMenu(
           samples.push(itemName);
           if (description) samples.push(description);
 
+          const optionGroups = normalizeOptionGroups(item.optionGroups);
+          for (const group of optionGroups) {
+            samples.push(group.name);
+            for (const option of group.options) samples.push(option.name);
+          }
+
           return {
             name: itemName,
             description: description || undefined,
@@ -167,6 +255,7 @@ export function normalizeParsedMenu(
             image: /^https:\/\//.test(image) ? image : undefined,
             // The scanner has no way to know; a freshly imported dish is on sale.
             isAvailable: item.isAvailable !== false,
+            ...(optionGroups.length ? { optionGroups } : {}),
           };
         })
         .filter((item): item is NormalizedItem => item !== null);

@@ -21,6 +21,7 @@ import {
   ToggleLeft,
   ToggleRight,
   Braces,
+  SlidersHorizontal,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { RestaurantResponse } from "../../services/restaurants";
@@ -99,6 +100,13 @@ interface ParsedMenuData {
       /** Which library the photo came from, once one has been found. */
       imageSource?: string;
       isAvailable: boolean;
+      /** Modifiers the source priced separately — "Replace Dough", "Extras". */
+      optionGroups?: {
+        name: string;
+        type: "radio" | "checkbox";
+        isRequired: boolean;
+        options: { name: string; price: number }[];
+      }[];
     }[];
   }[];
 }
@@ -317,6 +325,11 @@ export default function RestaurantMenuSection({
   // Flattened preview items — the photo counter and the lookup share this order.
   const parsedItems = parsedData?.categories.flatMap((cat) => cat.items) ?? [];
   const parsedItemsWithImage = parsedItems.filter((item) => Boolean(item.image)).length;
+  const parsedGroups = parsedItems.flatMap((item) => item.optionGroups ?? []);
+  const parsedChoices = parsedGroups.reduce(
+    (total, group) => total + group.options.length,
+    0,
+  );
 
   /** Which language the scanner found in the file, and therefore imported in. */
   const detectedLanguageLabel = (code?: string) => {
@@ -730,12 +743,21 @@ export default function RestaurantMenuSection({
     if (!parsedData || isIntegrating) return;
 
     const totalSteps = parsedData.categories.reduce(
-      (steps, cat) => steps + 1 + cat.items.length,
+      (steps, cat) =>
+        steps +
+        1 +
+        cat.items.length +
+        // Each option group is its own request; leaving them out of the count
+        // stalls the bar at "90/90" for the length of a second import.
+        cat.items.reduce((groups, item) => groups + (item.optionGroups?.length ?? 0), 0),
       0,
     );
     setIntegrationProgress({ done: 0, total: totalSteps });
     setIsIntegrating(true);
     const step = () => setIntegrationProgress((p) => ({ ...p, done: p.done + 1 }));
+
+    /** Groups that failed on their own; the dish itself is already created. */
+    let failedGroups = 0;
 
     try {
       // Reload sections to ensure we have the most up-to-date list
@@ -779,8 +801,9 @@ export default function RestaurantMenuSection({
 
         // Create items for section
         for (const [idx, item] of parsedCat.items.entries()) {
+          let created: ApiMenuItem | null = null;
           try {
-            await menuService.createItem({
+            created = await menuService.createItem({
               sectionId,
               name: item.name,
               description: item.description,
@@ -797,6 +820,50 @@ export default function RestaurantMenuSection({
              }
           }
           step();
+
+          /*
+           * The dish's modifiers, each group created with its choices inside
+           * it — the API takes them nested, so "Add Ingredients" and its 16
+           * choices cost one request rather than seventeen.
+           *
+           * A group that fails is counted and skipped, never thrown: the dish
+           * it belongs to is already live, and losing the other 89 dishes over
+           * one rejected modifier is not a trade worth making.
+           */
+          const groups = item.optionGroups ?? [];
+          if (created && groups.length > 0) {
+            const menuItemId = created.id;
+            const results = await Promise.allSettled(
+              groups.map((group, groupIdx) =>
+                menuService.createOptionGroup({
+                  menuItemId,
+                  name: group.name,
+                  type: group.type,
+                  isRequired: group.isRequired,
+                  sortOrder: groupIdx,
+                  options: group.options.map((option, optionIdx) => ({
+                    name: option.name,
+                    price: option.price,
+                    sortOrder: optionIdx,
+                  })),
+                }),
+              ),
+            );
+
+            for (const result of results) {
+              if (result.status === "rejected") {
+                failedGroups += 1;
+                console.warn(
+                  `Option group on "${item.name}" failed:`,
+                  result.reason,
+                );
+              }
+              step();
+            }
+          } else if (groups.length > 0) {
+            // The dish already existed, so its modifiers were not created here.
+            groups.forEach(step);
+          }
         }
       }
 
@@ -812,6 +879,9 @@ export default function RestaurantMenuSection({
       setLastScanSource(null);
 
       toast.success(t("rmenu.approved"));
+      if (failedGroups > 0) {
+        toast.error(t("rmenu.groups_failed", { count: failedGroups }));
+      }
     } catch (err: any) {
       toast.error(err?.message || t("rmenu.integrate_failed"));
     } finally {
@@ -1396,6 +1466,17 @@ t("rmenu.no_categories")}{" "}
                     {parsedItems.length} dishes found
                   </p>
 
+                  {/* Modifiers are created as option groups on the dishes, so
+                      they are worth seeing before the import is approved. */}
+                  {parsedGroups.length > 0 && (
+                    <p className="text-[9px] font-black text-indigo-500 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/15">
+                      {t("rmenu.options_summary", {
+                        groups: parsedGroups.length,
+                        choices: parsedChoices,
+                      })}
+                    </p>
+                  )}
+
                   {/* Nothing is translated on import — this says which language
                       the dishes below (and the live menu) will be in. */}
                   {parsedData.language && (
@@ -1485,6 +1566,33 @@ t("rmenu.no_categories")}{" "}
                               <p dir="auto" className="text-[10px] text-zinc-400 line-clamp-1 mt-0.5">
                                 {item.description}
                               </p>
+
+                              {item.optionGroups?.length ? (
+                                <p
+                                  dir="auto"
+                                  title={item.optionGroups
+                                    .map(
+                                      (group) =>
+                                        `${group.name}: ${group.options
+                                          .map((option) =>
+                                            option.price > 0
+                                              ? `${option.name} +${option.price}`
+                                              : option.name,
+                                          )
+                                          .join(", ")}`,
+                                    )
+                                    .join("\n")}
+                                  className="text-[9px] font-bold text-indigo-500/80 line-clamp-1 mt-1 flex items-center gap-1"
+                                >
+                                  <SlidersHorizontal className="w-2.5 h-2.5 shrink-0" />
+                                  {item.optionGroups
+                                    .map(
+                                      (group) =>
+                                        `${group.name} (${group.options.length})`,
+                                    )
+                                    .join(" · ")}
+                                </p>
+                              ) : null}
                             </div>
                           </div>
                           <span className="font-extrabold text-orange-500 shrink-0">
