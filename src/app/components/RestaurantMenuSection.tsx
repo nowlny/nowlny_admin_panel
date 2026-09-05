@@ -63,11 +63,19 @@ type ScanSource =
   | { kind: "json"; json: string; imageBase: string };
 
 /**
- * Mirrors `MAX_PASTED_JSON_CHARS` in `/api/parse-menu`. Refused here so an
- * operator who pasted a whole database dump is told so at once, rather than
- * after uploading it.
+ * The most pasted data this can send in one request, in bytes of encoded body.
+ *
+ * Deliberately NOT the scanner's limit. A payload in a shape the server maps
+ * itself never reaches a model, so its size is bounded only by what the host
+ * accepts in one request body — 4.5 MB on Vercel, enforced at the
+ * infrastructure level (see `lib/httpErrors.ts`). Refusing a big paste here on
+ * the model's behalf would reject menus that import exactly, in a second, for
+ * nothing; the server applies the model's ceiling only when it needs one.
+ *
+ * Measured after JSON encoding because that is what actually travels: a
+ * payload is dense with quotes, and escaping them grows it by roughly half.
  */
-const MAX_JSON_CHARS = 400_000;
+const MAX_JSON_BODY_BYTES = 4_000_000;
 
 interface ParsedMenuData {
   name: string;
@@ -607,11 +615,13 @@ export default function RestaurantMenuSection({
       return;
     }
 
-    if (json.length > MAX_JSON_CHARS) {
+    // What the request will actually weigh, escaping included.
+    const bodyBytes = new TextEncoder().encode(JSON.stringify(json)).length;
+    if (bodyBytes > MAX_JSON_BODY_BYTES) {
       refuse(
         t("rmenu.json_too_large", {
-          size: Math.ceil(json.length / 1000),
-          limit: Math.round(MAX_JSON_CHARS / 1000),
+          size: (bodyBytes / 1_000_000).toFixed(1),
+          limit: (MAX_JSON_BODY_BYTES / 1_000_000).toFixed(1),
         }),
       );
       return;

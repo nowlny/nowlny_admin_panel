@@ -88,14 +88,21 @@ const MAX_FILE_DATA_CHARS: Record<Provider, number> = {
 };
 
 /**
- * Ceiling on a payload the operator pasted in by hand.
+ * Ceiling on a pasted payload that the **model** has to read, per scanner.
  *
- * Matches `MAX_STRUCTURED_CHARS` in `lib/menuSource.ts`, which is what a menu
- * fetched from a site's own API is trimmed to — roughly 100k tokens, and well
- * inside both models' context. A paste past this is a whole site's database
- * dump rather than a menu.
+ * A payload we map ourselves has no ceiling here at all: nothing reads it but
+ * our own field mapping, so the only limit is what the host accepts in one
+ * request body. This applies solely to the fallback path, where every
+ * character of the payload becomes prompt tokens — roughly 250k tokens for
+ * Gemini's million-token window, and 150k for Claude's 200k one, each leaving
+ * room for the menu that has to come back out.
+ *
+ * They differ for the same reason `MAX_FILE_DATA_CHARS` does: the scanners do.
  */
-const MAX_PASTED_JSON_CHARS = 400_000;
+const MAX_PASTED_JSON_CHARS: Record<Provider, number> = {
+  gemini: 1_000_000,
+  claude: 600_000,
+};
 
 /**
  * Where the relative image paths inside a pasted payload actually live.
@@ -504,8 +511,8 @@ export async function POST(request: Request) {
       // The browser sends the body it already found, but this route is also
       // reachable on its own — and a paste that arrives still wrapped in the
       // cURL command it was copied with is a body, not a bad request.
-      const body = extractJsonPayload(pastedJson);
-      if (!body) {
+      const payloadText = extractJsonPayload(pastedJson);
+      if (!payloadText) {
         return NextResponse.json(
           {
             error:
@@ -515,18 +522,8 @@ export async function POST(request: Request) {
         );
       }
 
-      if (body.length > MAX_PASTED_JSON_CHARS) {
-        return NextResponse.json(
-          {
-            error:
-              "That payload is too big to read in one go. Paste one section of the menu at a time, or paste a link to the menu instead.",
-          },
-          { status: 413 },
-        );
-      }
-
       // `extractJsonPayload` only returns text it has already parsed.
-      const payload: unknown = JSON.parse(body);
+      const payload: unknown = JSON.parse(payloadText);
 
       const { base, error: baseError } = readImageBase(imageBaseInput);
       if (baseError) {
@@ -562,7 +559,27 @@ export async function POST(request: Request) {
         }
       }
 
-      pageText = body;
+      // Nothing here maps it, so the model has to read the payload itself —
+      // and only now does its context become the constraint. Refusing this
+      // before trying to map it would turn a menu we could have imported
+      // exactly, in a second, for nothing, into a size complaint.
+      if (payloadText.length > MAX_PASTED_JSON_CHARS[provider]) {
+        const megabytes = (payloadText.length / 1_000_000).toFixed(1);
+        return NextResponse.json(
+          {
+            error:
+              `That payload is ${megabytes} MB and it's in a format we don't recognise, so the AI scanner has to read the whole thing — which is more than ${
+                provider === "claude" ? "Claude" : "Gemini"
+              } can take in one go.` +
+              (provider === "claude"
+                ? " Switch the AI scanner to Gemini in AI Settings, or paste one section of the menu at a time."
+                : " Paste one section of the menu at a time, or paste a link to the menu instead."),
+          },
+          { status: 413 },
+        );
+      }
+
+      pageText = payloadText;
       structuredText = true;
       imageBase = base;
       sourceLabel = label;
