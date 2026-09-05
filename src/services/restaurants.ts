@@ -373,6 +373,22 @@ export const restaurantsService = {
       body: JSON.stringify(data),
     }),
 
+  /**
+   * Assign a restaurant's categories.
+   *
+   * Sent as its own request rather than folded into create/update, because the
+   * admin DTOs the API publishes (`CreateRestaurantDto`, `UpdateRestaurantDto`)
+   * do not declare `categoryIds` — every merchant-facing one does. Kept
+   * separate, a backend that rejects the field costs the operator their
+   * category picks and nothing else: the restaurant itself is already saved,
+   * and the failure is reported rather than swallowed.
+   */
+  setCategories: (id: string, categoryIds: string[]) =>
+    apiClient<RestaurantResponse>(`/api/v1/restaurants/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ categoryIds }),
+    }),
+
   deleteRestaurant: (id: string) =>
     apiClient<void>(`/api/v1/restaurants/${id}`, { method: "DELETE" }),
 

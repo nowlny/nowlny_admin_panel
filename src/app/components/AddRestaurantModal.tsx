@@ -7,6 +7,7 @@ import toast from "react-hot-toast";
 import Modal from "./ui/Modal";
 import ImageUploadField from "./ui/ImageUploadField";
 import PhoneNumberInput from "./ui/PhoneNumberInput";
+import CategoryPicker from "./ui/CategoryPicker";
 import { Skeleton } from "./ui/States";
 import {
   FIELD_CLASS,
@@ -38,6 +39,7 @@ import {
   RestaurantCreate,
 } from "../../services/restaurants";
 import { currenciesService, Currency } from "../../services/currencies";
+import { readId } from "../../services/apiClient";
 import { useI18n } from "../../lib/i18n";
 import type { LatLng } from "./RestaurantMapEditorClient";
 
@@ -159,6 +161,7 @@ function AddRestaurantForm({
   const [week, setWeek] = useState<WeekSchedule>(defaultWeekSchedule);
   const [zones, setZones] = useState<ZoneDraft[]>([]);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
+  const [categoryIds, setCategoryIds] = useState<string[]>([]);
 
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [hoursError, setHoursError] = useState<WeekScheduleError | null>(null);
@@ -377,7 +380,28 @@ function AddRestaurantForm({
     if (zones.length > 0) payload.deliveryZones = zonesToPayload(zones, t);
 
     try {
-      await restaurantsService.createRestaurant(payload);
+      const created = await restaurantsService.createRestaurant(payload);
+
+      // A second request on purpose — see `restaurantsService.setCategories`.
+      // The restaurant exists either way; only the categories are at risk.
+      if (categoryIds.length > 0) {
+        const newId = readId(created);
+        try {
+          if (!newId) throw new Error(t("rest.categories_no_id"));
+          await restaurantsService.setCategories(newId, categoryIds);
+        } catch (categoryError) {
+          console.error("Failed to set restaurant categories", categoryError);
+          toast.error(
+            t("rest.categories_saved_failed", {
+              reason:
+                categoryError instanceof Error
+                  ? categoryError.message
+                  : t("rest.categories_failed"),
+            }),
+          );
+        }
+      }
+
       toast.success(t("rest.created"));
       // Closing unmounts the form, so the next "Add Restaurant" starts blank
       // instead of reopening on this merchant's data.
@@ -584,6 +608,18 @@ function AddRestaurantForm({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div className="md:col-span-2">
+                <CategoryPicker
+                  idPrefix={fid("categories")}
+                  value={categoryIds}
+                  onChange={(next) => {
+                    setCategoryIds(next);
+                    setIsDirty(true);
+                  }}
+                  disabled={isSubmitting}
+                />
               </div>
               <div className="space-y-1.5">
                 <label htmlFor={fid("deliveryFee")} className={LABEL_CLASS}>

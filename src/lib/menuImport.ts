@@ -9,7 +9,10 @@
  * empty — so it is kept here where it can be tested against a fake service.
  */
 
+import { readId } from "../services/apiClient";
 import type { NormalizedOptionGroup } from "./menuParsing";
+
+export { readId };
 
 /** Just the slice of `menuService` this needs, so a test can stand in for it. */
 export interface OptionGroupService {
@@ -26,26 +29,6 @@ export interface OptionGroupService {
     data: { name: string; price?: number; sortOrder?: number },
   ): Promise<unknown>;
   getOptionGroupsByItem(menuItemId: string): Promise<unknown[]>;
-}
-
-/**
- * The id of a record the API just created.
- *
- * Creates are documented as "Option group created" with no response schema, so
- * what comes back is not guaranteed: the record itself, an envelope around it,
- * or a Mongo-style `_id`. Reading `.id` and nothing else yields `undefined` on
- * the other two, which then goes out as `menuItemId: undefined` and takes the
- * dish's modifiers down with it.
- */
-export function readId(record: unknown): string | null {
-  if (!record || typeof record !== "object") return null;
-
-  const source = record as { id?: unknown; _id?: unknown; data?: unknown };
-  const direct = source.id ?? source._id;
-  if (typeof direct === "string" && direct.trim()) return direct;
-  if (typeof direct === "number") return String(direct);
-
-  return source.data ? readId(source.data) : null;
 }
 
 export interface ModifierWriteResult {

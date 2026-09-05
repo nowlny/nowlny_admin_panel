@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 import Modal from "./ui/Modal";
 import ImageUploadField from "./ui/ImageUploadField";
+import CategoryPicker from "./ui/CategoryPicker";
 import { Skeleton } from "./ui/States";
 import {
   FIELD_CLASS,
@@ -186,6 +187,19 @@ function EditRestaurantForm({
   const [isDirty, setIsDirty] = useState(false);
   const [formData, setFormData] = useState(() => formFromRestaurant(restaurant));
   const [currencies, setCurrencies] = useState<Currency[]>([]);
+  /**
+   * The categories this restaurant is already in.
+   *
+   * The record carries them expanded (`categories`) and, on some responses,
+   * as bare ids — either is a valid starting point, and an untouched picker
+   * must submit exactly what it started with.
+   */
+  const [categoryIds, setCategoryIds] = useState<string[]>(() =>
+    restaurant.categories?.length
+      ? restaurant.categories.map((category) => category.id)
+      : (restaurant.categoryIds ?? []),
+  );
+  const [categoriesTouched, setCategoriesTouched] = useState(false);
 
   const [week, setWeek] = useState<WeekSchedule>(() =>
     toWeekSchedule(restaurant.openingHours),
@@ -432,6 +446,26 @@ function EditRestaurantForm({
 
     try {
       await restaurantsService.updateRestaurant(restaurant.id, payload);
+
+      // Only when the operator actually changed them: sending the list back
+      // unchanged would replace every category with itself, and a backend that
+      // rejects the field would report a failure nobody asked for.
+      if (categoriesTouched) {
+        try {
+          await restaurantsService.setCategories(restaurant.id, categoryIds);
+        } catch (categoryError) {
+          console.error("Failed to set restaurant categories", categoryError);
+          toast.error(
+            t("rest.categories_saved_failed", {
+              reason:
+                categoryError instanceof Error
+                  ? categoryError.message
+                  : t("rest.categories_failed"),
+            }),
+          );
+        }
+      }
+
       toast.success(t("rest.updated"));
       setIsDirty(false);
       onSuccess();
@@ -679,6 +713,19 @@ function EditRestaurantForm({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div className="md:col-span-2">
+                <CategoryPicker
+                  idPrefix={fid("categories")}
+                  value={categoryIds}
+                  onChange={(next) => {
+                    setCategoryIds(next);
+                    setCategoriesTouched(true);
+                    setIsDirty(true);
+                  }}
+                  disabled={isSubmitting}
+                />
               </div>
               <div className="space-y-1.5">
                 <label htmlFor={fid("deliveryFee")} className={LABEL_CLASS}>

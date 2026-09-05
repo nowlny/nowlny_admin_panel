@@ -53,6 +53,27 @@ export function toPaginated<T>(
 }
 
 /**
+ * The id of a record the API just created.
+ *
+ * Create endpoints are documented as "Item created" with no response schema,
+ * so what comes back is not guaranteed: the record itself, an envelope around
+ * it, or a Mongo-style `_id`. Reading `.id` and nothing else yields
+ * `undefined` on the other two, and whatever was going to be attached to that
+ * record — a dish's modifiers, a restaurant's categories — is then lost with
+ * no error to show for it.
+ */
+export function readId(record: unknown): string | null {
+  if (!record || typeof record !== "object") return null;
+
+  const source = record as { id?: unknown; _id?: unknown; data?: unknown };
+  const direct = source.id ?? source._id;
+  if (typeof direct === "string" && direct.trim()) return direct;
+  if (typeof direct === "number") return String(direct);
+
+  return source.data ? readId(source.data) : null;
+}
+
+/**
  * Serialises query params, dropping `undefined`, `null`, `""` and the sentinel
  * `"all"` the filter chips use for "no filter". Hand-rolled `URLSearchParams`
  * blocks were duplicated across nine services and each one forgot a different
