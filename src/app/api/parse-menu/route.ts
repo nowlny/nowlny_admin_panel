@@ -13,6 +13,7 @@ import {
 } from "../../../lib/storefrontAdapters";
 import { ClaudeMenuError, scanMenuWithClaude } from "../../../lib/claudeMenu";
 import { extractJsonPayload } from "../../../lib/pastedJson";
+import { repairImageUrls } from "../../../lib/imagePathRepair";
 
 /**
  * Gemini menu OCR proxy.
@@ -378,7 +379,13 @@ async function respondWithImportedMenu(
   adapted: AdaptedMenu,
   geminiKey: string | undefined,
 ): Promise<NextResponse> {
-  const menu = normalizeParsedMenu(adapted.data, adapted.images);
+  // A payload's photo paths are written for its own front end, not for a CDN
+  // address we can guess. One is fetched to find out; see `imagePathRepair`.
+  const { images } = adapted.images.length
+    ? await repairImageUrls(adapted.images)
+    : { images: adapted.images };
+
+  const menu = normalizeParsedMenu(adapted.data, images);
 
   // Same rule as the model path: an empty menu is a failure.
   if (menu.categories.every((category) => category.items.length === 0)) {
