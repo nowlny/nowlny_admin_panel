@@ -13,9 +13,6 @@ import {
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-import markerIcon from "leaflet/dist/images/marker-icon.png";
-import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
 /* ---------------------------------------------------------------------------
    Editable Leaflet map for the restaurant forms.
@@ -30,21 +27,26 @@ import markerShadow from "leaflet/dist/images/marker-shadow.png";
    at import time.
 --------------------------------------------------------------------------- */
 
-// Marker icons ship inside the `leaflet` package — bundling them instead of
-// hot-linking a CDN keeps the map working offline and behind a strict CSP.
-if (typeof window !== "undefined") {
-  // `_getIconUrl` is private in Leaflet's typings; it has to go so the
-  // options below are used instead of the auto-detected (broken) CDN path.
-  delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })
-    ._getIconUrl;
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: markerIcon2x.src,
-    iconUrl: markerIcon.src,
-    shadowUrl: markerShadow.src,
-  });
-}
-
 export type LatLng = { lat: number; lng: number };
+
+const ACCENT = "#f97316";
+const MUTED = "#71717a";
+
+/**
+ * The restaurant pin, drawn inline.
+ *
+ * Leaflet's stock marker needs its PNGs resolved to URLs, and the usual
+ * `import icon from "leaflet/dist/images/marker-icon.png"` patch does not
+ * yield a usable `.src` here — every `<Marker>` then threw "iconUrl not set
+ * in Icon options" and took the whole tab down to the error boundary. An SVG
+ * in a `divIcon` needs no asset pipeline at all.
+ */
+const pinIcon = L.divIcon({
+  className: "",
+  iconSize: [30, 42],
+  iconAnchor: [15, 41],
+  html: `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="42" viewBox="0 0 30 42" style="display:block;filter:drop-shadow(0 2px 2px rgba(0,0,0,.35))"><path d="M15 1C7.3 1 1 7.3 1 15c0 9.6 11.2 22.6 13.3 25a1 1 0 0 0 1.4 0C17.8 37.6 29 24.6 29 15 29 7.3 22.7 1 15 1z" fill="${ACCENT}" stroke="#fff" stroke-width="2"/><circle cx="15" cy="15" r="5.5" fill="#fff"/></svg>`,
+});
 
 /** Beirut — the fallback centre when there is nothing else to aim the map at. */
 const DEFAULT_CENTER: [number, number] = [33.8938, 35.5018];
@@ -53,9 +55,6 @@ const PIN_ZOOM = 15;
 
 const NO_POINTS: LatLng[] = [];
 const NO_POLYGONS: LatLng[][] = [];
-
-const ACCENT = "#f97316";
-const MUTED = "#71717a";
 
 /**
  * Vertex handle. The default Leaflet pin is a 25×41 teardrop whose tip marks
@@ -255,6 +254,7 @@ export default function RestaurantMapEditorClient({
         {pin && (
           <Marker
             position={[pin.lat, pin.lng]}
+            icon={pinIcon}
             draggable={editable && mode === "pin"}
             eventHandlers={{
               dragend: (event) => {
