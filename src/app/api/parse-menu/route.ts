@@ -162,6 +162,9 @@ function readPastedLabel(payload: unknown): string {
   return typeof candidate === "string" ? candidate.trim().slice(0, 80) : "";
 }
 
+/** Mirrors `MAX_PAGES` in `lib/pdfPages.ts`; a longer document is a brochure. */
+const MAX_UPLOADED_PAGES = 12;
+
 const GENERIC_ERROR =
   "Something went wrong while scanning the menu. Please try again.";
 
@@ -425,6 +428,25 @@ export async function POST(request: Request) {
     // with the site those relative image paths belong to.
     const pastedJson =
       typeof body.jsonData === "string" ? body.jsonData.trim() : "";
+    /**
+     * Pages of one document, rendered in the browser.
+     *
+     * A menu PDF too big to upload whole is rasterised client-side and arrives
+     * as its pages instead — see `lib/pdfPages.ts`. They are read as a single
+     * menu, which the multi-document prompt below already handles.
+     */
+    const uploadedPages: { mimeType: string; data: string }[] = Array.isArray(
+      body.pages,
+    )
+      ? body.pages
+          .filter(
+            (page: unknown): page is { mimeType: string; data: string } =>
+              !!page &&
+              typeof (page as { data?: unknown }).data === "string" &&
+              typeof (page as { mimeType?: unknown }).mimeType === "string",
+          )
+          .slice(0, MAX_UPLOADED_PAGES)
+      : [];
     const imageBaseInput =
       typeof body.imageBase === "string" ? body.imageBase.trim() : "";
     // Gemini stays the default so an operator who never opens AI Settings sees
@@ -441,7 +463,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!fileData && !link && !claudeFileId && !pastedJson) {
+    if (!fileData && !link && !claudeFileId && !pastedJson && uploadedPages.length === 0) {
       return NextResponse.json(
         { error: "No file, menu link or menu data received in request." },
         { status: 400 },
@@ -602,6 +624,24 @@ export async function POST(request: Request) {
         },
         { status: 400 }
       );
+    }
+
+    // Pages the browser rendered are already exactly what the model reads.
+    if (uploadedPages.length > 0 && documents.length === 0 && !pageText) {
+      const encodedBytes = uploadedPages.reduce(
+        (total, page) => total + page.data.length,
+        0,
+      );
+      if (encodedBytes > MAX_FILE_DATA_CHARS[provider]) {
+        return NextResponse.json(
+          {
+            error:
+              "Those pages are too large to scan in one request. Try a shorter section of the menu.",
+          },
+          { status: 413 },
+        );
+      }
+      documents = uploadedPages;
     }
 
     // Skipped entirely when a platform adapter already produced the pages or
@@ -1020,7 +1060,7 @@ ${imageRule}${pastedRules}
           error: pastedJson
             ? "There are no dishes in that data. Paste the response from the menu endpoint itself — the one that lists categories and items."
             : link
-              ? "We opened that page but found no dishes on it. Its menu is drawn after the page loads, so there was nothing to read — open it in a browser, save it as a PDF or screenshot, and upload that instead."
+              ? "We opened that page but found no dishes on it: its menu is drawn after the page loads, so the page itself holds nothing to read. Two ways round it — open the site, print the menu to PDF and upload that; or open the browser's Network tab, find the request that fetches the menu, copy its response and paste it into the menu-data box."
               : `We couldn't find any dishes in that file. ${retryHint}`,
         },
         { status: 422 },

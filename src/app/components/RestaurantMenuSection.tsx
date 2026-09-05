@@ -54,6 +54,7 @@ import {
   shrinkImageToFit,
   SHRINK_HEADROOM,
 } from "../../lib/imageDownscale";
+import { isPdf, pdfToPageImages, PdfRenderError } from "../../lib/pdfPages";
 import type { NormalizedOptionGroup } from "../../lib/menuParsing";
 interface RestaurantMenuSectionProps {
   /** The live API record, not the retired localStorage `Restaurant` fixture. */
@@ -78,7 +79,14 @@ type ScanSource =
   | { kind: "link"; url: string }
   // Menu data pasted out of another platform's API, plus the site its
   // relative picture paths belong to.
-  | { kind: "json"; json: string; imageBase: string };
+  | { kind: "json"; json: string; imageBase: string }
+  // A PDF too big to upload whole, rendered to page images in the browser.
+  | {
+      kind: "pages";
+      name: string;
+      pages: { mimeType: string; base64: string }[];
+      fileSize: string;
+    };
 
 /**
  * The most pasted data this can send in one request, in bytes of encoded body.
@@ -531,6 +539,13 @@ export default function RestaurantMenuSection({
           claudeApiKey,
           ...(source.kind === "link"
             ? { url: source.url }
+            : source.kind === "pages"
+            ? {
+                pages: source.pages.map((page) => ({
+                  mimeType: page.mimeType,
+                  data: page.base64,
+                })),
+              }
             : source.kind === "json"
               ? {
                   jsonData: source.json,
@@ -585,7 +600,9 @@ export default function RestaurantMenuSection({
                   ? "excel"
                   : "image",
           size:
-            source.kind === "file" || source.kind === "claude-file"
+            source.kind === "file" ||
+            source.kind === "claude-file" ||
+            source.kind === "pages"
               ? source.fileSize
               : "",
           language: parsedResult.language,
@@ -727,6 +744,65 @@ export default function RestaurantMenuSection({
        * dishes than a 2 MB one does. A PDF cannot be treated this way, so it
        * still gets the ceiling message.
        */
+      /*
+       * A PDF cannot be re-encoded the way a photo can, so it is rendered:
+       * each page becomes a JPEG small enough to upload, and the scanner reads
+       * them as one menu. Second best to sending the PDF itself — its real
+       * text becomes something to OCR — but it is this or nothing.
+       */
+      if (isPdf(picked)) {
+        const rendering = toast.loading(t("rmenu.rendering_pdf"));
+        try {
+          const outcome = await pdfToPageImages(picked, limitBytes * SHRINK_HEADROOM);
+          toast.dismiss(rendering);
+
+          if (outcome.pages.length === 0) {
+            setParsingError(t("rmenu.pdf_render_failed"));
+            return;
+          }
+          if (outcome.stillTooBig) {
+            setParsingError(
+              t("rmenu.pdf_too_big", {
+                count: outcome.pages.length,
+                size: (outcome.totalBytes / (1024 * 1024)).toFixed(1),
+                limit: String(limitMb),
+              }),
+            );
+            return;
+          }
+
+          toast.success(
+            t("rmenu.pdf_rendered", {
+              count: outcome.pages.length,
+              size: (outcome.totalBytes / (1024 * 1024)).toFixed(1),
+            }),
+          );
+          if (outcome.skippedPages > 0) {
+            toast(t("rmenu.pdf_pages_skipped", { count: outcome.skippedPages }));
+          }
+
+          setMenuUrl("");
+          await runLiveGeminiScan({
+            kind: "pages",
+            name: picked.name,
+            pages: outcome.pages.map((page) => ({
+              mimeType: page.mimeType,
+              base64: page.base64,
+            })),
+            fileSize: (outcome.totalBytes / (1024 * 1024)).toFixed(1) + " MB",
+          });
+        } catch (error) {
+          toast.dismiss(rendering);
+          console.error("Could not render the menu PDF", error);
+          setParsingError(
+            error instanceof PdfRenderError
+              ? error.message
+              : t("rmenu.pdf_render_failed"),
+          );
+        }
+        return;
+      }
+
       if (!canShrink(picked)) {
         setParsingError(
           t(
