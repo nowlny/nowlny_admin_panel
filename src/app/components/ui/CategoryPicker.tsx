@@ -143,7 +143,20 @@ export default function CategoryPicker({
                 }`}
               >
                 {selected && <Check className="w-3 h-3" />}
-                {category.icon && <span aria-hidden="true">{category.icon}</span>}
+                {/* The platform stores icons as URLs (twemoji SVGs), but an
+                    emoji character is just as valid a value — printing a URL
+                    as the chip's label is not. */}
+                {category.icon &&
+                  (/^https?:\/\//i.test(category.icon) ? (
+                    <img
+                      src={category.icon}
+                      alt=""
+                      loading="lazy"
+                      className="w-3.5 h-3.5 object-contain"
+                    />
+                  ) : (
+                    <span aria-hidden="true">{category.icon}</span>
+                  ))}
                 <span>{category.name}</span>
                 {!category.isActive && (
                   <span className="opacity-60 font-semibold">

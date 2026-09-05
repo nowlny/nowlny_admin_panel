@@ -42,6 +42,7 @@ import {
 import { currenciesService, Currency } from "../../services/currencies";
 import { statusLabel } from "./ui/StatusPill";
 import { useI18n } from "../../lib/i18n";
+import { isUnknownPropertyError } from "../../lib/httpErrors";
 import type { LatLng } from "./RestaurantMapEditorClient";
 
 // Leaflet touches `window` at import time, so the map is client-only.
@@ -455,13 +456,18 @@ function EditRestaurantForm({
           await restaurantsService.setCategories(restaurant.id, categoryIds);
         } catch (categoryError) {
           console.error("Failed to set restaurant categories", categoryError);
+          // A refused *property* is a missing API field, not operator error,
+          // and retrying will never help — so it gets its own sentence.
           toast.error(
-            t("rest.categories_saved_failed", {
-              reason:
-                categoryError instanceof Error
-                  ? categoryError.message
-                  : t("rest.categories_failed"),
-            }),
+            isUnknownPropertyError(categoryError, "categoryIds")
+              ? t("rest.categories_unsupported")
+              : t("rest.categories_saved_failed", {
+                  reason:
+                    categoryError instanceof Error
+                      ? categoryError.message
+                      : t("rest.categories_failed"),
+                }),
+            { duration: 9000 },
           );
         }
       }

@@ -377,11 +377,18 @@ export const restaurantsService = {
    * Assign a restaurant's categories.
    *
    * Sent as its own request rather than folded into create/update, because the
-   * admin DTOs the API publishes (`CreateRestaurantDto`, `UpdateRestaurantDto`)
-   * do not declare `categoryIds` — every merchant-facing one does. Kept
-   * separate, a backend that rejects the field costs the operator their
-   * category picks and nothing else: the restaurant itself is already saved,
-   * and the failure is reported rather than swallowed.
+   * admin endpoints do not accept `categoryIds`. That is measured, not
+   * guessed: both `POST /restaurants` and `PATCH /restaurants/{id}` answer
+   *
+   *     400 {"message":["property categoryIds should not exist"]}
+   *
+   * — the API runs `forbidNonWhitelisted`, and only the merchant-facing DTOs
+   * (`UpdateMyRestaurantDto`, `ApplyRestaurantDto`, …) declare the field.
+   *
+   * Kept as its own request, that rejection costs the operator their category
+   * picks and nothing else: the restaurant is already saved, and the form can
+   * explain the failure instead of dying on it. The day the API adds
+   * `categoryIds` to those two DTOs, this starts working untouched.
    */
   setCategories: (id: string, categoryIds: string[]) =>
     apiClient<RestaurantResponse>(`/api/v1/restaurants/${id}`, {

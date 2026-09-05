@@ -49,6 +49,11 @@ import {
 } from "../../lib/claudeDirectUpload";
 import { extractJsonPayload } from "../../lib/pastedJson";
 import { createModifierWriter, readId } from "../../lib/menuImport";
+import {
+  canShrink,
+  shrinkImageToFit,
+  SHRINK_HEADROOM,
+} from "../../lib/imageDownscale";
 import type { NormalizedOptionGroup } from "../../lib/menuParsing";
 interface RestaurantMenuSectionProps {
   /** The live API record, not the retired localStorage `Restaurant` fixture. */
@@ -60,7 +65,13 @@ interface RestaurantMenuSectionProps {
  * restaurant's own menu page — kept as one value so "retry" works for both.
  */
 type ScanSource =
-  | { kind: "file"; name: string; base64Data: string; fileMime: string; fileSize: string }
+  | {
+      kind: "file";
+      name: string;
+      base64Data: string;
+      fileMime: string;
+      fileSize: string;
+    }
   // Uploaded straight to Claude because it was past what the server's host
   // accepts in one request body; only the id travels to /api/parse-menu.
   | { kind: "claude-file"; name: string; fileId: string; fileSize: string }
@@ -171,7 +182,10 @@ export default function RestaurantMenuSection({
   const handleToggleAutoImages = (enabled: boolean) => {
     setAutoFindImages(enabled);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem("nowlny_menu_autoimages", enabled ? "on" : "off");
+      window.localStorage.setItem(
+        "nowlny_menu_autoimages",
+        enabled ? "on" : "off",
+      );
     }
   };
 
@@ -208,7 +222,9 @@ export default function RestaurantMenuSection({
 
   // --- API DATA STATES ---
   const [sections, setSections] = useState<MenuSection[]>([]);
-  const [itemsBySection, setItemsBySection] = useState<Record<string, ApiMenuItem[]>>({});
+  const [itemsBySection, setItemsBySection] = useState<
+    Record<string, ApiMenuItem[]>
+  >({});
   const [isLoadingMenu, setIsLoadingMenu] = useState(true);
   // Only the *first* fetch shows skeletons; later refreshes keep the list on
   // screen behind the spinner in the catalog header.
@@ -224,7 +240,10 @@ export default function RestaurantMenuSection({
 
   // Integration / row-level mutation guards
   const [isIntegrating, setIsIntegrating] = useState(false);
-  const [integrationProgress, setIntegrationProgress] = useState({ done: 0, total: 0 });
+  const [integrationProgress, setIntegrationProgress] = useState({
+    done: 0,
+    total: 0,
+  });
   const [pendingItemId, setPendingItemId] = useState<string | null>(null);
   const [pendingSectionId, setPendingSectionId] = useState<string | null>(null);
 
@@ -233,7 +252,8 @@ export default function RestaurantMenuSection({
     setMenuError(null);
     setItemsError(null);
     try {
-      const loadedSections = (await menuService.getSectionsByRestaurant(restaurant.id)) || [];
+      const loadedSections =
+        (await menuService.getSectionsByRestaurant(restaurant.id)) || [];
       setSections(loadedSections);
 
       const itemsMap: Record<string, ApiMenuItem[]> = {};
@@ -243,14 +263,15 @@ export default function RestaurantMenuSection({
       await Promise.all(
         loadedSections.map(async (sec) => {
           try {
-            itemsMap[sec.id] = (await menuService.getItemsBySection(sec.id)) || [];
+            itemsMap[sec.id] =
+              (await menuService.getItemsBySection(sec.id)) || [];
           } catch {
             // Keep the rest of the menu usable, but say so rather than
             // rendering the section as genuinely empty.
             itemsMap[sec.id] = [];
             failedSections += 1;
           }
-        })
+        }),
       );
 
       setItemsBySection(itemsMap);
@@ -286,19 +307,24 @@ export default function RestaurantMenuSection({
 
   // Modal States
   const [isSectionModalOpen, setIsSectionModalOpen] = useState(false);
-  const [editingSection, setEditingSection] = useState<MenuSection | null>(null);
+  const [editingSection, setEditingSection] = useState<MenuSection | null>(
+    null,
+  );
 
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<ApiMenuItem | null>(null);
 
   // Flat list of all items for searching
-  const allItems: (ApiMenuItem & { sectionName: string })[] = sections.reduce<(ApiMenuItem & { sectionName: string })[]>(
-    (acc, sec) => {
-      const secItems = (itemsBySection[sec.id] || []).map(i => ({ ...i, sectionName: sec.name, sectionId: sec.id }));
-      return [...acc, ...secItems];
-    },
-    [],
-  );
+  const allItems: (ApiMenuItem & { sectionName: string })[] = sections.reduce<
+    (ApiMenuItem & { sectionName: string })[]
+  >((acc, sec) => {
+    const secItems = (itemsBySection[sec.id] || []).map((i) => ({
+      ...i,
+      sectionName: sec.name,
+      sectionId: sec.id,
+    }));
+    return [...acc, ...secItems];
+  }, []);
 
   // Filtered menu items
   const getFilteredItems = () => {
@@ -307,14 +333,23 @@ export default function RestaurantMenuSection({
       list = allItems;
     } else {
       const sec = sections.find((c) => c.id === selectedCategoryTab);
-      list = sec ? (itemsBySection[sec.id] || []).map(i => ({ ...i, sectionName: sec.name, sectionId: sec.id })) : [];
+      list = sec
+        ? (itemsBySection[sec.id] || []).map((i) => ({
+            ...i,
+            sectionName: sec.name,
+            sectionId: sec.id,
+          }))
+        : [];
     }
 
     if (searchQuery.trim() !== "") {
       list = list.filter(
         (item) =>
           item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          (item.description && item.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
+          (item.description &&
+            item.description
+              .toLowerCase()
+              .includes(searchQuery.toLowerCase())) ||
           item.sectionName.toLowerCase().includes(searchQuery.toLowerCase()),
       );
     }
@@ -325,7 +360,9 @@ export default function RestaurantMenuSection({
 
   // Flattened preview items — the photo counter and the lookup share this order.
   const parsedItems = parsedData?.categories.flatMap((cat) => cat.items) ?? [];
-  const parsedItemsWithImage = parsedItems.filter((item) => Boolean(item.image)).length;
+  const parsedItemsWithImage = parsedItems.filter((item) =>
+    Boolean(item.image),
+  ).length;
   const parsedGroups = parsedItems.flatMap((item) => item.optionGroups ?? []);
   const parsedChoices = parsedGroups.reduce(
     (total, group) => total + group.options.length,
@@ -352,7 +389,9 @@ export default function RestaurantMenuSection({
     // `null` holds the slot of an item that already has a picture, so the
     // response stays aligned with the flattened item order below.
     const queries = data.categories.flatMap((cat) =>
-      cat.items.map((item) => (item.image ? null : item.imageQuery || item.name)),
+      cat.items.map((item) =>
+        item.image ? null : item.imageQuery || item.name,
+      ),
     );
     if (queries.every((query) => query === null)) return;
 
@@ -373,7 +412,9 @@ export default function RestaurantMenuSection({
       });
 
       if (!response.ok) {
-        throw new Error(await readErrorMessage(response, t("rmenu.images_failed")));
+        throw new Error(
+          await readErrorMessage(response, t("rmenu.images_failed")),
+        );
       }
 
       const { images } = await response.json();
@@ -508,7 +549,10 @@ export default function RestaurantMenuSection({
 
       if (!response.ok) {
         throw new Error(
-          await readErrorMessage(response, "Failed to scan menu via Gemini API."),
+          await readErrorMessage(
+            response,
+            "Failed to scan menu via Gemini API.",
+          ),
         );
       }
 
@@ -655,86 +699,138 @@ export default function RestaurantMenuSection({
   };
 
   // Custom File Uploader
-  const handleCustomFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      const sizeMb = file.size / (1024 * 1024);
-      const mockSize = sizeMb.toFixed(1) + " MB";
+  const handleCustomFileUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const input = e.target;
+    const picked = input.files?.[0];
+    if (!picked) return;
 
-      setCustomFileName(file.name);
-      setParsingError(null);
+    // Cleared straight away so picking the same file twice still fires a change.
+    input.value = "";
 
-      // Only files the selected scanner could never accept are refused here;
-      // anything smaller is attempted, and a host that says no answers with a
-      // 413 we explain. Claude takes more than Gemini, so the ceiling moves
-      // with the picker rather than being one number for both.
-      const limitMb = maxUploadMb(aiProvider);
-      if (sizeMb > limitMb) {
+    setCustomFileName(picked.name);
+    setParsingError(null);
+
+    // Only files the selected scanner could never accept are refused here;
+    // anything smaller is attempted, and a host that says no answers with a
+    // 413 we explain. Claude takes more than Gemini, so the ceiling moves
+    // with the picker rather than being one number for both.
+    const limitMb = maxUploadMb(aiProvider);
+    const limitBytes = limitMb * 1024 * 1024;
+    let file = picked;
+
+    if (picked.size > limitBytes) {
+      /*
+       * A photo that is only too big because of its resolution is redrawn
+       * rather than refused — a 12 MB phone picture of a menu holds no more
+       * dishes than a 2 MB one does. A PDF cannot be treated this way, so it
+       * still gets the ceiling message.
+       */
+      if (!canShrink(picked)) {
         setParsingError(
           t(
             aiProvider === "gemini"
               ? "rmenu.file_too_large_gemini"
               : "rmenu.file_too_large",
-            { size: sizeMb.toFixed(1), limit: String(limitMb) },
+            {
+              size: (picked.size / (1024 * 1024)).toFixed(1),
+              limit: String(limitMb),
+            },
           ),
         );
-        e.target.value = "";
         return;
       }
 
-      /*
-       * Big files never go through our own server.
-       *
-       * The admin runs on Vercel, whose functions refuse a request body over
-       * 4.5 MB at the infrastructure level — no server-side setting can lift
-       * it. Claude's Files API takes the upload directly instead, and the scan
-       * request then carries nothing but the id.
-       */
-      if (aiProvider === "claude" && file.size > DIRECT_UPLOAD_OVER_BYTES) {
-        setMenuUrl("");
-        void (async () => {
-          setIsParsing(true);
-          setParsingStep(t("rmenu.step_uploading"));
-          try {
-            const fileId = await uploadMenuFileToClaude(file, claudeApiKey);
-            await runLiveGeminiScan({
-              kind: "claude-file",
-              name: file.name,
-              fileId,
-              fileSize: mockSize,
-            });
-          } catch (error) {
-            // `runLiveGeminiScan` owns these once it starts; reaching here
-            // means it never did.
-            setIsParsing(false);
-            setParsingStep("");
-            setParsingError(
-              error instanceof DirectUploadError
-                ? error.message
-                : t("rmenu.upload_failed"),
-            );
-          }
-        })();
-        e.target.value = "";
+      const shrinking = toast.loading(t("rmenu.shrinking"));
+      try {
+        const outcome = await shrinkImageToFit(
+          picked,
+          limitBytes * SHRINK_HEADROOM,
+        );
+        toast.dismiss(shrinking);
+
+        if (outcome.stillTooBig) {
+          setParsingError(
+            t("rmenu.shrink_not_enough", {
+              size: (outcome.bytes / (1024 * 1024)).toFixed(1),
+              limit: String(limitMb),
+            }),
+          );
+          return;
+        }
+
+        file = outcome.file;
+        setCustomFileName(file.name);
+        toast.success(
+          t("rmenu.shrunk", {
+            from: (outcome.originalBytes / (1024 * 1024)).toFixed(1),
+            to: (outcome.bytes / (1024 * 1024)).toFixed(1),
+            width: outcome.width,
+            height: outcome.height,
+          }),
+        );
+      } catch (error) {
+        toast.dismiss(shrinking);
+        console.error("Could not resize the menu photo", error);
+        setParsingError(t("rmenu.shrink_failed"));
         return;
       }
+    }
 
-      const reader = new FileReader();
-      reader.onload = async () => {
-        if (reader.result) {
-          const base64Data = (reader.result as string).split(",")[1];
-          setMenuUrl("");
+    const mockSize = (file.size / (1024 * 1024)).toFixed(1) + " MB";
+
+    /*
+     * Big files never go through our own server.
+     *
+     * The admin runs on Vercel, whose functions refuse a request body over
+     * 4.5 MB at the infrastructure level — no server-side setting can lift
+     * it. Claude's Files API takes the upload directly instead, and the scan
+     * request then carries nothing but the id.
+     */
+    if (aiProvider === "claude" && file.size > DIRECT_UPLOAD_OVER_BYTES) {
+      setMenuUrl("");
+      void (async () => {
+        setIsParsing(true);
+        setParsingStep(t("rmenu.step_uploading"));
+        try {
+          const fileId = await uploadMenuFileToClaude(file, claudeApiKey);
           await runLiveGeminiScan({
-            kind: "file",
+            kind: "claude-file",
             name: file.name,
-            base64Data,
-            fileMime: file.type || "image/png",
+            fileId,
             fileSize: mockSize,
           });
+        } catch (error) {
+          // `runLiveGeminiScan` owns these once it starts; reaching here
+          // means it never did.
+          setIsParsing(false);
+          setParsingStep("");
+          setParsingError(
+            error instanceof DirectUploadError
+              ? error.message
+              : t("rmenu.upload_failed"),
+          );
         }
-      };
-      reader.readAsDataURL(file);
+      })();
+      return;
     }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      if (reader.result) {
+        const base64Data = (reader.result as string).split(",")[1];
+        setMenuUrl("");
+        await runLiveGeminiScan({
+          kind: "file",
+          name: file.name,
+          base64Data,
+          fileMime: file.type || "image/png",
+          fileSize: mockSize,
+        });
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   // Merge parsed items into the restaurant's menu using API
@@ -750,12 +846,16 @@ export default function RestaurantMenuSection({
         cat.items.length +
         // Each option group is its own request; leaving them out of the count
         // stalls the bar at "90/90" for the length of a second import.
-        cat.items.reduce((groups, item) => groups + (item.optionGroups?.length ?? 0), 0),
+        cat.items.reduce(
+          (groups, item) => groups + (item.optionGroups?.length ?? 0),
+          0,
+        ),
       0,
     );
     setIntegrationProgress({ done: 0, total: totalSteps });
     setIsIntegrating(true);
-    const step = () => setIntegrationProgress((p) => ({ ...p, done: p.done + 1 }));
+    const step = () =>
+      setIntegrationProgress((p) => ({ ...p, done: p.done + 1 }));
 
     /** Groups that failed on their own; the dish itself is already created. */
     let failedGroups = 0;
@@ -797,12 +897,16 @@ export default function RestaurantMenuSection({
 
     try {
       // Reload sections to ensure we have the most up-to-date list
-      let currentSections: MenuSection[] = await menuService.getSectionsByRestaurant(restaurant.id).catch(() => [] as MenuSection[]);
+      let currentSections: MenuSection[] = await menuService
+        .getSectionsByRestaurant(restaurant.id)
+        .catch(() => [] as MenuSection[]);
       setSections(currentSections || []);
 
       for (const parsedCat of parsedData.categories) {
         // Find existing section
-        let existingSec = currentSections.find((s) => s.name.toLowerCase() === parsedCat.name.toLowerCase());
+        let existingSec = currentSections.find(
+          (s) => s.name.toLowerCase() === parsedCat.name.toLowerCase(),
+        );
         let sectionId = existingSec?.id;
 
         if (!existingSec) {
@@ -816,11 +920,20 @@ export default function RestaurantMenuSection({
             sectionId = newSec.id;
             currentSections.push(newSec);
           } catch (err: any) {
-            if (err.message?.includes('409') || err.message?.includes('already exists')) {
-              console.warn(`Section "${parsedCat.name}" already exists, bypassing...`);
+            if (
+              err.message?.includes("409") ||
+              err.message?.includes("already exists")
+            ) {
+              console.warn(
+                `Section "${parsedCat.name}" already exists, bypassing...`,
+              );
               // Try to find the section again after refreshing the list
-              const refreshedSections: MenuSection[] = await menuService.getSectionsByRestaurant(restaurant.id).catch(() => [] as MenuSection[]);
-              const foundSec = refreshedSections?.find((s) => s.name.toLowerCase() === parsedCat.name.toLowerCase());
+              const refreshedSections: MenuSection[] = await menuService
+                .getSectionsByRestaurant(restaurant.id)
+                .catch(() => [] as MenuSection[]);
+              const foundSec = refreshedSections?.find(
+                (s) => s.name.toLowerCase() === parsedCat.name.toLowerCase(),
+              );
               if (foundSec) {
                 sectionId = foundSec.id;
                 currentSections = refreshedSections || [];
@@ -849,11 +962,16 @@ export default function RestaurantMenuSection({
               sortOrder: idx,
             });
           } catch (err: any) {
-             if (err.message?.includes('409') || err.message?.includes('already exists')) {
-                console.warn(`Item "${item.name}" already exists in section, bypassing...`);
-             } else {
-                throw err; // Re-throw if it's not a conflict
-             }
+            if (
+              err.message?.includes("409") ||
+              err.message?.includes("already exists")
+            ) {
+              console.warn(
+                `Item "${item.name}" already exists in section, bypassing...`,
+              );
+            } else {
+              throw err; // Re-throw if it's not a conflict
+            }
           }
           step();
 
@@ -876,7 +994,9 @@ export default function RestaurantMenuSection({
 
           if (!menuItemId) {
             failedGroups += groups.length;
-            console.warn(`No item id for "${item.name}"; its modifiers were skipped`);
+            console.warn(
+              `No item id for "${item.name}"; its modifiers were skipped`,
+            );
             groups.forEach(step);
             continue;
           }
@@ -956,7 +1076,9 @@ export default function RestaurantMenuSection({
     patchItem(item, { isAvailable: next });
     try {
       await menuService.updateItem(item.id, { isAvailable: next });
-      toast.success(next ? `“${item.name}” is available again.` : `“${item.name}” snoozed.`);
+      toast.success(
+        next ? `“${item.name}” is available again.` : `“${item.name}” snoozed.`,
+      );
     } catch (err: any) {
       patchItem(item, { isAvailable: !next }); // roll back
       toast.error(err?.message || t("rmenu.toggle_failed"));
@@ -1065,8 +1187,14 @@ export default function RestaurantMenuSection({
         <div className="absolute bottom-6 start-6 end-6 flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-2xl bg-white dark:bg-zinc-900 shadow-lg flex items-center justify-center text-4xl shrink-0 border-2 border-orange-500/20 overflow-hidden">
-              {restaurant.logo && typeof restaurant.logo === 'string' && restaurant.logo.length > 5 ? (
-                <img src={restaurant.logo} alt="logo" className="w-full h-full object-cover" />
+              {restaurant.logo &&
+              typeof restaurant.logo === "string" &&
+              restaurant.logo.length > 5 ? (
+                <img
+                  src={restaurant.logo}
+                  alt="logo"
+                  className="w-full h-full object-cover"
+                />
               ) : (
                 restaurant.logo || "🍽️"
               )}
@@ -1090,7 +1218,7 @@ export default function RestaurantMenuSection({
               </div>
               <p className="text-xs text-zinc-300 font-semibold mt-1">
                 {restaurant.categories?.map((c) => c.name).join(", ") ||
-t("rmenu.no_categories")}{" "}
+                  t("rmenu.no_categories")}{" "}
                 • {allItems.length} item{allItems.length === 1 ? "" : "s"}
               </p>
               <p className="text-[10px] text-zinc-400 mt-0.5">
@@ -1239,8 +1367,8 @@ t("rmenu.no_categories")}{" "}
                       />
                     </div>
                     <p className="text-[9px] text-zinc-400 leading-normal">
-                      💡 <strong>{t("rmenu.safe_secure")}</strong>: Transmitted securely to
-                      Gemini's API endpoints. Get a free API Key at{" "}
+                      💡 <strong>{t("rmenu.safe_secure")}</strong>: Transmitted
+                      securely to Gemini's API endpoints. Get a free API Key at{" "}
                       <a
                         href="https://aistudio.google.com/"
                         target="_blank"
@@ -1272,7 +1400,8 @@ t("rmenu.no_categories")}{" "}
                       />
                     </div>
                     <p className="text-[9px] text-zinc-400 leading-normal">
-                      💡 <strong>{t("rmenu.safe_secure")}</strong>: {t("rmenu.claude_key_hint")}{" "}
+                      💡 <strong>{t("rmenu.safe_secure")}</strong>:{" "}
+                      {t("rmenu.claude_key_hint")}{" "}
                       <a
                         href="https://console.anthropic.com/settings/keys"
                         target="_blank"
@@ -1281,7 +1410,8 @@ t("rmenu.no_categories")}{" "}
                       >
                         Anthropic Console
                       </a>
-                      . <code>ANTHROPIC_API_KEY</code> {t("rmenu.server_key_note")}
+                      . <code>ANTHROPIC_API_KEY</code>{" "}
+                      {t("rmenu.server_key_note")}
                     </p>
                   </>
                 )}
@@ -1314,7 +1444,9 @@ t("rmenu.no_categories")}{" "}
                   {t("rmenu.drag_drop")}
                 </p>
                 <p className="text-[10px] text-zinc-400">
-                  {t("rmenu.file_types", { limit: String(maxUploadMb(aiProvider)) })}
+                  {t("rmenu.file_types", {
+                    limit: String(maxUploadMb(aiProvider)),
+                  })}
                 </p>
               </div>
 
@@ -1536,15 +1668,16 @@ t("rmenu.no_categories")}{" "}
                   )}
                 </p>
 
-                {!isFindingImages && parsedItemsWithImage < parsedItems.length && (
-                  <button
-                    type="button"
-                    onClick={handleFindImagesNow}
-                    className="text-[9px] font-black text-purple-500 hover:text-purple-600 border border-purple-500/20 hover:bg-purple-500/5 px-2 py-1 rounded-lg transition-all shrink-0"
-                  >
-                    {t("rmenu.find_images_cta")}
-                  </button>
-                )}
+                {!isFindingImages &&
+                  parsedItemsWithImage < parsedItems.length && (
+                    <button
+                      type="button"
+                      onClick={handleFindImagesNow}
+                      className="text-[9px] font-black text-purple-500 hover:text-purple-600 border border-purple-500/20 hover:bg-purple-500/5 px-2 py-1 rounded-lg transition-all shrink-0"
+                    >
+                      {t("rmenu.find_images_cta")}
+                    </button>
+                  )}
               </div>
 
               {/* Extracted category items list (Scrollable) */}
@@ -1553,7 +1686,9 @@ t("rmenu.no_categories")}{" "}
                   <div key={catIdx} className="pt-3 first:pt-0 space-y-2">
                     <h4 className="text-[10px] font-black text-purple-500 dark:text-purple-400 uppercase tracking-widest flex items-center gap-1.5">
                       <FolderPlus className="w-3.5 h-3.5 shrink-0" />
-                      <span dir="auto" className="truncate">Category: {cat.name}</span>
+                      <span dir="auto" className="truncate">
+                        Category: {cat.name}
+                      </span>
                     </h4>
 
                     <div className="space-y-2">
@@ -1585,10 +1720,16 @@ t("rmenu.no_categories")}{" "}
                             {/* dir="auto" so an Arabic import reads right-to-left
                                 even while the admin UI is in English. */}
                             <div className="min-w-0">
-                              <p dir="auto" className="font-bold text-zinc-800 dark:text-zinc-200 truncate">
+                              <p
+                                dir="auto"
+                                className="font-bold text-zinc-800 dark:text-zinc-200 truncate"
+                              >
                                 {item.name}
                               </p>
-                              <p dir="auto" className="text-[10px] text-zinc-400 line-clamp-1 mt-0.5">
+                              <p
+                                dir="auto"
+                                className="text-[10px] text-zinc-400 line-clamp-1 mt-0.5"
+                              >
                                 {item.description}
                               </p>
 
@@ -1657,7 +1798,8 @@ t("rmenu.no_categories")}{" "}
                 {isIntegrating ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Integrating {integrationProgress.done}/{integrationProgress.total}…
+                    Integrating {integrationProgress.done}/
+                    {integrationProgress.total}…
                   </>
                 ) : (
                   <>
@@ -1677,7 +1819,9 @@ t("rmenu.no_categories")}{" "}
           <div>
             <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
               Store Menu Catalog
-              {isLoadingMenu && <Loader2 className="w-4 h-4 animate-spin text-orange-500" />}
+              {isLoadingMenu && (
+                <Loader2 className="w-4 h-4 animate-spin text-orange-500" />
+              )}
             </h3>
             <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
               Search, edit pricing, or toggle availability of dishes listed in
@@ -1724,7 +1868,7 @@ t("rmenu.no_categories")}{" "}
               {sec.name} ({itemsBySection[sec.id]?.length || 0})
             </button>
           ))}
-          
+
           <button
             onClick={() => {
               setEditingSection(null);
@@ -1741,20 +1885,31 @@ t("rmenu.no_categories")}{" "}
             used to key off `sections.length === 0`, so during the initial fetch
             the user saw the "create a section" CTA and created duplicates. */}
         {isLoadingMenu && !hasLoadedMenu ? (
-          <div className="space-y-8" aria-busy="true" aria-label={t("rmenu.loading_menu")}>
+          <div
+            className="space-y-8"
+            aria-busy="true"
+            aria-label={t("rmenu.loading_menu")}
+          >
             {[0, 1].map((sectionIdx) => (
               <div key={sectionIdx} className="space-y-4">
                 <Skeleton className="h-4 w-40 rounded" />
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {[0, 1, 2, 3].map((cardIdx) => (
-                    <Skeleton key={cardIdx} className="h-28 w-full rounded-2xl" />
+                    <Skeleton
+                      key={cardIdx}
+                      className="h-28 w-full rounded-2xl"
+                    />
                   ))}
                 </div>
               </div>
             ))}
           </div>
         ) : menuError ? (
-          <ErrorState message={menuError} onRetry={loadMenu} title={t("rmenu.load_error_title")} />
+          <ErrorState
+            message={menuError}
+            onRetry={loadMenu}
+            title={t("rmenu.load_error_title")}
+          />
         ) : sections.length === 0 ? (
           <EmptyState
             icon={Store}
@@ -1775,22 +1930,38 @@ t("rmenu.no_categories")}{" "}
           />
         ) : (
           <div className="space-y-8">
-            {itemsError && <ErrorBanner message={itemsError} onRetry={loadMenu} />}
+            {itemsError && (
+              <ErrorBanner message={itemsError} onRetry={loadMenu} />
+            )}
             {sections
-              .filter(sec => selectedCategoryTab === "all" || selectedCategoryTab === sec.id)
-              .filter(sec => {
-                const secItems = filteredItems.filter(item => item.sectionId === sec.id);
+              .filter(
+                (sec) =>
+                  selectedCategoryTab === "all" ||
+                  selectedCategoryTab === sec.id,
+              )
+              .filter((sec) => {
+                const secItems = filteredItems.filter(
+                  (item) => item.sectionId === sec.id,
+                );
                 // Show section if it has matching items, or if the section name itself matches the query, or if no query
-                return secItems.length > 0 || searchQuery === "" || sec.name.toLowerCase().includes(searchQuery.toLowerCase());
+                return (
+                  secItems.length > 0 ||
+                  searchQuery === "" ||
+                  sec.name.toLowerCase().includes(searchQuery.toLowerCase())
+                );
               })
-              .map(sec => {
-                const secItems = filteredItems.filter(item => item.sectionId === sec.id);
-                
+              .map((sec) => {
+                const secItems = filteredItems.filter(
+                  (item) => item.sectionId === sec.id,
+                );
+
                 return (
                   <div key={sec.id} className="space-y-4">
                     {/* Section Header */}
                     <div className="flex items-center justify-between pb-2 border-b border-zinc-200 dark:border-zinc-800">
-                      <h4 className="font-black text-sm text-zinc-900 dark:text-white uppercase tracking-wider">{sec.name}</h4>
+                      <h4 className="font-black text-sm text-zinc-900 dark:text-white uppercase tracking-wider">
+                        {sec.name}
+                      </h4>
                       <div className="flex gap-3">
                         <button
                           type="button"
@@ -1808,7 +1979,9 @@ t("rmenu.no_categories")}{" "}
                           disabled={pendingSectionId === sec.id}
                           className="text-xs font-bold text-zinc-500 dark:text-zinc-400 hover:text-red-500 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
                         >
-                          {pendingSectionId === sec.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                          {pendingSectionId === sec.id && (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          )}
                           {pendingSectionId === sec.id
                             ? t("rmenu.deleting")
                             : t("common.delete")}
@@ -1818,7 +1991,9 @@ t("rmenu.no_categories")}{" "}
 
                     {/* Items Grid for this Section */}
                     {secItems.length === 0 ? (
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400 italic">{t("rmenu.no_items_section")}</p>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400 italic">
+                        {t("rmenu.no_items_section")}
+                      </p>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {secItems.map((item) => (
@@ -1895,10 +2070,18 @@ t("rmenu.no_categories")}{" "}
                                       min="0"
                                       inputMode="decimal"
                                       aria-label={`Price for ${item.name}`}
-                                      aria-invalid={priceErrors[item.id] ? true : undefined}
-                                      aria-describedby={priceErrors[item.id] ? `price-error-${item.id}` : undefined}
+                                      aria-invalid={
+                                        priceErrors[item.id] ? true : undefined
+                                      }
+                                      aria-describedby={
+                                        priceErrors[item.id]
+                                          ? `price-error-${item.id}`
+                                          : undefined
+                                      }
                                       value={priceValue(item)}
-                                      onChange={(e) => handlePriceChange(item, e.target.value)}
+                                      onChange={(e) =>
+                                        handlePriceChange(item, e.target.value)
+                                      }
                                       onBlur={() => handlePriceBlur(item)}
                                       className={`w-16 bg-white dark:bg-zinc-900 border text-xs font-bold text-zinc-800 dark:text-zinc-200 px-1 py-0.5 rounded focus:outline-none focus:ring-1 ${
                                         priceErrors[item.id]
@@ -1908,7 +2091,10 @@ t("rmenu.no_categories")}{" "}
                                     />
                                   </div>
                                   {priceErrors[item.id] && (
-                                    <p id={`price-error-${item.id}`} className="text-[9px] font-bold text-red-500 mt-1">
+                                    <p
+                                      id={`price-error-${item.id}`}
+                                      className="text-[9px] font-bold text-red-500 mt-1"
+                                    >
                                       {priceErrors[item.id]}
                                     </p>
                                   )}
@@ -1927,11 +2113,13 @@ t("rmenu.no_categories")}{" "}
                                 >
                                   {item.isAvailable ? (
                                     <>
-                                      <Check className="w-3 h-3" /> {t("rmenu.available")}
+                                      <Check className="w-3 h-3" />{" "}
+                                      {t("rmenu.available")}
                                     </>
                                   ) : (
                                     <>
-                                      <X className="w-3 h-3" /> {t("rmenu.snoozed")}
+                                      <X className="w-3 h-3" />{" "}
+                                      {t("rmenu.snoozed")}
                                     </>
                                   )}
                                 </button>

@@ -41,6 +41,19 @@ export const MAX_UPLOAD_MB: Record<AiProvider, number> = {
 export const maxUploadMb = (provider: AiProvider): number =>
   MAX_UPLOAD_MB[provider] ?? MAX_UPLOAD_MB.gemini;
 
+/**
+ * True when the API refused a property outright rather than disliking its
+ * value — NestJS's `forbidNonWhitelisted`, e.g.
+ * `"property categoryIds should not exist"`.
+ *
+ * Worth telling apart: it does not mean the operator did anything wrong, it
+ * means this API build has no such field, and no amount of retrying helps.
+ */
+export function isUnknownPropertyError(error: unknown, property: string): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return new RegExp(`property\\s+${property}\\s+should not exist`, "i").test(message);
+}
+
 export async function readErrorMessage(
   response: Response,
   fallback: string,
