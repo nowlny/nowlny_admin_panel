@@ -9,7 +9,7 @@
  */
 
 /** The scanner the operator picked. Each one can take a different size. */
-export type AiProvider = "gemini" | "claude" | "openai";
+export type AiProvider = "gemini" | "claude" | "openai" | "offline";
 
 /**
  * How big a menu file each scanner can actually take, in MB of original file.
@@ -34,6 +34,9 @@ export type AiProvider = "gemini" | "claude" | "openai";
  */
 export const MAX_UPLOAD_MB: Record<AiProvider, number> = {
   gemini: 3,
+  // Nothing is uploaded: the PDF is read in the browser and never leaves it,
+  // so the only ceiling is what the tab can hold.
+  offline: 200,
   // Same ceiling as Gemini and for the same reason: the file crosses our own
   // function as base64, and this host refuses a body over 4.5 MB. A long or
   // heavy document is rendered to pages first, which is not size-bound.

@@ -61,6 +61,8 @@ import {
   PdfRenderError,
 } from "../../lib/pdfPages";
 import { scanInBatches } from "../../lib/menuMerge";
+import { extractPdfLines } from "../../lib/pdfText";
+import { parseMenuFromLines } from "../../lib/menuTextParse";
 import type { NormalizedOptionGroup } from "../../lib/menuParsing";
 interface RestaurantMenuSectionProps {
   /** The live API record, not the retired localStorage `Restaurant` fixture. */
@@ -181,7 +183,9 @@ export default function RestaurantMenuSection({
   const [aiProvider, setAiProvider] = useState<AiProvider>(() => {
     if (typeof window === "undefined") return "gemini";
     const stored = window.localStorage.getItem("nowlny_ai_provider");
-    return stored === "claude" || stored === "openai" ? stored : "gemini";
+    return stored === "claude" || stored === "openai" || stored === "offline"
+      ? stored
+      : "gemini";
   });
 
   const handleUpdateProvider = (next: AiProvider) => {
@@ -822,6 +826,83 @@ export default function RestaurantMenuSection({
     const limitMb = maxUploadMb(aiProvider);
     const limitBytes = limitMb * 1024 * 1024;
     let file = picked;
+
+    /*
+     * The free reader: a PDF's own text, read here, sent nowhere.
+     *
+     * No key, no quota, no upload — and more faithful than OCR, because it is
+     * reading the characters the file already contains rather than inferring
+     * them from pixels. It only works when there *are* characters, so a scan
+     * falls back to the AI scanners with that said plainly.
+     */
+    if (aiProvider === "offline") {
+      if (!isPdf(picked)) {
+        setParsingError(t("rmenu.offline_only_pdf"));
+        return;
+      }
+
+      setMenuUrl("");
+      setIsParsing(true);
+      setParseProgress(20);
+      setParsingStep(t("rmenu.offline_reading"));
+      setParsedData(null);
+      setParseSuccess(false);
+      scanToken.current += 1;
+      const token = scanToken.current;
+
+      try {
+        const lines = await extractPdfLines(picked);
+        if (lines.length === 0) {
+          setParsingError(t("rmenu.offline_no_text"));
+          return;
+        }
+
+        setParseProgress(70);
+        const menu = parseMenuFromLines(lines);
+        const dishes = menu.categories.reduce(
+          (total, category) => total + category.items.length,
+          0,
+        );
+        if (dishes === 0) {
+          setParsingError(t("rmenu.offline_no_dishes"));
+          return;
+        }
+
+        const scanned: ParsedMenuData = {
+          name: picked.name,
+          type: "pdf",
+          size: (picked.size / (1024 * 1024)).toFixed(1) + " MB",
+          language: menu.language,
+          categories: menu.categories.map((category) => ({
+            name: category.name,
+            items: category.items.map((item) => ({
+              name: item.name,
+              description: item.description,
+              price: item.price,
+              isAvailable: true,
+            })),
+          })),
+        };
+
+        setParseProgress(100);
+        setParsedData(scanned);
+        setParseSuccess(true);
+        toast.success(
+          t("rmenu.offline_done", {
+            dishes,
+            pages: new Set(lines.map((line) => line.page)).size,
+          }),
+        );
+        if (autoFindImages) void findMenuImages(scanned, token);
+      } catch (error) {
+        console.error("Could not read the PDF's text", error);
+        setParsingError(t("rmenu.offline_no_text"));
+      } finally {
+        setIsParsing(false);
+        setParsingStep("");
+      }
+      return;
+    }
 
     /*
      * A PDF is read page by page when it is too big to upload OR too long to
@@ -1499,8 +1580,8 @@ export default function RestaurantMenuSection({
                   <span className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest block">
                     {t("rmenu.provider_label")}
                   </span>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {(["gemini", "claude", "openai"] as const).map((option) => (
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {(["offline", "gemini", "claude", "openai"] as const).map((option) => (
                       <button
                         key={option}
                         type="button"
@@ -1517,12 +1598,21 @@ export default function RestaurantMenuSection({
                             ? "rmenu.provider_gemini"
                             : option === "claude"
                               ? "rmenu.provider_claude"
-                              : "rmenu.provider_openai",
+                              : option === "openai"
+                                ? "rmenu.provider_openai"
+                                : "rmenu.provider_offline",
                         )}
                       </button>
                     ))}
                   </div>
                 </div>
+
+                {aiProvider === "offline" && (
+                  <p className="text-[9px] text-zinc-400 leading-normal">
+                    ✅ <strong>{t("rmenu.offline_title")}</strong>{" "}
+                    {t("rmenu.offline_hint")}
+                  </p>
+                )}
 
                 {aiProvider === "gemini" && (
                   <>
