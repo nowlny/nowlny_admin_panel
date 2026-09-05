@@ -29,9 +29,16 @@ import { repairImageUrls } from "../../../lib/imagePathRepair";
  */
 
 /**
- * Vercel/Next serverless cap. Multi-page PDFs regularly need ~30-45s, and a
- * whole-site menu more. Must be a literal; keep it in step with
- * `MENU_SCAN_BUDGET_MS` if that is raised.
+ * Vercel/Next serverless cap, and the reason a long menu is not scanned in one
+ * request at all.
+ *
+ * Next reads this from the build output, so it has to stay a literal — it
+ * cannot be raised from an environment variable, and raising it past what the
+ * hosting plan allows fails the deployment (60s is the entry-level ceiling).
+ * So length is handled on the client instead: a long PDF is rendered to pages
+ * and scanned a few at a time, each pass its own request, and the answers are
+ * merged (`lib/menuMerge.ts`). Raise this only alongside `MENU_SCAN_BUDGET_MS`
+ * and only if the plan allows it.
  */
 export const maxDuration = 60;
 
@@ -847,8 +854,10 @@ ${imageRule}${pastedRules}
     const timeoutHint = pastedJson
       ? "That payload is very large. Paste one section of the menu at a time."
       : link
-        ? "That menu is very large. Try a link to one section of it, or upload the menu file instead."
-        : "Try a smaller file or a single-page PDF.";
+        ? "That menu is very large. Save the page as a PDF and upload that — a long PDF is read a few pages at a time — or paste the menu data instead."
+        : documents.length > 1
+          ? "Those pages are dense. Upload the menu as a PDF so it can be read a few pages at a time."
+          : "Upload the menu as a PDF rather than one large image: a PDF is read a few pages at a time, so length stops being a problem.";
 
     // Advice for a dead end differs by where the menu came from.
     const retryHint = pastedJson

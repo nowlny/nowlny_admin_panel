@@ -54,7 +54,13 @@ import {
   shrinkImageToFit,
   SHRINK_HEADROOM,
 } from "../../lib/imageDownscale";
-import { isPdf, pdfToPageImages, PdfRenderError } from "../../lib/pdfPages";
+import {
+  isPdf,
+  pdfPageCount,
+  pdfToPageImages,
+  PdfRenderError,
+} from "../../lib/pdfPages";
+import { scanInBatches } from "../../lib/menuMerge";
 import type { NormalizedOptionGroup } from "../../lib/menuParsing";
 interface RestaurantMenuSectionProps {
   /** The live API record, not the retired localStorage `Restaurant` fixture. */
@@ -102,6 +108,25 @@ type ScanSource =
  * payload is dense with quotes, and escaping them grows it by roughly half.
  */
 const MAX_JSON_BODY_BYTES = 4_000_000;
+
+/**
+ * Pages per scan request.
+ *
+ * Three pages is a comfortable 20-40 seconds against either scanner, well
+ * inside the 60-second ceiling a serverless function is given — and a menu
+ * that needs twenty passes still finishes, one pass at a time.
+ */
+const PAGE_BATCH = 3;
+
+/**
+ * Longest PDF still sent whole.
+ *
+ * Up to this many pages one request comfortably finishes, and the model reads
+ * the document's real text — better than OCR'ing pictures of it. Past it the
+ * scan is racing the function's ceiling, and pages read in passes beat a menu
+ * that times out.
+ */
+const MAX_WHOLE_PDF_PAGES = 6;
 
 interface ParsedMenuData {
   name: string;
@@ -527,51 +552,98 @@ export default function RestaurantMenuSection({
       const authToken =
         typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
-      const response = await fetch("/api/parse-menu", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-        },
-        body: JSON.stringify({
-          provider: aiProvider,
-          customApiKey: geminiApiKey,
-          claudeApiKey,
-          ...(source.kind === "link"
+      /** One scan request. The provider and keys are the same for every pass. */
+      const postScan = async (payload: Record<string, unknown>) => {
+        const response = await fetch("/api/parse-menu", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          },
+          body: JSON.stringify({
+            provider: aiProvider,
+            customApiKey: geminiApiKey,
+            claudeApiKey,
+            ...payload,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            await readErrorMessage(
+              response,
+              "Failed to scan menu via Gemini API.",
+            ),
+          );
+        }
+        return response.json();
+      };
+
+      let parsedResult;
+
+      /*
+       * A long document is read a few pages at a time.
+       *
+       * The ceiling is the platform's, not the model's: a serverless function
+       * is stopped at 60 seconds however long the menu is, so one request for
+       * twelve pages fails where four requests for three pages each succeed.
+       * The passes are stitched back together by `mergeScannedMenus`, which
+       * knows what to do about a section that runs across a page break.
+       */
+      if (source.kind === "pages" && source.pages.length > PAGE_BATCH) {
+        clearInterval(progressInterval);
+
+        const { menu, failed } = await scanInBatches(
+          source.pages,
+          PAGE_BATCH,
+          (batch) =>
+            postScan({
+              pages: batch.map((page) => ({
+                mimeType: page.mimeType,
+                data: page.base64,
+              })),
+            }),
+          ({ from, to, total, index, count }) => {
+            setParsingStep(t("rmenu.step_pages", { from, to, total }));
+            setParseProgress(5 + Math.round((index / count) * 90));
+          },
+        );
+
+        if (menu.categories.length === 0) {
+          throw new Error(t("rmenu.all_pages_failed"));
+        }
+        if (failed.length > 0) {
+          toast.error(t("rmenu.pages_failed", { pages: failed.join(", ") }));
+        }
+
+        parsedResult = menu;
+      } else {
+        parsedResult = await postScan(
+          source.kind === "link"
             ? { url: source.url }
             : source.kind === "pages"
-            ? {
-                pages: source.pages.map((page) => ({
-                  mimeType: page.mimeType,
-                  data: page.base64,
-                })),
-              }
-            : source.kind === "json"
               ? {
-                  jsonData: source.json,
-                  ...(source.imageBase ? { imageBase: source.imageBase } : {}),
+                  pages: source.pages.map((page) => ({
+                    mimeType: page.mimeType,
+                    data: page.base64,
+                  })),
                 }
-              : source.kind === "claude-file"
-                ? { claudeFileId: source.fileId }
-                : {
-                    fileData: source.base64Data,
-                    mimeType: source.fileMime,
-                  }),
-        }),
-      });
-
-      clearInterval(progressInterval);
-
-      if (!response.ok) {
-        throw new Error(
-          await readErrorMessage(
-            response,
-            "Failed to scan menu via Gemini API.",
-          ),
+              : source.kind === "json"
+                ? {
+                    jsonData: source.json,
+                    ...(source.imageBase
+                      ? { imageBase: source.imageBase }
+                      : {}),
+                  }
+                : source.kind === "claude-file"
+                  ? { claudeFileId: source.fileId }
+                  : {
+                      fileData: source.base64Data,
+                      mimeType: source.fileMime,
+                    },
         );
+        clearInterval(progressInterval);
       }
-
-      const parsedResult = await response.json();
 
       setParseProgress(100);
       setParsingStep("Google Gemini real-time OCR completed successfully!");
@@ -737,23 +809,26 @@ export default function RestaurantMenuSection({
     const limitBytes = limitMb * 1024 * 1024;
     let file = picked;
 
-    if (picked.size > limitBytes) {
-      /*
-       * A photo that is only too big because of its resolution is redrawn
-       * rather than refused — a 12 MB phone picture of a menu holds no more
-       * dishes than a 2 MB one does. A PDF cannot be treated this way, so it
-       * still gets the ceiling message.
-       */
-      /*
-       * A PDF cannot be re-encoded the way a photo can, so it is rendered:
-       * each page becomes a JPEG small enough to upload, and the scanner reads
-       * them as one menu. Second best to sending the PDF itself — its real
-       * text becomes something to OCR — but it is this or nothing.
-       */
-      if (isPdf(picked)) {
+    /*
+     * A PDF is read page by page when it is too big to upload OR too long to
+     * finish in one request.
+     *
+     * Sending the document whole is the better scan — the model reads its real
+     * text rather than OCR'ing a picture of it — so that stays the default.
+     * But a fifteen-page menu cannot finish inside the sixty seconds a
+     * serverless function gets, and a scan that times out reads nothing at
+     * all. Rendered pages are then scanned a few at a time.
+     */
+    if (isPdf(picked)) {
+      const pageCount = await pdfPageCount(picked).catch(() => 0);
+
+      if (picked.size > limitBytes || pageCount > MAX_WHOLE_PDF_PAGES) {
         const rendering = toast.loading(t("rmenu.rendering_pdf"));
         try {
-          const outcome = await pdfToPageImages(picked, limitBytes * SHRINK_HEADROOM);
+          const outcome = await pdfToPageImages(
+            picked,
+            limitBytes * SHRINK_HEADROOM,
+          );
           toast.dismiss(rendering);
 
           if (outcome.pages.length === 0) {
@@ -778,7 +853,9 @@ export default function RestaurantMenuSection({
             }),
           );
           if (outcome.skippedPages > 0) {
-            toast(t("rmenu.pdf_pages_skipped", { count: outcome.skippedPages }));
+            toast(
+              t("rmenu.pdf_pages_skipped", { count: outcome.skippedPages }),
+            );
           }
 
           setMenuUrl("");
@@ -802,7 +879,14 @@ export default function RestaurantMenuSection({
         }
         return;
       }
+    }
 
+    if (picked.size > limitBytes) {
+      /*
+       * A photo that is only too big because of its resolution is redrawn
+       * rather than refused — a 12 MB phone picture of a menu holds no more
+       * dishes than a 2 MB one does.
+       */
       if (!canShrink(picked)) {
         setParsingError(
           t(

@@ -57,6 +57,35 @@ export class PdfRenderError extends Error {
   }
 }
 
+/**
+ * How many pages a PDF has, without rendering any of them.
+ *
+ * Cheap enough to ask before deciding how to scan: a long document is read in
+ * passes even when it is small enough to upload whole, because the ceiling
+ * that stops a scan is the clock, not the file size.
+ */
+export async function pdfPageCount(file: File): Promise<number> {
+  const pdfjs = await import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url,
+  ).toString();
+
+  const task = pdfjs.getDocument({
+    data: new Uint8Array(await file.arrayBuffer()),
+    disableAutoFetch: true,
+  });
+  try {
+    const document_ = await task.promise;
+    const pages = document_.numPages;
+    await document_.loadingTask.destroy();
+    return pages;
+  } catch {
+    await task.destroy().catch(() => {});
+    return 0;
+  }
+}
+
 export function isPdf(file: File): boolean {
   return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
 }
