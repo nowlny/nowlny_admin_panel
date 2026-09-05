@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { normalizeParsedMenu } from "../../../lib/menuParsing";
 import { fetchMenuSource, MenuSourceError } from "../../../lib/menuSource";
-import { tryStorefrontMenu, type AdaptedMenu } from "../../../lib/storefrontAdapters";
+import {
+  isCategoryItemsMenuPayload,
+  isStorecMenuPayload,
+  mapCategoryItemsMenu,
+  mapStorecMenu,
+  tryStorefrontMenu,
+  type AdaptedMenu,
+} from "../../../lib/storefrontAdapters";
 import { ClaudeMenuError, scanMenuWithClaude } from "../../../lib/claudeMenu";
 
 /**
@@ -78,6 +85,74 @@ const MAX_FILE_DATA_CHARS: Record<Provider, number> = {
   gemini: 19 * 1024 * 1024,
   claude: 41 * 1024 * 1024,
 };
+
+/**
+ * Ceiling on a payload the operator pasted in by hand.
+ *
+ * Matches `MAX_STRUCTURED_CHARS` in `lib/menuSource.ts`, which is what a menu
+ * fetched from a site's own API is trimmed to — roughly 100k tokens, and well
+ * inside both models' context. A paste past this is a whole site's database
+ * dump rather than a menu.
+ */
+const MAX_PASTED_JSON_CHARS = 400_000;
+
+/**
+ * Where the relative image paths inside a pasted payload actually live.
+ *
+ * Nothing in the JSON says: a storec payload stores `uploads\images\x.jpeg`
+ * and a hivehub one `/api/uploads/x.webp`, both meaningless without the host
+ * they were served from. The operator supplies it, and it is treated as a
+ * directory — `https://site.com/menu` has to keep its path when
+ * `uploads/x.jpg` resolves against it.
+ *
+ * https only: `normalizeParsedMenu` drops anything else anyway rather than
+ * downgrade the storefront to mixed content, and a silently dropped photo is
+ * worse than being told why.
+ */
+function readImageBase(value: string): { base?: string; error?: string } {
+  if (!value) return {};
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return {
+      error:
+        "That image address isn't a URL. Paste the site the menu data came from, e.g. https://restaurant.com",
+    };
+  }
+
+  if (parsed.protocol !== "https:") {
+    return {
+      error:
+        "The image address has to start with https:// — a storefront can't show pictures served over plain http.",
+    };
+  }
+
+  return { base: parsed.href.endsWith("/") ? parsed.href : `${parsed.href}/` };
+}
+
+/** The store's own name, when the payload happens to carry one. */
+function readPastedLabel(payload: unknown): string {
+  const root =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {};
+  const settings =
+    root.settings && typeof root.settings === "object"
+      ? (root.settings as Record<string, unknown>)
+      : {};
+
+  const candidate = [
+    root.name,
+    root.title,
+    root.storeName,
+    settings.restaurant_name,
+    settings.name,
+  ].find((value) => typeof value === "string" && value.trim());
+
+  return typeof candidate === "string" ? candidate.trim().slice(0, 80) : "";
+}
 
 const GENERIC_ERROR =
   "Something went wrong while scanning the menu. Please try again.";
@@ -338,6 +413,12 @@ export async function POST(request: Request) {
     const claudeFileId =
       typeof body.claudeFileId === "string" ? body.claudeFileId.trim() : "";
     const link = typeof url === "string" ? url.trim() : "";
+    // Menu data the operator pasted straight out of another platform's API,
+    // with the site those relative image paths belong to.
+    const pastedJson =
+      typeof body.jsonData === "string" ? body.jsonData.trim() : "";
+    const imageBaseInput =
+      typeof body.imageBase === "string" ? body.imageBase.trim() : "";
     // Gemini stays the default so an operator who never opens AI Settings sees
     // no change; Claude is opt-in per request.
     const provider: Provider = body.provider === "claude" ? "claude" : "gemini";
@@ -352,9 +433,9 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!fileData && !link && !claudeFileId) {
+    if (!fileData && !link && !claudeFileId && !pastedJson) {
       return NextResponse.json(
-        { error: "No file or menu link received in request." },
+        { error: "No file, menu link or menu data received in request." },
         { status: 400 },
       );
     }
@@ -408,6 +489,78 @@ export async function POST(request: Request) {
         // The QR was only a redirect — scan what it actually points at.
         linkToFetch = adapted.url;
       }
+    }
+
+    /*
+     * Menu data pasted straight out of another platform's API.
+     *
+     * Nothing is fetched and nothing is OCR'd: the payload already *is* the
+     * menu. It takes the same two routes a linked storefront's data takes —
+     * mapped field for field when the shape is one we know, and read by the
+     * model as structured text when it is not.
+     */
+    if (pastedJson) {
+      if (pastedJson.length > MAX_PASTED_JSON_CHARS) {
+        return NextResponse.json(
+          {
+            error:
+              "That payload is too big to read in one go. Paste one section of the menu at a time, or paste a link to the menu instead.",
+          },
+          { status: 413 },
+        );
+      }
+
+      let payload: unknown;
+      try {
+        payload = JSON.parse(pastedJson);
+      } catch {
+        return NextResponse.json(
+          {
+            error:
+              "That isn't valid JSON. Paste the whole response body exactly as the API returned it, with nothing before or after it.",
+          },
+          { status: 400 },
+        );
+      }
+
+      const { base, error: baseError } = readImageBase(imageBaseInput);
+      if (baseError) {
+        return NextResponse.json({ error: baseError }, { status: 400 });
+      }
+
+      const label = readPastedLabel(payload) || "Pasted menu data";
+
+      /*
+       * A payload in a shape we already read exactly never reaches the model.
+       *
+       * A field mapping keeps every dish and every price, which an LLM round
+       * trip does not — and it is the difference between an instant free
+       * import and sending 216 KB of JSON, four fifths of it add-on options,
+       * to a model to have 90 dishes read back out of it.
+       */
+      const exactImport = isStorecMenuPayload(payload)
+        ? () => mapStorecMenu(payload as Record<string, unknown>, base ?? "", label)
+        : isCategoryItemsMenuPayload(payload)
+          ? () => mapCategoryItemsMenu(payload as Record<string, unknown>, base ?? "", label)
+          : null;
+
+      if (exactImport) {
+        try {
+          return await respondWithImportedMenu(
+            exactImport(),
+            customApiKey || process.env.GEMINI_API_KEY,
+          );
+        } catch (mapError) {
+          // Close enough to pass the shape check but not to map. The model
+          // reads it below rather than the operator hitting a dead end.
+          console.warn("[parse-menu] pasted payload did not map:", mapError);
+        }
+      }
+
+      pageText = pastedJson;
+      structuredText = true;
+      imageBase = base;
+      sourceLabel = label;
     }
 
     // Resolved before anything is fetched — there is no point pulling down a
@@ -495,7 +648,9 @@ export async function POST(request: Request) {
         ? `The ${documents.length} attached images are consecutive pages of ONE menu. Read them all and merge them into a single set of categories — never repeat a category once per page.`
         : `Analyze the attached menu document (which could be an image of a flyer, a PDF menu, or a spreadsheet).`
       : structuredText
-        ? `The text at the end of this prompt is raw JSON taken out of a restaurant website's own page data. Walk it and pull out the menu, ignoring routing, analytics, theme and configuration keys.`
+        ? pastedJson
+          ? `The text at the end of this prompt is a JSON payload copied straight out of another restaurant platform's own API. Walk it and pull out the menu. The keys are that platform's, not ours: a dish name may sit under "title" or "name", a price under "price" or "finalPrice", and the same dish may repeat itself in a second language under a key like "name_ar".`
+          : `The text at the end of this prompt is raw JSON taken out of a restaurant website's own page data. Walk it and pull out the menu, ignoring routing, analytics, theme and configuration keys.`
         : `Analyze the menu page text at the end of this prompt. It was extracted from a restaurant's website, so it also contains navigation, opening hours and footer noise — ignore everything that is not a menu item.`;
 
     // Pictures only exist when the menu came from a web page, and the model
@@ -512,6 +667,19 @@ export async function POST(request: Request) {
       15. The page text contains markers like [IMAGE#4: grilled chicken]. When a marker clearly belongs to an item, set that item's "imageRef" to the marker's number (4 in that example).
       16. Give "imageRef" ONLY when the picture really is that dish. Never guess, never reuse one number for several items, and never invent a number that is not in the text. Omit the field when unsure — a missing photo is fixed automatically later, a wrong one is not.
       17. Never write image URLs yourself. The number is the only thing we read.`
+      : "";
+
+    // Only ever reached with `structuredText`, so these follow on from the
+    // structured image rules above (15 and 16).
+    const pastedRules = pastedJson
+      ? `
+      Pasted payload rules:
+      17. Ignore everything in the payload that is not a dish: theme, colours, settings, banners, carousels, page sections, opening hours, branches and analytics.
+      18. Ignore option groups, modifiers, add-ons and extras — keys like "optionGroups", "choices", "addons", "modifiers". Those are ways to customise a dish, not dishes. Never import one as a menu item.
+      19. When a dish carries several sizes or price options, return ONE ITEM PER SIZE and put the size in that item's name (e.g. "Margherita - Large"). Spell the size out in the menu's language; never leave a bare code like "l" or "m".
+      20. When a dish carries both a list price and a final or discounted one, use the price the payload marks as final or current.
+      21. When the payload marks a dish as unavailable, sold out or hidden, still return it and add "isAvailable": false to that item. Leave the field out otherwise.
+      22. Return every dish in the payload. Do not summarise, sample or stop early.`
       : "";
 
     const prompt = `
@@ -542,7 +710,7 @@ export async function POST(request: Request) {
       12. For every item add an 'imageQuery': a short stock-photo search phrase of 2 to 5 words describing what the dish LOOKS like, so we can find a photo for items the menu has no picture for.
       13. 'imageQuery' must ALWAYS be written in ENGLISH, even when the rest of the output is Arabic. Translate the dish for this field only (e.g. name "شاورما دجاج" -> imageQuery "chicken shawarma wrap").
       14. Keep 'imageQuery' generic and visual: no restaurant names, no brand names, no prices, no sizes. Prefer "grilled lamb kebab skewers" over "Chef Special #4".
-${imageRule}
+${imageRule}${pastedRules}
 
       You must respond strictly with a valid JSON matching this schema:
       {
@@ -587,14 +755,18 @@ ${imageRule}
 
     // A timeout on a huge linked menu is a different problem from a timeout on
     // a big upload, and the advice has to match.
-    const timeoutHint = link
-      ? "That menu is very large. Try a link to one section of it, or upload the menu file instead."
-      : "Try a smaller file or a single-page PDF.";
+    const timeoutHint = pastedJson
+      ? "That payload is very large. Paste one section of the menu at a time."
+      : link
+        ? "That menu is very large. Try a link to one section of it, or upload the menu file instead."
+        : "Try a smaller file or a single-page PDF.";
 
     // Advice for a dead end differs by where the menu came from.
-    const retryHint = link
-      ? "Try a link that opens the menu directly, or upload the menu file instead."
-      : "Try a clearer photo, or a text-based PDF instead of a scan.";
+    const retryHint = pastedJson
+      ? "Check that you pasted the whole response body, not just part of it."
+      : link
+        ? "Try a link that opens the menu directly, or upload the menu file instead."
+        : "Try a clearer photo, or a text-based PDF instead of a scan.";
 
     /*
      * One scan, either provider.
@@ -807,13 +979,17 @@ ${imageRule}
     // preview, which reads as "this restaurant has no food".
     if (dishCount === 0) {
       console.warn(
-        `[parse-menu] no dishes extracted from ${link ? link : "upload"}`,
+        `[parse-menu] no dishes extracted from ${
+          pastedJson ? "pasted data" : link ? link : "upload"
+        }`,
       );
       return NextResponse.json(
         {
-          error: link
-            ? "We opened that page but found no dishes on it. Its menu is drawn after the page loads, so there was nothing to read — open it in a browser, save it as a PDF or screenshot, and upload that instead."
-            : `We couldn't find any dishes in that file. ${retryHint}`,
+          error: pastedJson
+            ? "There are no dishes in that data. Paste the response from the menu endpoint itself — the one that lists categories and items."
+            : link
+              ? "We opened that page but found no dishes on it. Its menu is drawn after the page loads, so there was nothing to read — open it in a browser, save it as a PDF or screenshot, and upload that instead."
+              : `We couldn't find any dishes in that file. ${retryHint}`,
         },
         { status: 422 },
       );

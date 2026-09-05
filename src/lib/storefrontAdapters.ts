@@ -185,14 +185,16 @@ export function isStorecMenuPayload(payload: unknown): boolean {
  *
  * `imageOrigin` is where the relative upload paths live: storec.app itself for
  * a hosted store, the site's own backend for a self-hosted one — which stores
- * them with Windows separators (`uploads\images\x.jpeg`).
+ * them with Windows separators (`uploads\images\x.jpeg`). It is empty when
+ * the operator pasted the payload in without saying where it came from, and
+ * every dish then simply imports without its picture.
  *
  * A payload can carry several branches, each with its own copy of every
  * category. The admin imports into one restaurant, so the branch with the most
  * dishes is taken and named in the label; the operator can see which one they
  * got rather than receiving every category twice.
  */
-function mapStorecMenu(
+export function mapStorecMenu(
   payload: Record<string, unknown>,
   imageOrigin: string,
   label: string,
@@ -346,6 +348,126 @@ export async function adaptSelfHostedStorec(
 
   if (!isStorecMenuPayload(payload)) return null;
   return mapStorecMenu(asRecord(payload), `${serverUrl.replace(/\/+$/, "")}/`, label);
+}
+
+
+/**
+ * The other shape a restaurant backend hands out: categories with their items
+ * nested straight inside them, each item carrying its own name, price, picture
+ * and — the reason this is worth mapping rather than reading — a tree of
+ * option groups several times the size of the menu itself.
+ *
+ * Validated against hivehub.systems, whose 90-dish menu arrives as 216 KB of
+ * JSON, 1,179 entries of which are add-on choices that must not become dishes.
+ * The shape is generic enough that other backends fit it too, which is why it
+ * is named for the shape and not for a platform.
+ */
+export function isCategoryItemsMenuPayload(payload: unknown): boolean {
+  return asArray(asRecord(payload).categories).some((rawCategory) =>
+    asArray(asRecord(rawCategory).items).some((rawItem) => {
+      const item = asRecord(rawItem);
+      return (
+        text(item.name) !== "" &&
+        (Number.isFinite(Number(item.price)) || Number.isFinite(Number(item.finalPrice)))
+      );
+    }),
+  );
+}
+
+/** `sort` is this shape's own ordering key; missing ones sink to the bottom. */
+function bySort(a: unknown, b: unknown): number {
+  const left = Number(asRecord(a).sort);
+  const right = Number(asRecord(b).sort);
+  return (Number.isFinite(left) ? left : 1e9) - (Number.isFinite(right) ? right : 1e9);
+}
+
+/**
+ * Map a categories-with-items payload field for field.
+ *
+ * Bilingual menus store the second language in parallel `_ar` keys. The store
+ * says which one it actually publishes in (`settings.menu_language`), and that
+ * choice is honoured per field so a dish translated on one side only still
+ * imports with a name.
+ */
+export function mapCategoryItemsMenu(
+  payload: Record<string, unknown>,
+  imageOrigin: string,
+  label: string,
+): AdaptedMenu {
+  const settings = asRecord(payload.settings);
+  const arabic = text(settings.menu_language).toLowerCase().startsWith("ar");
+
+  /** The published language first, the other as a fallback. */
+  const localized = (record: Record<string, unknown>, key: string): string => {
+    const arabicText = text(record[`${key}_ar`]);
+    const latinText = text(record[key]);
+    return (arabic ? arabicText || latinText : latinText || arabicText) || "";
+  };
+
+  const images: string[] = [];
+  const imageRefs = new Map<string, number>();
+
+  const registerImage = (path: string): number | undefined => {
+    const clean = text(path).replace(/\\/g, "/");
+    if (!clean) return undefined;
+
+    let href: string;
+    try {
+      href = new URL(clean, imageOrigin).href;
+    } catch {
+      return undefined;
+    }
+    const existing = imageRefs.get(href);
+    if (existing) return existing;
+
+    images.push(href);
+    imageRefs.set(href, images.length);
+    return images.length;
+  };
+
+  const categories = asArray(payload.categories)
+    .slice()
+    .sort(bySort)
+    .map((rawCategory) => {
+      const category = asRecord(rawCategory);
+
+      const items = asArray(category.items)
+        .slice()
+        .sort(bySort)
+        .flatMap((rawItem) => {
+          const item = asRecord(rawItem);
+          const name = localized(item, "name");
+          if (!name) return [];
+
+          // A discounted store prices its dishes twice; the customer pays the
+          // final one, so that is the one the menu has to carry.
+          const final = Number(item.finalPrice);
+          const listed = Number(item.price);
+          const price = Number.isFinite(final) ? final : Number.isFinite(listed) ? listed : 0;
+
+          // `optionGroups` is deliberately untouched: those are ways to
+          // customise a dish, and the menu we import into has no place for
+          // them. Importing them would multiply a 90-dish menu into 1,200 rows.
+          return [
+            {
+              name,
+              description: localized(item, "description") || undefined,
+              price,
+              imageRef: registerImage(text(item.image)),
+              isAvailable: item.available !== false,
+            },
+          ];
+        });
+
+      return { name: localized(category, "name"), items };
+    })
+    .filter((category) => category.items.length > 0);
+
+  if (categories.length === 0) {
+    throw new MenuSourceError("That store's menu has no dishes in it yet.", 422);
+  }
+
+  return { label, data: { categories }, images };
 }
 
 

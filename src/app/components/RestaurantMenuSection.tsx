@@ -20,6 +20,7 @@ import {
   FolderPlus,
   ToggleLeft,
   ToggleRight,
+  Braces,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { RestaurantResponse } from "../../services/restaurants";
@@ -55,7 +56,17 @@ type ScanSource =
   // Uploaded straight to Claude because it was past what the server's host
   // accepts in one request body; only the id travels to /api/parse-menu.
   | { kind: "claude-file"; name: string; fileId: string; fileSize: string }
-  | { kind: "link"; url: string };
+  | { kind: "link"; url: string }
+  // Menu data pasted out of another platform's API, plus the site its
+  // relative picture paths belong to.
+  | { kind: "json"; json: string; imageBase: string };
+
+/**
+ * Mirrors `MAX_PASTED_JSON_CHARS` in `/api/parse-menu`. Refused here so an
+ * operator who pasted a whole database dump is told so at once, rather than
+ * after uploading it.
+ */
+const MAX_JSON_CHARS = 400_000;
 
 interface ParsedMenuData {
   name: string;
@@ -149,6 +160,8 @@ export default function RestaurantMenuSection({
   // Parsing tool states
   const [customFileName, setCustomFileName] = useState<string>("");
   const [menuUrl, setMenuUrl] = useState("");
+  const [menuJson, setMenuJson] = useState("");
+  const [jsonImageBase, setJsonImageBase] = useState("");
   const [isParsing, setIsParsing] = useState(false);
   const [parsingStep, setParsingStep] = useState<string>("");
   const [parseProgress, setParseProgress] = useState(0);
@@ -374,10 +387,24 @@ export default function RestaurantMenuSection({
     setLastScanSource(source);
     setIsParsing(true);
     setParseProgress(10);
-    setParsingStep(
+
+    /**
+     * What the progress line says at each stage. Pasted data is never fetched
+     * and never OCR'd, so it has one honest line rather than three about a
+     * vision model that may not even run on it.
+     */
+    const stepFor = (linkStep: string, fileStep: string) =>
       source.kind === "link"
-        ? t("rmenu.step_fetching_link")
-        : "Establishing bridge connection to Gemini AI...",
+        ? linkStep
+        : source.kind === "json"
+          ? t("rmenu.step_reading_json")
+          : fileStep;
+
+    setParsingStep(
+      stepFor(
+        t("rmenu.step_fetching_link"),
+        "Establishing bridge connection to Gemini AI...",
+      ),
     );
     setParsedData(null);
     setParseSuccess(false);
@@ -394,15 +421,17 @@ export default function RestaurantMenuSection({
 
         if (currentProgress > 25 && currentProgress <= 45) {
           setParsingStep(
-            source.kind === "link"
-              ? t("rmenu.step_fetching_link")
-              : "Multimodal vision model parsing files...",
+            stepFor(
+              t("rmenu.step_fetching_link"),
+              "Multimodal vision model parsing files...",
+            ),
           );
         } else if (currentProgress > 45 && currentProgress <= 70) {
           setParsingStep(
-            source.kind === "link"
-              ? t("rmenu.step_reading_page")
-              : "Running Google Gemini 1.5 Flash OCR on text grids...",
+            stepFor(
+              t("rmenu.step_reading_page"),
+              "Running Google Gemini 1.5 Flash OCR on text grids...",
+            ),
           );
         } else if (currentProgress > 70) {
           setParsingStep(
@@ -430,12 +459,17 @@ export default function RestaurantMenuSection({
           claudeApiKey,
           ...(source.kind === "link"
             ? { url: source.url }
-            : source.kind === "claude-file"
-              ? { claudeFileId: source.fileId }
-              : {
-                  fileData: source.base64Data,
-                  mimeType: source.fileMime,
-                }),
+            : source.kind === "json"
+              ? {
+                  jsonData: source.json,
+                  ...(source.imageBase ? { imageBase: source.imageBase } : {}),
+                }
+              : source.kind === "claude-file"
+                ? { claudeFileId: source.fileId }
+                : {
+                    fileData: source.base64Data,
+                    mimeType: source.fileMime,
+                  }),
         }),
       });
 
@@ -460,18 +494,25 @@ export default function RestaurantMenuSection({
           name:
             source.kind === "link"
               ? parsedResult.label || source.url
-              : source.name,
+              : source.kind === "json"
+                ? parsedResult.label || t("rmenu.json_source")
+                : source.name,
           type:
-            source.kind === "link" ||
-            source.kind === "claude-file" ||
-            source.fileMime.includes("pdf")
-              ? "pdf"
-              : source.fileMime.includes("sheet") ||
-                  source.fileMime.includes("excel") ||
-                  source.fileMime.includes("csv")
+            source.kind !== "file"
+              ? source.kind === "json"
                 ? "excel"
-                : "image",
-          size: source.kind === "link" ? "" : source.fileSize,
+                : "pdf"
+              : source.fileMime.includes("pdf")
+                ? "pdf"
+                : source.fileMime.includes("sheet") ||
+                    source.fileMime.includes("excel") ||
+                    source.fileMime.includes("csv")
+                  ? "excel"
+                  : "image",
+          size:
+            source.kind === "file" || source.kind === "claude-file"
+              ? source.fileSize
+              : "",
           language: parsedResult.language,
           categories: parsedResult.categories || [],
         };
@@ -530,6 +571,46 @@ export default function RestaurantMenuSection({
     setCustomFileName("");
     setParsingError(null);
     await runLiveGeminiScan({ kind: "link", url });
+  };
+
+  /**
+   * Import a menu the operator pasted straight out of another platform's API.
+   *
+   * The parse here is a guard, not the import: a truncated copy-paste is by
+   * far the most common way this goes wrong, and catching it in the browser
+   * costs nothing where a round trip to the scanner costs a minute.
+   */
+  const handleImportJson = async () => {
+    const json = menuJson.trim();
+    if (!json || isParsing) return;
+
+    if (json.length > MAX_JSON_CHARS) {
+      setParsingError(
+        t("rmenu.json_too_large", {
+          size: Math.ceil(json.length / 1000),
+          limit: Math.round(MAX_JSON_CHARS / 1000),
+        }),
+      );
+      return;
+    }
+
+    try {
+      JSON.parse(json);
+    } catch {
+      setParsingError(t("rmenu.json_invalid"));
+      return;
+    }
+
+    const imageBase = jsonImageBase.trim();
+    if (imageBase && !/^https:\/\/\S+\.\S+/i.test(imageBase)) {
+      setParsingError(t("rmenu.json_base_invalid"));
+      return;
+    }
+
+    setCustomFileName("");
+    setMenuUrl("");
+    setParsingError(null);
+    await runLiveGeminiScan({ kind: "json", json, imageBase });
   };
 
   // Custom File Uploader
@@ -698,6 +779,7 @@ export default function RestaurantMenuSection({
       setParsedData(null);
       setCustomFileName("");
       setMenuUrl("");
+      setMenuJson("");
       setParseSuccess(false);
       setLastScanSource(null);
 
@@ -1166,6 +1248,59 @@ t("rmenu.no_categories")}{" "}
 
               <p className="text-[9px] text-zinc-400 leading-normal">
                 {t("rmenu.link_hint")}
+              </p>
+            </div>
+
+            {/* Menu data pasted out of another platform's API. A payload in a
+                shape the server already maps is imported field for field; the
+                rest go to the scanner as structured data. */}
+            <div className="space-y-1.5">
+              <label
+                htmlFor="menu-json"
+                className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest block"
+              >
+                {t("rmenu.json_label")}
+              </label>
+
+              <textarea
+                id="menu-json"
+                dir="ltr"
+                rows={5}
+                spellCheck={false}
+                placeholder={t("rmenu.json_placeholder")}
+                value={menuJson}
+                onChange={(e) => setMenuJson(e.target.value)}
+                disabled={isParsing}
+                className="w-full bg-white dark:bg-zinc-900 border border-zinc-250 dark:border-zinc-850 text-[10px] font-mono text-zinc-850 dark:text-zinc-100 placeholder-zinc-400 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:opacity-50 shadow-sm resize-y"
+              />
+
+              <div className="flex items-center gap-2">
+                <input
+                  id="menu-json-base"
+                  type="url"
+                  inputMode="url"
+                  dir="ltr"
+                  aria-label={t("rmenu.json_base_label")}
+                  placeholder={t("rmenu.json_base_placeholder")}
+                  value={jsonImageBase}
+                  onChange={(e) => setJsonImageBase(e.target.value)}
+                  disabled={isParsing}
+                  className="flex-1 min-w-0 bg-white dark:bg-zinc-900 border border-zinc-250 dark:border-zinc-850 text-[11px] font-bold text-zinc-850 dark:text-zinc-100 placeholder-zinc-400 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:opacity-50 shadow-sm"
+                />
+
+                <button
+                  type="button"
+                  onClick={handleImportJson}
+                  disabled={isParsing || !menuJson.trim()}
+                  className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-[10px] px-3.5 py-2.5 rounded-xl shadow-md shadow-purple-500/20 flex items-center gap-1.5 shrink-0 transition-all"
+                >
+                  <Braces className="w-3.5 h-3.5" />
+                  {t("rmenu.scan_json")}
+                </button>
+              </div>
+
+              <p className="text-[9px] text-zinc-400 leading-normal">
+                {t("rmenu.json_hint")}
               </p>
             </div>
           </div>
