@@ -25,7 +25,11 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { RestaurantResponse } from "../../services/restaurants";
-import { menuService, MenuSection, MenuItem as ApiMenuItem } from "../../services/menu";
+import {
+  menuService,
+  MenuSection,
+  MenuItem as ApiMenuItem,
+} from "../../services/menu";
 import { formatAddress, formatMoney } from "../../lib/format";
 import MenuSectionEditorModal from "./MenuSectionEditorModal";
 import MenuItemEditorModal from "./MenuItemEditorModal";
@@ -44,6 +48,8 @@ import {
   uploadMenuFileToClaude,
 } from "../../lib/claudeDirectUpload";
 import { extractJsonPayload } from "../../lib/pastedJson";
+import { createModifierWriter, readId } from "../../lib/menuImport";
+import type { NormalizedOptionGroup } from "../../lib/menuParsing";
 interface RestaurantMenuSectionProps {
   /** The live API record, not the retired localStorage `Restaurant` fixture. */
   restaurant: RestaurantResponse;
@@ -101,12 +107,7 @@ interface ParsedMenuData {
       imageSource?: string;
       isAvailable: boolean;
       /** Modifiers the source priced separately — "Replace Dough", "Extras". */
-      optionGroups?: {
-        name: string;
-        type: "radio" | "checkbox";
-        isRequired: boolean;
-        options: { name: string; price: number }[];
-      }[];
+      optionGroups?: NormalizedOptionGroup[];
     }[];
   }[];
 }
@@ -759,6 +760,41 @@ export default function RestaurantMenuSection({
     /** Groups that failed on their own; the dish itself is already created. */
     let failedGroups = 0;
 
+    /** One read per section, shared by every dish that has to be looked up. */
+    const sectionItems = new Map<string, ApiMenuItem[]>();
+
+    /** The id of a dish that is in the menu but was not created just now. */
+    const findItemId = async (
+      sectionId: string,
+      name: string,
+      allowRefetch = true,
+    ): Promise<string | null> => {
+      let items = sectionItems.get(sectionId);
+      if (!items) {
+        items = await menuService
+          .getItemsBySection(sectionId)
+          .catch(() => [] as ApiMenuItem[]);
+        sectionItems.set(sectionId, items);
+      }
+
+      const wanted = name.trim().toLowerCase();
+      const found = items.find(
+        (existing) => existing.name?.trim().toLowerCase() === wanted,
+      );
+      if (found) return readId(found);
+
+      // The list may predate a dish this run created — read it once more.
+      if (allowRefetch) {
+        sectionItems.delete(sectionId);
+        return findItemId(sectionId, name, false);
+      }
+      return null;
+    };
+
+    // Remembers, across the whole import, how this deployment takes the
+    // choices — see `lib/menuImport.ts`.
+    const modifiers = createModifierWriter(menuService);
+
     try {
       // Reload sections to ensure we have the most up-to-date list
       let currentSections: MenuSection[] = await menuService.getSectionsByRestaurant(restaurant.id).catch(() => [] as MenuSection[]);
@@ -821,49 +857,38 @@ export default function RestaurantMenuSection({
           }
           step();
 
-          /*
-           * The dish's modifiers, each group created with its choices inside
-           * it — the API takes them nested, so "Add Ingredients" and its 16
-           * choices cost one request rather than seventeen.
-           *
-           * A group that fails is counted and skipped, never thrown: the dish
-           * it belongs to is already live, and losing the other 89 dishes over
-           * one rejected modifier is not a trade worth making.
-           */
+          // The dish's modifiers — "Replace Dough", "Add Ingredients" — each
+          // created as an option group with its choices inside it.
           const groups = item.optionGroups ?? [];
-          if (created && groups.length > 0) {
-            const menuItemId = created.id;
-            const results = await Promise.allSettled(
-              groups.map((group, groupIdx) =>
-                menuService.createOptionGroup({
-                  menuItemId,
-                  name: group.name,
-                  type: group.type,
-                  isRequired: group.isRequired,
-                  sortOrder: groupIdx,
-                  options: group.options.map((option, optionIdx) => ({
-                    name: option.name,
-                    price: option.price,
-                    sortOrder: optionIdx,
-                  })),
-                }),
-              ),
-            );
+          if (groups.length === 0) continue;
 
-            for (const result of results) {
-              if (result.status === "rejected") {
-                failedGroups += 1;
-                console.warn(
-                  `Option group on "${item.name}" failed:`,
-                  result.reason,
-                );
-              }
-              step();
-            }
-          } else if (groups.length > 0) {
-            // The dish already existed, so its modifiers were not created here.
+          /*
+           * Which dish these modifiers hang off.
+           *
+           * `created.id` is the happy path, but neither of the other two is
+           * rare: a create can answer without echoing the record, and a dish
+           * that already exists answers 409 and nothing else. Both used to
+           * leave the modifiers uncreated with nothing said about it — the
+           * dish went live carrying none of its choices.
+           */
+          const menuItemId =
+            readId(created) ?? (await findItemId(sectionId, item.name));
+
+          if (!menuItemId) {
+            failedGroups += groups.length;
+            console.warn(`No item id for "${item.name}"; its modifiers were skipped`);
             groups.forEach(step);
+            continue;
           }
+
+          // Re-importing a menu must not give every dish "Add Ingredients"
+          // twice, so a dish we did not just create is asked what it already
+          // has. A fresh one cannot have anything.
+          const written = await modifiers.write(menuItemId, groups, {
+            itemIsNew: Boolean(created),
+            onGroupDone: step,
+          });
+          failedGroups += written.failed;
         }
       }
 
