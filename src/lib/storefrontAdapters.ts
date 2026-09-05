@@ -526,6 +526,152 @@ export function mapCategoryItemsMenu(
 }
 
 
+/**
+ * The third shape a menu platform hands out: two flat arrays, joined by id.
+ *
+ * `menuCategories` and `menuItems` sit side by side at the top level, an item
+ * pointing at its category through `menuCategoryId`, and the readable strings
+ * live one level down under `info` — the platform's way of carrying a locale
+ * with each name. Nothing about it nests, which is exactly why neither of the
+ * other two detectors claims it.
+ */
+export function isFlatMenuPayload(payload: unknown): boolean {
+  const root = asRecord(payload);
+  const categories = asArray(root.menuCategories);
+  const items = asArray(root.menuItems);
+  if (categories.length === 0 || items.length === 0) return false;
+
+  return items.some((rawItem) => {
+    const item = asRecord(rawItem);
+    return (
+      text(item.menuCategoryId) !== "" &&
+      (text(asRecord(item.info).name) !== "" || text(item.name) !== "")
+    );
+  });
+}
+
+/** `position` is this shape's ordering key. */
+function byPosition(a: unknown, b: unknown): number {
+  const left = Number(asRecord(a).position);
+  const right = Number(asRecord(b).position);
+  return (Number.isFinite(left) ? left : 1e9) - (Number.isFinite(right) ? right : 1e9);
+}
+
+/** Readable strings live under `info`, with the bare key as a fallback. */
+function localized(record: Record<string, unknown>, key: string): string {
+  return text(asRecord(record.info)[key]) || text(record[key]);
+}
+
+/**
+ * Map a flat categories/items payload field for field.
+ *
+ * Items are grouped back onto their categories rather than the other way
+ * round, because the two arrays disagree in practice: a live payload carries
+ * dishes pointing at categories that are not in it at all. Those would vanish
+ * silently, so they are kept under one unnamed heading that
+ * `normalizeParsedMenu` then names in the menu's own language.
+ */
+export function mapFlatMenu(
+  payload: Record<string, unknown>,
+  imageOrigin: string,
+  label: string,
+): AdaptedMenu {
+  const images: string[] = [];
+  const imageRefs = new Map<string, number>();
+
+  const registerImage = (path: string): number | undefined => {
+    const clean = text(path).replace(/\\/g, "/");
+    if (!clean) return undefined;
+
+    let href: string;
+    try {
+      href = new URL(clean, imageOrigin).href;
+    } catch {
+      return undefined;
+    }
+    const existing = imageRefs.get(href);
+    if (existing) return existing;
+
+    images.push(href);
+    imageRefs.set(href, images.length);
+    return images.length;
+  };
+
+  const mapItem = (raw: unknown) => {
+    const item = asRecord(raw);
+    const name = localized(item, "name");
+    if (!name) return [];
+    // Hidden on the source menu means hidden here too; `isAvailable` is a
+    // different thing — a dish that exists but is off today.
+    if (item.isVisible === false) return [];
+
+    // Prices arrive as strings ("500000"); `oldPrice` is what it used to be.
+    const price = Number(text(item.price) || item.price);
+
+    return [
+      {
+        name,
+        description: localized(item, "description") || undefined,
+        price: Number.isFinite(price) && price > 0 ? price : 0,
+        imageRef: registerImage(text(item.image) || text(item.croppedImage)),
+        isAvailable: item.isAvailable !== false,
+      },
+    ];
+  };
+
+  const itemsByCategory = new Map<string, unknown[]>();
+  for (const raw of asArray(payload.menuItems)) {
+    const categoryId = text(asRecord(raw).menuCategoryId);
+    const bucket = itemsByCategory.get(categoryId);
+    if (bucket) bucket.push(raw);
+    else itemsByCategory.set(categoryId, [raw]);
+  }
+
+  // Menus order the categories inside them; most payloads carry exactly one.
+  const menuOrder = new Map<string, number>();
+  asArray(payload.menus)
+    .slice()
+    .sort(byPosition)
+    .forEach((raw, index) => menuOrder.set(text(asRecord(raw).id), index));
+
+  const rawCategories = asArray(payload.menuCategories)
+    .filter((raw) => asRecord(raw).isVisible !== false)
+    .slice()
+    .sort((a, b) => {
+      const menuDelta =
+        (menuOrder.get(text(asRecord(a).menuId)) ?? 0) -
+        (menuOrder.get(text(asRecord(b).menuId)) ?? 0);
+      return menuDelta !== 0 ? menuDelta : byPosition(a, b);
+    });
+
+  const seen = new Set<string>();
+  const categories = rawCategories.map((raw) => {
+    const category = asRecord(raw);
+    const id = text(category.id);
+    seen.add(id);
+
+    return {
+      name: localized(category, "name"),
+      items: (itemsByCategory.get(id) ?? []).slice().sort(byPosition).flatMap(mapItem),
+    };
+  });
+
+  // Dishes whose category is missing from the payload — kept, not dropped.
+  const orphans = [...itemsByCategory.entries()]
+    .filter(([id]) => !seen.has(id))
+    .flatMap(([, items]) => items.slice().sort(byPosition))
+    .flatMap(mapItem);
+  if (orphans.length > 0) categories.push({ name: "", items: orphans });
+
+  const withItems = categories.filter((category) => category.items.length > 0);
+  if (withItems.length === 0) {
+    throw new MenuSourceError("That store's menu has no dishes in it yet.", 422);
+  }
+
+  return { label, data: { categories: withItems }, images };
+}
+
+
 /** Menu posters are read at full size; OCR on a 400px thumbnail loses prices. */
 const QRFY_IMAGE_BASE = "https://img.qrfy.com/img/original/";
 

@@ -507,16 +507,13 @@ export default function RestaurantsSection({
   if (isPendingTab && selectedSubmission) {
     return (
       <div className="space-y-6 animate-in slide-in-from-right duration-200">
-        <button
-          onClick={() => {
+        <StickyBackBar
+          label={t("rests.back_to_apps")}
+          onBack={() => {
             setSelectedSubmissionId(null);
             setIsReviewing(false);
           }}
-          className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-950 dark:hover:text-white transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
-          <span>{t("rests.back_to_apps")}</span>
-        </button>
+        />
 
         <div className="relative bg-zinc-900 rounded-2xl overflow-hidden border border-zinc-800 shadow-lg">
           <div className="h-40 relative bg-zinc-800">
@@ -732,16 +729,13 @@ t("rests.no_address")}
     return (
       <div className="space-y-6 animate-in slide-in-from-right duration-200">
         {currentRole?.type !== "restaurant" && (
-          <button
-            onClick={() => {
+          <StickyBackBar
+            label={t("rests.back_to_registry")}
+            onBack={() => {
               setSelectedRestId(null);
               setIsReviewing(false);
             }}
-            className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-950 dark:hover:text-white transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
-            <span>{t("rests.back_to_registry")}</span>
-          </button>
+          />
         )}
 
         {/* The detail payload failed but the list copy is still on screen. */}
@@ -1554,6 +1548,40 @@ t("rests.no_categories_short");
 }
 
 // ─── Presentational ──────────────────────────────────────────────────────────
+
+/**
+ * The "back" control, kept in view while a merchant's detail page is scrolled.
+ *
+ * A detail page runs several screens deep — hours, zones, menu, reviews — and
+ * the only way back to the list sat at the very top, so leaving meant
+ * scrolling all the way up first.
+ *
+ * It sticks to the top of `<main>`, which is the scrolling element (the page
+ * itself does not scroll: the shell is `h-screen` with the sidebar and header
+ * fixed beside it). The negative margins pull the bar out over that element's
+ * own padding so scrolled content passes *under* an opaque strip rather than
+ * beside it.
+ */
+function StickyBackBar({
+  label,
+  onBack,
+}: {
+  label: string;
+  onBack: () => void;
+}) {
+  return (
+    <div className="sticky top-0 z-20 -mx-4 sm:-mx-8 -mt-4 sm:-mt-8 px-4 sm:px-8 py-3 bg-zinc-50/90 dark:bg-zinc-950/90 backdrop-blur-sm border-b border-zinc-200/70 dark:border-zinc-800/70">
+      <button
+        type="button"
+        onClick={onBack}
+        className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-950 dark:hover:text-white transition-colors"
+      >
+        <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
+        <span>{label}</span>
+      </button>
+    </div>
+  );
+}
 
 function Pagination({
   page,

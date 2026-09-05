@@ -3,8 +3,10 @@ import { normalizeParsedMenu } from "../../../lib/menuParsing";
 import { fetchMenuSource, MenuSourceError } from "../../../lib/menuSource";
 import {
   isCategoryItemsMenuPayload,
+  isFlatMenuPayload,
   isStorecMenuPayload,
   mapCategoryItemsMenu,
+  mapFlatMenu,
   mapStorecMenu,
   tryStorefrontMenu,
   type AdaptedMenu,
@@ -151,10 +153,16 @@ function readPastedLabel(payload: unknown): string {
       ? (root.settings as Record<string, unknown>)
       : {};
 
+  const place =
+    root.place && typeof root.place === "object"
+      ? (root.place as Record<string, unknown>)
+      : {};
+
   const candidate = [
     root.name,
     root.title,
     root.storeName,
+    place.name,
     settings.restaurant_name,
     settings.name,
   ].find((value) => typeof value === "string" && value.trim());
@@ -564,9 +572,11 @@ export async function POST(request: Request) {
        */
       const exactImport = isStorecMenuPayload(payload)
         ? () => mapStorecMenu(payload as Record<string, unknown>, base ?? "", label)
-        : isCategoryItemsMenuPayload(payload)
-          ? () => mapCategoryItemsMenu(payload as Record<string, unknown>, base ?? "", label)
-          : null;
+        : isFlatMenuPayload(payload)
+          ? () => mapFlatMenu(payload as Record<string, unknown>, base ?? "", label)
+          : isCategoryItemsMenuPayload(payload)
+            ? () => mapCategoryItemsMenu(payload as Record<string, unknown>, base ?? "", label)
+            : null;
 
       if (exactImport) {
         try {
