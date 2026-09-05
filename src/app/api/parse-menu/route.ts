@@ -10,6 +10,7 @@ import {
   type AdaptedMenu,
 } from "../../../lib/storefrontAdapters";
 import { ClaudeMenuError, scanMenuWithClaude } from "../../../lib/claudeMenu";
+import { extractJsonPayload } from "../../../lib/pastedJson";
 
 /**
  * Gemini menu OCR proxy.
@@ -500,7 +501,21 @@ export async function POST(request: Request) {
      * model as structured text when it is not.
      */
     if (pastedJson) {
-      if (pastedJson.length > MAX_PASTED_JSON_CHARS) {
+      // The browser sends the body it already found, but this route is also
+      // reachable on its own — and a paste that arrives still wrapped in the
+      // cURL command it was copied with is a body, not a bad request.
+      const body = extractJsonPayload(pastedJson);
+      if (!body) {
+        return NextResponse.json(
+          {
+            error:
+              "We couldn't find any JSON in that. Paste the response body the menu endpoint returned — copying the cURL command along with it is fine.",
+          },
+          { status: 400 },
+        );
+      }
+
+      if (body.length > MAX_PASTED_JSON_CHARS) {
         return NextResponse.json(
           {
             error:
@@ -510,18 +525,8 @@ export async function POST(request: Request) {
         );
       }
 
-      let payload: unknown;
-      try {
-        payload = JSON.parse(pastedJson);
-      } catch {
-        return NextResponse.json(
-          {
-            error:
-              "That isn't valid JSON. Paste the whole response body exactly as the API returned it, with nothing before or after it.",
-          },
-          { status: 400 },
-        );
-      }
+      // `extractJsonPayload` only returns text it has already parsed.
+      const payload: unknown = JSON.parse(body);
 
       const { base, error: baseError } = readImageBase(imageBaseInput);
       if (baseError) {
@@ -557,7 +562,7 @@ export async function POST(request: Request) {
         }
       }
 
-      pageText = pastedJson;
+      pageText = body;
       structuredText = true;
       imageBase = base;
       sourceLabel = label;

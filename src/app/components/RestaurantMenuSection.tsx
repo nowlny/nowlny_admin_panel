@@ -42,6 +42,7 @@ import {
   DirectUploadError,
   uploadMenuFileToClaude,
 } from "../../lib/claudeDirectUpload";
+import { extractJsonPayload } from "../../lib/pastedJson";
 interface RestaurantMenuSectionProps {
   /** The live API record, not the retired localStorage `Restaurant` fixture. */
   restaurant: RestaurantResponse;
@@ -162,6 +163,14 @@ export default function RestaurantMenuSection({
   const [menuUrl, setMenuUrl] = useState("");
   const [menuJson, setMenuJson] = useState("");
   const [jsonImageBase, setJsonImageBase] = useState("");
+  /**
+   * Why a paste was refused, shown under the paste box.
+   *
+   * `parsingError` renders at the top of this panel, hundreds of pixels above
+   * the button that was just clicked — far enough that a rejected paste read
+   * as a dead button rather than as an answer.
+   */
+  const [jsonError, setJsonError] = useState<string | null>(null);
   const [isParsing, setIsParsing] = useState(false);
   const [parsingStep, setParsingStep] = useState<string>("");
   const [parseProgress, setParseProgress] = useState(0);
@@ -581,11 +590,25 @@ export default function RestaurantMenuSection({
    * costs nothing where a round trip to the scanner costs a minute.
    */
   const handleImportJson = async () => {
-    const json = menuJson.trim();
-    if (!json || isParsing) return;
+    if (!menuJson.trim() || isParsing) return;
+
+    /** Said next to the button, and toasted so it lands wherever the page is. */
+    const refuse = (message: string) => {
+      setJsonError(message);
+      toast.error(message);
+    };
+
+    // The response arrives wrapped in whatever was copied with it — a cURL
+    // command, headers, a trailing newline. The body is read out of that
+    // rather than the whole paste being refused for its packaging.
+    const json = extractJsonPayload(menuJson);
+    if (!json) {
+      refuse(t("rmenu.json_invalid"));
+      return;
+    }
 
     if (json.length > MAX_JSON_CHARS) {
-      setParsingError(
+      refuse(
         t("rmenu.json_too_large", {
           size: Math.ceil(json.length / 1000),
           limit: Math.round(MAX_JSON_CHARS / 1000),
@@ -594,19 +617,13 @@ export default function RestaurantMenuSection({
       return;
     }
 
-    try {
-      JSON.parse(json);
-    } catch {
-      setParsingError(t("rmenu.json_invalid"));
-      return;
-    }
-
     const imageBase = jsonImageBase.trim();
     if (imageBase && !/^https:\/\/\S+\.\S+/i.test(imageBase)) {
-      setParsingError(t("rmenu.json_base_invalid"));
+      refuse(t("rmenu.json_base_invalid"));
       return;
     }
 
+    setJsonError(null);
     setCustomFileName("");
     setMenuUrl("");
     setParsingError(null);
@@ -780,6 +797,7 @@ export default function RestaurantMenuSection({
       setCustomFileName("");
       setMenuUrl("");
       setMenuJson("");
+      setJsonError(null);
       setParseSuccess(false);
       setLastScanSource(null);
 
@@ -1269,7 +1287,10 @@ t("rmenu.no_categories")}{" "}
                 spellCheck={false}
                 placeholder={t("rmenu.json_placeholder")}
                 value={menuJson}
-                onChange={(e) => setMenuJson(e.target.value)}
+                onChange={(e) => {
+                  setMenuJson(e.target.value);
+                  setJsonError(null);
+                }}
                 disabled={isParsing}
                 className="w-full bg-white dark:bg-zinc-900 border border-zinc-250 dark:border-zinc-850 text-[10px] font-mono text-zinc-850 dark:text-zinc-100 placeholder-zinc-400 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:opacity-50 shadow-sm resize-y"
               />
@@ -1299,9 +1320,16 @@ t("rmenu.no_categories")}{" "}
                 </button>
               </div>
 
-              <p className="text-[9px] text-zinc-400 leading-normal">
-                {t("rmenu.json_hint")}
-              </p>
+              {jsonError ? (
+                <p className="text-[9px] font-bold text-red-500 leading-normal flex items-start gap-1">
+                  <AlertCircle className="w-3 h-3 shrink-0 mt-px" />
+                  {jsonError}
+                </p>
+              ) : (
+                <p className="text-[9px] text-zinc-400 leading-normal">
+                  {t("rmenu.json_hint")}
+                </p>
+              )}
             </div>
           </div>
 
