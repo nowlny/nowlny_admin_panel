@@ -9,7 +9,7 @@
  */
 
 /** The scanner the operator picked. Each one can take a different size. */
-export type AiProvider = "gemini" | "claude";
+export type AiProvider = "gemini" | "claude" | "openai";
 
 /**
  * How big a menu file each scanner can actually take, in MB of original file.
@@ -34,6 +34,10 @@ export type AiProvider = "gemini" | "claude";
  */
 export const MAX_UPLOAD_MB: Record<AiProvider, number> = {
   gemini: 3,
+  // Same ceiling as Gemini and for the same reason: the file crosses our own
+  // function as base64, and this host refuses a body over 4.5 MB. A long or
+  // heavy document is rendered to pages first, which is not size-bound.
+  openai: 3,
   claude: 30,
 };
 

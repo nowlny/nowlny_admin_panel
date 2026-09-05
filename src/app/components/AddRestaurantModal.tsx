@@ -8,6 +8,7 @@ import Modal from "./ui/Modal";
 import ImageUploadField from "./ui/ImageUploadField";
 import PhoneNumberInput from "./ui/PhoneNumberInput";
 import CategoryPicker from "./ui/CategoryPicker";
+import MapsLinkField from "./ui/MapsLinkField";
 import { Skeleton } from "./ui/States";
 import {
   FIELD_CLASS,
@@ -742,6 +743,12 @@ function AddRestaurantForm({
                   message={fieldErrors.address}
                 />
               </div>
+
+              <MapsLinkField
+                idPrefix={ID_PREFIX}
+                disabled={isSubmitting}
+                onResolved={(position) => setPin(position)}
+              />
 
               <div className="space-y-1.5">
                 <label htmlFor={fid("latitude")} className={LABEL_CLASS}>

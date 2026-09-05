@@ -7,6 +7,7 @@ import toast from "react-hot-toast";
 import Modal from "./ui/Modal";
 import ImageUploadField from "./ui/ImageUploadField";
 import CategoryPicker from "./ui/CategoryPicker";
+import MapsLinkField from "./ui/MapsLinkField";
 import { Skeleton } from "./ui/States";
 import {
   FIELD_CLASS,
@@ -868,6 +869,12 @@ function EditRestaurantForm({
                   className={FIELD_CLASS}
                 />
               </div>
+              <MapsLinkField
+                idPrefix={ID_PREFIX}
+                disabled={isSubmitting}
+                onResolved={(position) => setPin(position)}
+              />
+
               <div className="space-y-1.5">
                 <label htmlFor={fid("addressLat")} className={LABEL_CLASS}>
                   {t("common.latitude")}

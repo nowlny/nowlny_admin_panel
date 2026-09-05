@@ -12,6 +12,7 @@ import {
   type AdaptedMenu,
 } from "../../../lib/storefrontAdapters";
 import { ClaudeMenuError, scanMenuWithClaude } from "../../../lib/claudeMenu";
+import { OpenAiMenuError, scanMenuWithOpenAi } from "../../../lib/openaiMenu";
 import { extractJsonPayload } from "../../../lib/pastedJson";
 import { repairImageUrls } from "../../../lib/imagePathRepair";
 
@@ -75,7 +76,14 @@ const MAX_IMAGE_QUERY_NAMES = 300;
 const MODEL_NAME = "gemini-2.5-flash";
 
 /** Which scanner runs. Both answer with the same JSON, so only the call differs. */
-export type Provider = "gemini" | "claude";
+export type Provider = "gemini" | "claude" | "openai";
+
+/** What each scanner is called when we have to name it to the operator. */
+const PROVIDER_LABEL: Record<Provider, string> = {
+  gemini: "Gemini",
+  claude: "Claude",
+  openai: "OpenAI",
+};
 
 /** A 250-dish menu serialises to a lot of JSON — well under the model's cap. */
 const MAX_OUTPUT_TOKENS = 32_768;
@@ -94,6 +102,9 @@ const LARGE_MENU_CHARS = 50_000;
  */
 const MAX_FILE_DATA_CHARS: Record<Provider, number> = {
   gemini: 19 * 1024 * 1024,
+  // Like Gemini, OpenAI receives the document inline through our own function,
+  // so the host's body limit is the real ceiling.
+  openai: 19 * 1024 * 1024,
   claude: 41 * 1024 * 1024,
 };
 
@@ -112,6 +123,7 @@ const MAX_FILE_DATA_CHARS: Record<Provider, number> = {
 const MAX_PASTED_JSON_CHARS: Record<Provider, number> = {
   gemini: 1_000_000,
   claude: 600_000,
+  openai: 600_000,
 };
 
 /**
@@ -471,9 +483,16 @@ export async function POST(request: Request) {
       : [];
     const imageBaseInput =
       typeof body.imageBase === "string" ? body.imageBase.trim() : "";
+    const openAiApiKey =
+      typeof body.openAiApiKey === "string" ? body.openAiApiKey.trim() : "";
     // Gemini stays the default so an operator who never opens AI Settings sees
     // no change; Claude is opt-in per request.
-    const provider: Provider = body.provider === "claude" ? "claude" : "gemini";
+    const provider: Provider =
+      body.provider === "claude"
+        ? "claude"
+        : body.provider === "openai"
+          ? "openai"
+          : "gemini";
 
     if (claudeFileId && provider !== "claude") {
       return NextResponse.json(
@@ -614,12 +633,10 @@ export async function POST(request: Request) {
         return NextResponse.json(
           {
             error:
-              `That payload is ${megabytes} MB and it's in a format we don't recognise, so the AI scanner has to read the whole thing — which is more than ${
-                provider === "claude" ? "Claude" : "Gemini"
-              } can take in one go.` +
-              (provider === "claude"
-                ? " Switch the AI scanner to Gemini in AI Settings, or paste one section of the menu at a time."
-                : " Paste one section of the menu at a time, or paste a link to the menu instead."),
+              `That payload is ${megabytes} MB and it's in a format we don't recognise, so the AI scanner has to read the whole thing — which is more than ${PROVIDER_LABEL[provider]} can take in one go.` +
+              (provider === "gemini"
+                ? " Paste one section of the menu at a time, or paste a link to the menu instead."
+                : " Switch the AI scanner to Gemini in AI Settings, or paste one section of the menu at a time."),
           },
           { status: 413 },
         );
@@ -636,7 +653,9 @@ export async function POST(request: Request) {
     const apiKey =
       provider === "claude"
         ? claudeApiKey || process.env.ANTHROPIC_API_KEY
-        : customApiKey || process.env.GEMINI_API_KEY;
+        : provider === "openai"
+          ? openAiApiKey || process.env.OPENAI_API_KEY
+          : customApiKey || process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       return NextResponse.json(
@@ -644,7 +663,9 @@ export async function POST(request: Request) {
           error:
             provider === "claude"
               ? "Claude API key is missing. Paste your Anthropic API key in the 'AI Settings' key box on the screen, or set ANTHROPIC_API_KEY in your server environment."
-              : "Gemini API Key is missing. Please paste your Gemini API Key in the 'AI Settings' key box on the screen or set it as GEMINI_API_KEY in your server environment.",
+              : provider === "openai"
+                ? "OpenAI API key is missing. Paste your OpenAI API key in the 'AI Settings' key box on the screen, or set OPENAI_API_KEY in your server environment."
+                : "Gemini API Key is missing. Please paste your Gemini API Key in the 'AI Settings' key box on the screen or set it as GEMINI_API_KEY in your server environment.",
         },
         { status: 400 }
       );
@@ -711,7 +732,7 @@ export async function POST(request: Request) {
             error:
               provider === "claude"
                 ? "That file is too large to scan. Split a long PDF into fewer pages, or paste a link to the menu instead."
-                : "That file is too large for the Gemini scanner, which has to send it inline. Switch the scanner to Claude in AI Settings, split the PDF into fewer pages, or paste a link to the menu instead.",
+                : `That file is too large for the ${PROVIDER_LABEL[provider]} scanner, which has to send it inline. Switch the scanner to Claude in AI Settings, upload the menu as a PDF so it can be read a few pages at a time, or paste a link to the menu instead.`,
           },
           { status: 413 },
         );
@@ -875,7 +896,32 @@ ${imageRule}${pastedRules}
      */
     let textResponse: string | undefined;
 
-    if (provider === "claude") {
+    if (provider === "openai") {
+      try {
+        textResponse = await scanMenuWithOpenAi({
+          apiKey,
+          prompt,
+          pages: documents.map((page) => ({
+            mimeType: page.mimeType,
+            data: page.data,
+          })),
+          pageText,
+          structuredText,
+          timeoutMs: Math.max(
+            MIN_UPSTREAM_TIMEOUT_MS,
+            TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS,
+          ),
+        });
+      } catch (error) {
+        if (error instanceof OpenAiMenuError) {
+          return NextResponse.json(
+            { error: error.message },
+            { status: error.status },
+          );
+        }
+        throw error;
+      }
+    } else if (provider === "claude") {
       try {
         textResponse = await scanMenuWithClaude({
           apiKey,
