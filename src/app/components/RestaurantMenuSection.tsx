@@ -183,7 +183,10 @@ export default function RestaurantMenuSection({
   const [aiProvider, setAiProvider] = useState<AiProvider>(() => {
     if (typeof window === "undefined") return "gemini";
     const stored = window.localStorage.getItem("nowlny_ai_provider");
-    return stored === "claude" || stored === "openai" || stored === "offline"
+    return stored === "claude" ||
+      stored === "openai" ||
+      stored === "kimi" ||
+      stored === "offline"
       ? stored
       : "gemini";
   });
@@ -192,6 +195,20 @@ export default function RestaurantMenuSection({
     setAiProvider(next);
     if (typeof window !== "undefined") {
       window.localStorage.setItem("nowlny_ai_provider", next);
+    }
+  };
+
+  const [kimiApiKey, setKimiApiKey] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem("nowlny_kimi_key") || "";
+    }
+    return "";
+  });
+
+  const handleUpdateKimiKey = (key: string) => {
+    setKimiApiKey(key);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("nowlny_kimi_key", key);
     }
   };
 
@@ -582,6 +599,7 @@ export default function RestaurantMenuSection({
             customApiKey: geminiApiKey,
             claudeApiKey,
             openAiApiKey,
+            kimiApiKey,
             ...payload,
           }),
         });
@@ -917,7 +935,13 @@ export default function RestaurantMenuSection({
     if (isPdf(picked)) {
       const pageCount = await pdfPageCount(picked).catch(() => 0);
 
-      if (picked.size > limitBytes || pageCount > MAX_WHOLE_PDF_PAGES) {
+      // Kimi's vision models read images, not PDFs — so for that scanner every
+      // PDF is rendered to pages, not only the long or heavy ones.
+      if (
+        aiProvider === "kimi" ||
+        picked.size > limitBytes ||
+        pageCount > MAX_WHOLE_PDF_PAGES
+      ) {
         const rendering = toast.loading(t("rmenu.rendering_pdf"));
         try {
           const outcome = await pdfToPageImages(
@@ -1581,7 +1605,9 @@ export default function RestaurantMenuSection({
                     {t("rmenu.provider_label")}
                   </span>
                   <div className="grid grid-cols-2 gap-1.5">
-                    {(["offline", "gemini", "claude", "openai"] as const).map((option) => (
+                    {(
+                      ["offline", "gemini", "claude", "openai", "kimi"] as const
+                    ).map((option) => (
                       <button
                         key={option}
                         type="button"
@@ -1600,7 +1626,9 @@ export default function RestaurantMenuSection({
                               ? "rmenu.provider_claude"
                               : option === "openai"
                                 ? "rmenu.provider_openai"
-                                : "rmenu.provider_offline",
+                                : option === "kimi"
+                                  ? "rmenu.provider_kimi"
+                                  : "rmenu.provider_offline",
                         )}
                       </button>
                     ))}
@@ -1714,6 +1742,40 @@ export default function RestaurantMenuSection({
                         OpenAI Platform
                       </a>
                       . <code>OPENAI_API_KEY</code> {t("rmenu.server_key_note")}
+                    </p>
+                  </>
+                )}
+
+                {aiProvider === "kimi" && (
+                  <>
+                    <div className="space-y-1">
+                      <label
+                        htmlFor="kimi-api-key"
+                        className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-widest block"
+                      >
+                        {t("rmenu.kimi_key_label")}
+                      </label>
+                      <input
+                        id="kimi-api-key"
+                        type="password"
+                        placeholder={t("rmenu.kimi_key_placeholder")}
+                        value={kimiApiKey}
+                        onChange={(e) => handleUpdateKimiKey(e.target.value)}
+                        className="w-full bg-white dark:bg-zinc-900 border border-zinc-250 dark:border-zinc-850 text-[11px] font-bold text-zinc-850 dark:text-zinc-100 placeholder-zinc-400 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-purple-500 shadow-sm"
+                      />
+                    </div>
+                    <p className="text-[9px] text-zinc-400 leading-normal">
+                      💡 <strong>{t("rmenu.safe_secure")}</strong>:{" "}
+                      {t("rmenu.kimi_key_hint")}{" "}
+                      <a
+                        href="https://platform.moonshot.ai/console/api-keys"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-purple-500 font-bold hover:underline"
+                      >
+                        Moonshot Platform
+                      </a>
+                      . <code>KIMI_API_KEY</code> {t("rmenu.server_key_note")}
                     </p>
                   </>
                 )}

@@ -13,6 +13,7 @@ import {
 } from "../../../lib/storefrontAdapters";
 import { ClaudeMenuError, scanMenuWithClaude } from "../../../lib/claudeMenu";
 import { OpenAiMenuError, scanMenuWithOpenAi } from "../../../lib/openaiMenu";
+import { KimiMenuError, scanMenuWithKimi } from "../../../lib/kimiMenu";
 import { extractJsonPayload } from "../../../lib/pastedJson";
 import { repairImageUrls } from "../../../lib/imagePathRepair";
 
@@ -76,13 +77,14 @@ const MAX_IMAGE_QUERY_NAMES = 300;
 const MODEL_NAME = "gemini-2.5-flash";
 
 /** Which scanner runs. Both answer with the same JSON, so only the call differs. */
-export type Provider = "gemini" | "claude" | "openai";
+export type Provider = "gemini" | "claude" | "openai" | "kimi";
 
 /** What each scanner is called when we have to name it to the operator. */
 const PROVIDER_LABEL: Record<Provider, string> = {
   gemini: "Gemini",
   claude: "Claude",
   openai: "OpenAI",
+  kimi: "Kimi",
 };
 
 /** A 250-dish menu serialises to a lot of JSON — well under the model's cap. */
@@ -105,6 +107,7 @@ const MAX_FILE_DATA_CHARS: Record<Provider, number> = {
   // Like Gemini, OpenAI receives the document inline through our own function,
   // so the host's body limit is the real ceiling.
   openai: 19 * 1024 * 1024,
+  kimi: 19 * 1024 * 1024,
   claude: 41 * 1024 * 1024,
 };
 
@@ -124,6 +127,7 @@ const MAX_PASTED_JSON_CHARS: Record<Provider, number> = {
   gemini: 1_000_000,
   claude: 600_000,
   openai: 600_000,
+  kimi: 600_000,
 };
 
 /**
@@ -485,6 +489,8 @@ export async function POST(request: Request) {
       typeof body.imageBase === "string" ? body.imageBase.trim() : "";
     const openAiApiKey =
       typeof body.openAiApiKey === "string" ? body.openAiApiKey.trim() : "";
+    const kimiApiKey =
+      typeof body.kimiApiKey === "string" ? body.kimiApiKey.trim() : "";
     // Gemini stays the default so an operator who never opens AI Settings sees
     // no change; Claude is opt-in per request.
     /*
@@ -502,7 +508,9 @@ export async function POST(request: Request) {
         ? "claude"
         : body.provider === "openai"
           ? "openai"
-          : "gemini";
+          : body.provider === "kimi"
+            ? "kimi"
+            : "gemini";
 
     if (claudeFileId && provider !== "claude") {
       return NextResponse.json(
@@ -691,7 +699,10 @@ export async function POST(request: Request) {
         ? claudeApiKey || process.env.ANTHROPIC_API_KEY
         : provider === "openai"
           ? openAiApiKey || process.env.OPENAI_API_KEY
-          : customApiKey || process.env.GEMINI_API_KEY;
+          : provider === "kimi"
+            // MOONSHOT_API_KEY too: that is what their own docs call it.
+            ? kimiApiKey || process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY
+            : customApiKey || process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       return NextResponse.json(
@@ -701,7 +712,9 @@ export async function POST(request: Request) {
               ? "Claude API key is missing. Paste your Anthropic API key in the 'AI Settings' key box on the screen, or set ANTHROPIC_API_KEY in your server environment."
               : provider === "openai"
                 ? "OpenAI API key is missing. Paste your OpenAI API key in the 'AI Settings' key box on the screen, or set OPENAI_API_KEY in your server environment."
-                : "Gemini API Key is missing. Please paste your Gemini API Key in the 'AI Settings' key box on the screen or set it as GEMINI_API_KEY in your server environment.",
+                : provider === "kimi"
+                  ? "Kimi API key is missing. Paste your Moonshot API key in the 'AI Settings' key box on the screen, or set KIMI_API_KEY in your server environment."
+                  : "Gemini API Key is missing. Please paste your Gemini API Key in the 'AI Settings' key box on the screen or set it as GEMINI_API_KEY in your server environment.",
         },
         { status: 400 }
       );
@@ -935,7 +948,32 @@ ${imageRule}${pastedRules}
      */
     let textResponse: string | undefined;
 
-    if (provider === "openai") {
+    if (provider === "kimi") {
+      try {
+        textResponse = await scanMenuWithKimi({
+          apiKey,
+          prompt,
+          pages: documents.map((page) => ({
+            mimeType: page.mimeType,
+            data: page.data,
+          })),
+          pageText,
+          structuredText,
+          timeoutMs: Math.max(
+            MIN_UPSTREAM_TIMEOUT_MS,
+            TOTAL_BUDGET_MS - (Date.now() - startedAt) - RESPONSE_HEADROOM_MS,
+          ),
+        });
+      } catch (error) {
+        if (error instanceof KimiMenuError) {
+          return NextResponse.json(
+            { error: error.message },
+            { status: error.status },
+          );
+        }
+        throw error;
+      }
+    } else if (provider === "openai") {
       try {
         textResponse = await scanMenuWithOpenAi({
           apiKey,
