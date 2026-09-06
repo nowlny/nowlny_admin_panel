@@ -1558,9 +1558,21 @@ t("rests.no_categories_short");
  *
  * It sticks to the top of `<main>`, which is the scrolling element (the page
  * itself does not scroll: the shell is `h-screen` with the sidebar and header
- * fixed beside it). The negative margins pull the bar out over that element's
- * own padding so scrolled content passes *under* an opaque strip rather than
- * beside it.
+ * fixed beside it).
+ *
+ * The three offsets are one mechanism, and all three are needed:
+ *
+ *  - `-mx-*` widens the bar over `<main>`'s horizontal padding, so content
+ *    cannot scroll past beside it;
+ *  - `-mt-*` and `pt-*` cancel out — the bar's box starts at the very top of
+ *    the scroll area while its label stays where the content would have begun;
+ *  - `-top-*` matches that padding, so when the bar pins it comes to rest
+ *    flush against the header instead of a padding's width below it.
+ *
+ * Without the last two, `top-0` alone leaves a 32px strip above the bar that
+ * the menu scrolls through — the label sits in the right place and the page
+ * still looks broken. Measured: the label lands at the same 38px from the top
+ * whether the page is at rest or scrolled, so nothing jumps when it sticks.
  */
 function StickyBackBar({
   label,
@@ -1570,7 +1582,7 @@ function StickyBackBar({
   onBack: () => void;
 }) {
   return (
-    <div className="sticky top-0 z-20 -mx-4 sm:-mx-8 -mt-4 sm:-mt-8 px-4 sm:px-8 py-3 bg-zinc-50/90 dark:bg-zinc-950/90 backdrop-blur-sm border-b border-zinc-200/70 dark:border-zinc-800/70">
+    <div className="sticky -top-4 sm:-top-8 z-20 -mx-4 sm:-mx-8 -mt-4 sm:-mt-8 px-4 sm:px-8 pt-4 sm:pt-8 pb-3 bg-zinc-50/95 dark:bg-zinc-950/95 backdrop-blur-sm border-b border-zinc-200/70 dark:border-zinc-800/70">
       <button
         type="button"
         onClick={onBack}

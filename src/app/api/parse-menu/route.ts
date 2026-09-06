@@ -487,6 +487,16 @@ export async function POST(request: Request) {
       typeof body.openAiApiKey === "string" ? body.openAiApiKey.trim() : "";
     // Gemini stays the default so an operator who never opens AI Settings sees
     // no change; Claude is opt-in per request.
+    /*
+     * The free reader is not a provider — it is the absence of one.
+     *
+     * It normally never reaches this route at all: a PDF is read in the
+     * browser. But the link box and the paste box come here whatever the
+     * scanner is set to, and mapping an unknown `provider` onto Gemini meant
+     * choosing "Free — no key" and then spending Gemini's 20-a-day quota on a
+     * link, without a word about it.
+     */
+    const freeMode = body.provider === "offline";
     const provider: Provider =
       body.provider === "claude"
         ? "claude"
@@ -543,7 +553,12 @@ export async function POST(request: Request) {
       }
 
       if (adapted?.kind === "menu") {
-        return respondWithImportedMenu(adapted, customApiKey || process.env.GEMINI_API_KEY);
+        return respondWithImportedMenu(
+          adapted,
+          // Free means free: the phrase lookup is a Gemini request too, and a
+          // dish without one simply searches photo libraries by its own name.
+          freeMode ? undefined : customApiKey || process.env.GEMINI_API_KEY,
+        );
       }
 
       if (adapted?.kind === "documents") {
@@ -615,7 +630,7 @@ export async function POST(request: Request) {
         try {
           return await respondWithImportedMenu(
             exactImport(),
-            customApiKey || process.env.GEMINI_API_KEY,
+            freeMode ? undefined : customApiKey || process.env.GEMINI_API_KEY,
           );
         } catch (mapError) {
           // Close enough to pass the shape check but not to map. The model
@@ -646,6 +661,27 @@ export async function POST(request: Request) {
       structuredText = true;
       imageBase = base;
       sourceLabel = label;
+    }
+
+    /*
+     * Everything past this point involves a model. In free mode there isn't
+     * one, so this is where the request stops.
+     *
+     * Reaching here is not a failure of the free reader — the exact mappers
+     * above have already answered for every shape they know, without a model
+     * and without a key. It only means this particular source needs one.
+     */
+    if (freeMode) {
+      return NextResponse.json(
+        {
+          error: link
+            ? "The free reader can only import a link whose platform we already know. This one needs an AI scanner: switch it in AI Settings, or open the site's menu request and paste its response into the menu-data box."
+            : pastedJson
+              ? "The free reader imports pasted data only in a format it recognises, and this one is new to it. Switch the AI scanner in AI Settings to have it read this payload."
+              : "The free reader works on PDFs that carry their own text, and reads them in your browser. This file needs an AI scanner: switch it in AI Settings.",
+        },
+        { status: 422 },
+      );
     }
 
     // Resolved before anything is fetched — there is no point pulling down a
@@ -698,7 +734,10 @@ export async function POST(request: Request) {
         const source = await fetchMenuSource(linkToFetch);
         // The page turned out to be a storefront whose API we can read exactly.
         if (source.kind === "menu") {
-          return respondWithImportedMenu(source, customApiKey || process.env.GEMINI_API_KEY);
+          return respondWithImportedMenu(
+            source,
+            freeMode ? undefined : customApiKey || process.env.GEMINI_API_KEY,
+          );
         }
         sourceLabel = sourceLabel || source.label;
         if (source.kind === "binary") {
