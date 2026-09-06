@@ -102,32 +102,62 @@ export async function scanMenuWithKimi({
         },
       ];
 
-  let response: Response;
-  try {
-    response = await fetch(`${BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+  const body = JSON.stringify({
+    model: MODEL,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    // Reading dishes off a page is extraction, not invention.
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content:
+          "You extract menus from documents and return JSON only. Never wrap " +
+          "the JSON in markdown fences, and never add commentary around it.",
       },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        // Reading dishes off a page is extraction, not invention.
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              "You extract menus from documents and return JSON only. Never wrap " +
-              "the JSON in markdown fences, and never add commentary around it.",
-          },
-          { role: "user", content },
-        ],
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+      { role: "user", content },
+    ],
+  });
+
+  /*
+   * Moonshot runs two separate platforms — `api.moonshot.ai` for the world and
+   * `api.moonshot.cn` for the mainland — with separate accounts and separate
+   * keys. A key from one is answered by the other with a flat
+   * `401 Invalid Authentication`, which reads exactly like a bad key and sends
+   * the operator to re-paste a key that was always fine.
+   *
+   * Since the two are indistinguishable from the key itself, a rejection on
+   * one is retried once on the other. Both are Moonshot's own endpoints, so
+   * the key goes nowhere it wasn't already going.
+   */
+  const candidates = [BASE_URL, siblingBase(BASE_URL)].filter(
+    (base): base is string => Boolean(base),
+  );
+
+  let response: Response | null = null;
+  let usedBase = candidates[0];
+
+  try {
+    for (const base of candidates) {
+      usedBase = base;
+      response = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+
+      // Only an auth failure is worth asking the other platform about.
+      if (response.status !== 401) break;
+    }
+    if (usedBase !== BASE_URL && response?.ok) {
+      console.info(
+        `[parse-menu] Kimi key belongs to ${usedBase}; set KIMI_BASE_URL to skip the retry`,
+      );
+    }
   } catch (error) {
     const aborted =
       (error as { name?: string })?.name === "TimeoutError" ||
@@ -145,14 +175,17 @@ export async function scanMenuWithKimi({
     );
   }
 
-  if (!response.ok) {
+  if (!response || !response.ok) {
+    if (!response) {
+      throw new KimiMenuError("Kimi could not be reached.", 502);
+    }
     const errorText = await response.text().catch(() => "");
     console.error(
-      `[parse-menu] Kimi responded ${response.status}:`,
+      `[parse-menu] Kimi responded ${response.status} from ${usedBase}:`,
       errorText.slice(0, 2000),
     );
     throw new KimiMenuError(
-      messageForStatus(response.status, errorText),
+      messageForStatus(response.status, errorText, candidates),
       response.status >= 500 ? 502 : response.status,
     );
   }
@@ -180,6 +213,13 @@ export async function scanMenuWithKimi({
   return text;
 }
 
+/** The other Moonshot platform, or null for a custom endpoint we shouldn't guess at. */
+function siblingBase(base: string): string | null {
+  if (base.includes("api.moonshot.ai")) return base.replace("api.moonshot.ai", "api.moonshot.cn");
+  if (base.includes("api.moonshot.cn")) return base.replace("api.moonshot.cn", "api.moonshot.ai");
+  return null;
+}
+
 /** What the API actually said, when it says it the documented way. */
 function readApiError(errorText: string): { code: string; message: string } {
   try {
@@ -201,12 +241,19 @@ function readApiError(errorText: string): { code: string; message: string } {
  * case — the lesson from the OpenAI path, where "the key was rejected" hid a
  * region block and sent someone chasing a key that was never the problem.
  */
-export function messageForStatus(status: number, errorText: string): string {
+export function messageForStatus(
+  status: number,
+  errorText: string,
+  tried: string[] = [BASE_URL],
+): string {
   const { code, message } = readApiError(errorText);
   const said = message ? ` Kimi said: ${message.slice(0, 220)}` : "";
 
   if (status === 401) {
-    return `The Kimi API key was rejected.${said || " Check the key in AI Settings."}`;
+    // Both platforms have now refused it, so the endpoint is not the problem.
+    return tried.length > 1
+      ? `That Kimi key was rejected by both Moonshot platforms (${tried.join(" and ")}). Check that you copied a key from platform.moonshot.ai (or platform.moonshot.cn) in full — a Kimi app login is not an API key.${said}`
+      : `The Kimi API key was rejected.${said || " Check the key in AI Settings."}`;
   }
   if (status === 403) {
     return `Kimi refused that request.${
