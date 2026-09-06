@@ -6,6 +6,7 @@ import {
   Store,
   Star,
   MapPin,
+  AlertCircle,
   Calendar,
   DollarSign,
   ArrowLeft,
@@ -53,6 +54,12 @@ import {
 } from "../../lib/format";
 
 import { useI18n, type MessageKey } from "../../lib/i18n";
+import { splitByLocation } from "../../lib/restaurantLocations";
+const RestaurantsMap = dynamic(() => import("./RestaurantsMapClient"), {
+  ssr: false,
+  loading: () => <Skeleton className="h-full w-full rounded-2xl" />,
+});
+
 const DeliveryZoneMap = dynamic(() => import("./DeliveryZoneMapClient"), {
   ssr: false,
   // Without this the 400px map slot is a blank grey box until the leaflet
@@ -165,6 +172,22 @@ export default function RestaurantsSection({
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<
     string | null
   >(null);
+  /**
+   * List or map. Kept out of `viewMode` (merchants vs applications) on
+   * purpose: they answer different questions, and an operator switching tabs
+   * should not lose the map.
+   */
+  const [displayMode, setDisplayMode] = useState<"list" | "map">(() => {
+    if (typeof window === "undefined") return "list";
+    return window.localStorage.getItem("nowlny_rest_view") === "map" ? "map" : "list";
+  });
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("nowlny_rest_view", displayMode);
+    }
+  }, [displayMode]);
+
   const [viewMode, setViewMode] = useState<"merchants" | "applications">(
     "merchants",
   );
@@ -320,6 +343,14 @@ export default function RestaurantsSection({
   }, [submissions, debouncedSearch]);
 
   const isPendingTab = viewMode === "applications";
+  /**
+   * Which merchants the map can show, and which it cannot.
+   *
+   * Computed from the merchants already loaded, so the map answers for exactly
+   * what the operator is looking at — the same filter, the same search.
+   */
+  const locations = useMemo(() => splitByLocation(restaurants), [restaurants]);
+
   const displayList: (RestaurantResponse | RestaurantSubmission)[] = isPendingTab
     ? filteredSubmissions
     : restaurants;
@@ -1318,6 +1349,31 @@ t("rests.no_address")}
                   })}
             </span>
             {!isPendingTab && (
+              <div className="flex items-center rounded-lg border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+                {(["list", "map"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setDisplayMode(mode)}
+                    aria-pressed={displayMode === mode}
+                    className={`text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors ${
+                      displayMode === mode
+                        ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900"
+                        : "text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                    }`}
+                  >
+                    {mode === "list" ? (
+                      <Store className="w-3.5 h-3.5" />
+                    ) : (
+                      <MapPin className="w-3.5 h-3.5" />
+                    )}
+                    {t(mode === "list" ? "rests.view_list" : "rests.view_map")}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {!isPendingTab && (
               <button
                 onClick={() => setIsAddModalOpen(true)}
                 className="text-xs font-bold px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all shadow-sm whitespace-nowrap"
@@ -1364,6 +1420,103 @@ t("rests.no_address")}
             }
             hint={t("rests.none_hint")}
           />
+        </div>
+      ) : !isPendingTab && displayMode === "map" ? (
+        /*
+         * The map, and beside it everything the map cannot say.
+         *
+         * A merchant with no coordinates is simply absent from a map — the one
+         * place an operator would never think to look for it — so the two
+         * kinds of problem get their own column: no location at all, and a
+         * location that is almost certainly a typo.
+         */
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+          <div className="lg:col-span-3 h-[560px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 relative">
+            {locations.placed.length > 0 ? (
+              <RestaurantsMap
+                placed={locations.placed}
+                bounds={locations.bounds}
+                center={locations.center}
+                onOpen={(id) => setSelectedRestId(id)}
+                labels={{
+                  open: t("rests.map_open"),
+                  suspect: t("rests.map_suspect_pin"),
+                }}
+              />
+            ) : (
+              <EmptyState
+                icon={MapPin}
+                title={t("rests.map_empty")}
+                hint={t("rests.map_missing_hint")}
+              />
+            )}
+
+            {locations.placed.length > 0 && (
+              <span className="absolute bottom-3 start-3 z-[500] text-[10px] font-bold px-2 py-1 rounded-lg bg-white/90 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300 shadow-sm">
+                {t("rests.map_placed", { count: locations.placed.length })}
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-4 lg:max-h-[560px] lg:overflow-y-auto pe-1">
+            {locations.suspect.length > 0 && (
+              <div className="bg-white dark:bg-zinc-900 border border-red-300 dark:border-red-900/60 rounded-2xl p-4 space-y-2">
+                <h4 className="text-xs font-black text-red-600 dark:text-red-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  {t("rests.map_suspect_title")} ({locations.suspect.length})
+                </h4>
+                <p className="text-[10px] text-zinc-500 dark:text-zinc-400 leading-normal">
+                  {t("rests.map_suspect_hint")}
+                </p>
+                <ul className="space-y-1.5 pt-1">
+                  {locations.suspect.map((entry) => (
+                    <li key={entry.restaurant.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRestId(entry.restaurant.id)}
+                        className="w-full text-start px-2.5 py-2 rounded-lg border border-zinc-150 dark:border-zinc-800 hover:border-red-400 hover:bg-red-50/50 dark:hover:bg-red-950/20 transition-colors"
+                      >
+                        <span dir="auto" className="block text-[11px] font-bold text-zinc-800 dark:text-zinc-100 truncate">
+                          {entry.restaurant.name}
+                        </span>
+                        <span className="block text-[10px] font-mono text-red-500">
+                          {entry.lat.toFixed(4)}, {entry.lng.toFixed(4)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 space-y-2">
+              <h4 className="text-xs font-black text-zinc-800 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-zinc-400" />
+                {t("rests.map_missing_title")} ({locations.missing.length})
+              </h4>
+              <p className="text-[10px] text-zinc-500 dark:text-zinc-400 leading-normal">
+                {locations.missing.length > 0
+                  ? t("rests.map_missing_hint")
+                  : t("rests.map_missing_none")}
+              </p>
+              <ul className="space-y-1.5 pt-1">
+                {locations.missing.map((restaurant) => (
+                  <li key={restaurant.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRestId(restaurant.id)}
+                      className="w-full text-start px-2.5 py-2 rounded-lg border border-zinc-150 dark:border-zinc-800 hover:border-orange-400 hover:bg-orange-50/50 dark:hover:bg-orange-950/20 transition-colors flex items-center justify-between gap-2"
+                    >
+                      <span dir="auto" className="text-[11px] font-bold text-zinc-800 dark:text-zinc-100 truncate">
+                        {restaurant.name}
+                      </span>
+                      <StatusPill status={restaurant.status} className="shrink-0 text-[9px] px-1.5 py-0.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
