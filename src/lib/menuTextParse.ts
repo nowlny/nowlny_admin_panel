@@ -18,10 +18,28 @@ export interface ParsedLine {
   bold: boolean;
 }
 
+/** One add-on a customer can tick. `price` is what it adds to the dish. */
+export interface TextMenuOption {
+  name: string;
+  price: number;
+}
+
 export interface TextMenuItem {
   name: string;
   description?: string;
   price: number;
+  /**
+   * Add-ons printed for a whole section, given to every dish in it.
+   *
+   * Always `checkbox` and never required: a printed extras list says what may
+   * be added, never that something must be.
+   */
+  optionGroups?: {
+    name: string;
+    type: "checkbox";
+    isRequired: boolean;
+    options: TextMenuOption[];
+  }[];
 }
 
 export interface TextMenuCategory {
@@ -54,6 +72,26 @@ const CURRENCY_MARKS =
 const CURRENCY_PART = `(?<![A-Za-z\\u0600-\\u06FF])(?:${CURRENCY_MARKS})(?![A-Za-z\\u0600-\\u06FF])`;
 
 const CURRENCY = new RegExp(CURRENCY_PART, "i");
+
+/**
+ * A heading that announces add-ons rather than dishes.
+ *
+ * Printed menus put these at the end of a section — "EXTRAS: cheese 1.00,
+ * bacon 2.00" — and read line by line they look exactly like dishes, because
+ * that is what they are shaped like: a name and a price. Without this, a
+ * burger menu imports "Add Cheese" as something a customer can order on its
+ * own, which is then deleted by hand, one line at a time.
+ *
+ * Deliberately narrow. "Sides" and "Sauces" head real categories on plenty of
+ * menus, and turning a section of dishes into a checkbox list is the worse
+ * mistake of the two.
+ *
+ * The boundary is a lookahead rather than `\b`, which is defined on ASCII word
+ * characters: after "إضافات" there is no word boundary at all, so `\b` would
+ * match every English extras heading and no Arabic one.
+ */
+const EXTRAS_HEADING =
+  /^(?:extras?|add[\s-]?ons?|additions?|toppings?|إضافات|الإضافات|اضافات|الاضافات)(?![\p{L}\p{N}])/iu;
 
 /** Lines that are furniture, not food. */
 const NOISE =
@@ -181,8 +219,36 @@ export function parseMenuFromLines(lines: ParsedLine[]): TextMenu {
   let matchedLines = 0;
   let unmatchedLines = 0;
 
+  /** The extras block being read, and the dishes it was printed under. */
+  let extras: { name: string; options: TextMenuOption[]; items: TextMenuItem[] } | null =
+    null;
+
+  /**
+   * Hand the extras block to its dishes and close it.
+   *
+   * Every dish in the section gets the same group, which is what the menu
+   * says: the list was printed once, under all of them.
+   */
+  const closeExtras = () => {
+    if (extras && extras.options.length > 0) {
+      for (const item of extras.items) {
+        item.optionGroups = [
+          ...(item.optionGroups ?? []),
+          {
+            name: extras.name,
+            type: "checkbox",
+            isRequired: false,
+            options: [...extras.options],
+          },
+        ];
+      }
+    }
+    extras = null;
+  };
+
   const samples: string[] = [];
   const openCategory = (name: string) => {
+    closeExtras();
     current = { name, items: [] };
     categories.push(current);
     lastItem = null;
@@ -200,6 +266,19 @@ export function parseMenuFromLines(lines: ParsedLine[]): TextMenu {
 
     const priced = splitPrices(text);
     if (priced) {
+      // Inside an extras block every priced line is a choice for the dishes
+      // above it. The first price is the surcharge; a size grid under an
+      // extras heading is not a thing menus print.
+      if (extras) {
+        matchedLines += 1;
+        samples.push(priced.name);
+        const key = priced.name.toLowerCase();
+        if (!extras.options.some((option) => option.name.toLowerCase() === key)) {
+          extras.options.push({ name: priced.name, price: priced.prices[0] });
+        }
+        continue;
+      }
+
       if (!current) openCategory("");
       matchedLines += 1;
       samples.push(priced.name);
@@ -243,7 +322,24 @@ export function parseMenuFromLines(lines: ParsedLine[]): TextMenu {
         (text === text.toUpperCase() && /[A-Z؀-ۿ]/.test(text)));
 
     if (looksLikeHeading) {
-      openCategory(text.replace(/[:•]+$/, "").trim());
+      const heading = text.replace(/[:•]+$/, "").trim();
+
+      // With no dishes above it, an extras heading has nothing to attach to —
+      // it is the menu's own section, so it is read as one.
+      // `current` is only ever assigned inside `openCategory`, which the
+      // compiler cannot follow — the same reason the pushes above use `!`.
+      const section = current as TextMenuCategory | null;
+
+      if (EXTRAS_HEADING.test(heading) && section && section.items.length > 0) {
+        closeExtras();
+        extras = { name: heading, options: [], items: section.items };
+        lastItem = null;
+        sizeHeader = null;
+        samples.push(text);
+        continue;
+      }
+
+      openCategory(heading);
       samples.push(text);
       sizeHeader = null;
       continue;
@@ -259,6 +355,8 @@ export function parseMenuFromLines(lines: ParsedLine[]): TextMenu {
       unmatchedLines += 1;
     }
   }
+
+  closeExtras();
 
   const arabicSamples = samples.filter(isArabic).length;
   const language =

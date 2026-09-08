@@ -42,6 +42,21 @@ export interface NormalizedItem {
 }
 
 /**
+ * A dish as it comes out of the first pass, before the menu's language is
+ * known.
+ *
+ * The ingredients are the reason this type exists: they are not a field the
+ * platform has — a menu item is a name, a description and a price — so they
+ * leave here as a description and as a group of things a customer can ask to
+ * have left out. Naming that group needs the language, and the language is
+ * only settled once every item has been read, so they are carried this far
+ * and no further.
+ */
+interface ScannedItem extends NormalizedItem {
+  ingredients?: string[];
+}
+
+/**
  * Ceilings on what one dish can carry out of a source we do not control.
  *
  * A menu with 40 groups on a dish is a payload we have misread, and creating
@@ -49,6 +64,121 @@ export interface NormalizedItem {
  */
 const MAX_GROUPS_PER_ITEM = 20;
 const MAX_OPTIONS_PER_GROUP = 60;
+
+/**
+ * Past this, an "ingredients" list is a description that got split on commas.
+ *
+ * It is also what a customer is offered to remove, and twenty checkboxes under
+ * a sandwich is not a menu.
+ */
+const MAX_INGREDIENTS = 12;
+
+/** Longer than this is a sentence about the dish, not something in it. */
+const MAX_INGREDIENT_CHARS = 60;
+
+/** Separators an ingredient line uses when it arrives as one string. */
+const INGREDIENT_SPLIT = /[,،؛;+·•\u2022]|\sو\s|\band\b/gi;
+
+/** Bullets and dashes a list item is printed with. */
+const INGREDIENT_BULLET = /^[\s\-–—*•·]+|[\s.،,]+$/g;
+
+/**
+ * The group that lets a customer drop an ingredient, named per language.
+ *
+ * The model is asked for this phrase in the menu's own language, so these are
+ * only the fallback — for a menu read by an adapter, where no model was
+ * involved, and for a model that left the field out.
+ */
+const REMOVE_LABEL: Record<string, string> = {
+  ar: "إزالة المكونات",
+  en: "Remove ingredients",
+};
+
+/**
+ * A group that already asks what to leave out.
+ *
+ * A menu that prints "Without: onions, pickles" gets that group from the
+ * scanner directly, and building a second one out of the same ingredients
+ * would ask the customer the same question twice.
+ */
+const REMOVAL_GROUP = /remove|without|no onions|بدون|إزالة|احذف/i;
+
+/**
+ * What a dish is made of, however the scanner or the payload phrased it.
+ *
+ * Accepts the array it is asked for, the single comma-separated string a model
+ * returns when it forgets, and the `[{ name }]` objects a platform's own API
+ * tends to use.
+ */
+function normalizeIngredients(value: unknown): string[] {
+  const raw =
+    typeof value === "string"
+      ? value.split(INGREDIENT_SPLIT)
+      : asArray(value).map((entry) =>
+          typeof entry === "string" ? entry : asText(asRecord(entry).name, 200),
+        );
+
+  const seen = new Set<string>();
+  const ingredients: string[] = [];
+
+  for (const entry of raw) {
+    const name = asText(entry, 200).replace(INGREDIENT_BULLET, "");
+    // A price that came along with the word is a modifier, not an ingredient.
+    if (!name || name.length > MAX_INGREDIENT_CHARS || !/[\p{L}]/u.test(name)) continue;
+
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    ingredients.push(name);
+    if (ingredients.length === MAX_INGREDIENTS) break;
+  }
+
+  return ingredients;
+}
+
+/**
+ * An ingredient list read as a sentence, for a dish the menu describes with
+ * nothing at all. Arabic joins its lists with its own comma.
+ */
+function describeIngredients(ingredients: string[]): string {
+  if (ingredients.length < 2) return "";
+  const arabic = ARABIC_SCRIPT.test(ingredients.join(" "));
+  return ingredients.join(arabic ? "، " : ", ");
+}
+
+/**
+ * Give a dish the group that lets a customer drop an ingredient.
+ *
+ * Free, never required, and never single-choice: leaving out the pickles must
+ * not stop someone also leaving out the onions. One ingredient is not a
+ * choice — nobody orders a coffee without coffee — so those dishes keep the
+ * ingredients in their description and get no group.
+ */
+function finishItem({ ingredients = [], ...item }: ScannedItem, label: string): NormalizedItem {
+  const groups = item.optionGroups ?? [];
+
+  if (
+    ingredients.length < 2 ||
+    groups.length >= MAX_GROUPS_PER_ITEM ||
+    groups.some((group) => REMOVAL_GROUP.test(group.name))
+  ) {
+    return item;
+  }
+
+  return {
+    ...item,
+    optionGroups: [
+      ...groups,
+      {
+        name: label,
+        type: "checkbox",
+        isRequired: false,
+        options: ingredients.map((name) => ({ name, price: 0 })),
+      },
+    ],
+  };
+}
 
 /**
  * Shape whatever modifiers came back — from an adapter or from the model —
@@ -216,12 +346,16 @@ export function normalizeParsedMenu(
       const name = asText(category.name, 120);
 
       const items = asArray(category.items)
-        .map((rawItem): NormalizedItem | null => {
+        .map((rawItem): ScannedItem | null => {
           const item = asRecord(rawItem);
           const itemName = asText(item.name, 200);
           if (!itemName) return null;
 
-          const description = asText(item.description, 600);
+          const ingredients = normalizeIngredients(item.ingredients);
+          // A dish the menu says nothing about is described by what is in it,
+          // rather than reaching the storefront as a bare name.
+          const description =
+            asText(item.description, 600) || describeIngredients(ingredients);
 
           // `imageRef` is a 1-based index into `sourceImages`; `image` is a URL
           // the model echoed back. https only, so an import can't downgrade the
@@ -246,6 +380,7 @@ export function normalizeParsedMenu(
             samples.push(group.name);
             for (const option of group.options) samples.push(option.name);
           }
+          for (const ingredient of ingredients) samples.push(ingredient);
 
           return {
             name: itemName,
@@ -256,9 +391,10 @@ export function normalizeParsedMenu(
             // The scanner has no way to know; a freshly imported dish is on sale.
             isAvailable: item.isAvailable !== false,
             ...(optionGroups.length ? { optionGroups } : {}),
+            ...(ingredients.length ? { ingredients } : {}),
           };
         })
-        .filter((item): item is NormalizedItem => item !== null);
+        .filter((item): item is ScannedItem => item !== null);
 
       if (name) samples.push(name);
       return { name, items };
@@ -272,11 +408,20 @@ export function normalizeParsedMenu(
   // written in the menu's language like everything else in this payload.
   const fallbackName = language === "ar" ? "أصناف أخرى" : "Other items";
 
+  // "Remove ingredients" is a heading a customer reads, so it follows the same
+  // language rule as everything else: the scanner is asked for the phrase in
+  // the menu's own language, and only a menu read without one falls back.
+  const removeLabel =
+    asText(root.removeIngredientsLabel, 60) ||
+    REMOVE_LABEL[language] ||
+    REMOVE_LABEL.en;
+
   return {
     language,
     categories: categories.map((category) => ({
       ...category,
       name: category.name || fallbackName,
+      items: category.items.map((item) => finishItem(item, removeLabel)),
     })),
   };
 }

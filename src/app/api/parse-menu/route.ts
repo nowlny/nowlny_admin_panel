@@ -828,24 +828,80 @@ export async function POST(request: Request) {
       17. Never write image URLs yourself. The number is the only thing we read.`
       : "";
 
-    // Only ever reached with `structuredText`, so these follow on from the
-    // structured image rules above (15 and 16).
+    /*
+     * The choices a customer makes about a dish, on every kind of menu.
+     *
+     * These used to be asked for only when the operator pasted a platform's
+     * own JSON, which is the one source that hands them over already labelled.
+     * Everything else — a photographed menu with "add cheese +2" down the
+     * side, a PDF, a scraped page — carried its add-ons into the import as
+     * nothing at all, or worse, as dishes: "Extra Cheese, 1.50" became a
+     * menu item of its own. So the rules moved out here, worded for a printed
+     * menu as much as for a payload.
+     */
+    const modifierRules = `
+      Modifiers — the choices a customer makes about a dish. Most menus have some; look for them:
+      18. Sizes are the one exception: when a dish is priced per size, return ONE ITEM PER SIZE and put the size in that item's name (e.g. "Margherita - Large"). Spell the size out in the menu's language; never leave a bare code like "l" or "m".
+      19. Everything else the customer chooses — extras, add-ons, toppings, sauces, sides, bread or dough, cooking level, sugar or ice level, milk, flavours, "choose 2", "with or without" — belongs in that dish's "optionGroups". They are NEVER menu items of their own: never return "Oat Dough", "Extra cheese" or "Add pickles" as a dish.${
+        structuredText
+          ? ' In a payload they sit under keys like "optionGroups", "choices", "addons", "modifiers", "extras" or "variations".'
+          : ' On a printed menu they are the small print under a dish or a section — "Add chicken 3", "Choice of sauce", "+ extras" — and often a price list with no dish names in it.'
+      }
+      20. For each group give its "name" and its "options", each option with a "name" and a "price".
+      21. An option's "price" is what the choice ADDS to the dish, not a total: a free choice is 0${
+        structuredText
+          ? ', and a choice priced at null, "" or 0 in the data is 0'
+          : ', and a line printed as "+2" or "add 2" is an option priced 2'
+      }.
+      22. Set "type" to "radio" when the customer picks exactly one (dough, cooking level, bread, milk) and "checkbox" when they may pick several (toppings, extras, sauces). Set "isRequired" to true only when the dish cannot be ordered without answering${
+        structuredText ? ", or when the data says the group is required" : ""
+      }.
+      23. A block of extras printed once for a whole section ("all burgers: add cheese 1, add bacon 2") belongs on every dish in that section.
+      24. Keep group and option names in the menu's own language, exactly like dish names.`;
+
+    /*
+     * What each dish is made of.
+     *
+     * The platform has no ingredients field — a menu item is a name, a
+     * description and a price — so these land as the dish's description when
+     * it has none, and as a free "Remove ingredients" group so a customer can
+     * drop the onions. `normalizeParsedMenu` does both; the model only has to
+     * list them, and to name that group in the menu's language.
+     *
+     * Left out entirely on a very large menu, for the same reason its
+     * descriptions are: finishing the scan beats furnishing it.
+     */
+    const ingredientRules = terseDescriptions
+      ? ""
+      : `
+
+      Ingredients — what is in each dish:
+      25. Give each item an "ingredients" array: what the dish is made of, one component per entry, in the menu's language. No quantities, no prices, no cooking steps, no sentences — "chicken", "garlic sauce", "pickles", not "grilled chicken marinated overnight".
+      26. Read them off the menu first — its description or ingredients line. When the menu prints none and the dish is one you reliably recognise, list the 3 to 8 ingredients it is normally made of. When you cannot identify the dish, leave "ingredients" out rather than guessing.
+      27. Ingredients are not choices: never price them and never repeat them as an option group of your own.
+      28. Return "removeIngredientsLabel" ONCE at the top level: the phrase "Remove ingredients" written in the menu's language (Arabic menus: "إزالة المكونات").`;
+
     const pastedRules = pastedJson
       ? `
-      Pasted payload rules:
-      17. Ignore everything in the payload that is not a dish: theme, colours, settings, banners, carousels, page sections, opening hours, branches and analytics.
-      18. When a dish carries several sizes or price options, return ONE ITEM PER SIZE and put the size in that item's name (e.g. "Margherita - Large"). Spell the size out in the menu's language; never leave a bare code like "l" or "m".
-      19. When a dish carries both a list price and a final or discounted one, use the price the payload marks as final or current.
-      20. When the payload marks a dish as unavailable, sold out or hidden, still return it and add "isAvailable": false to that item. Leave the field out otherwise.
-      21. Return every dish in the payload. Do not summarise, sample or stop early.
 
-      Modifiers — the choices a customer makes about a dish:
-      22. Option groups, modifiers, add-ons and extras (keys like "optionGroups", "choices", "addons", "modifiers", "variations") are NEVER menu items of their own. Never return "Oat Dough" or "Add pickles" as a dish. They belong in that dish's "optionGroups" instead.
-      23. For each such group give its "name" and its "options", each option with a "name" and a "price".
-      24. An option's "price" is what the choice ADDS to the dish, not a total: a free choice is 0, and a choice the payload prices at null, "" or 0 is 0.
-      25. Set "type" to "radio" when the customer picks exactly one (sizes, dough, cooking level) and "checkbox" when they may pick several (toppings, extras, sauces). Set "isRequired" to true only when the payload says the group must be answered.
-      26. Keep the group and option names in the menu's own language, exactly like dish names.`
+      Pasted payload rules:
+      29. Ignore everything in the payload that is not a dish: theme, colours, settings, banners, carousels, page sections, opening hours, branches and analytics.
+      30. When a dish carries both a list price and a final or discounted one, use the price the payload marks as final or current.
+      31. When the payload marks a dish as unavailable, sold out or hidden, still return it and add "isAvailable": false to that item. Leave the field out otherwise.
+      32. Return every dish in the payload. Do not summarise, sample or stop early.${
+        terseDescriptions
+          ? ""
+          : '\n      33. When the payload gives a dish its own ingredients list, copy that into "ingredients" rather than writing one yourself.'
+      }`
       : "";
+
+    // Every source is asked for modifiers now, so the shape they come back in
+    // is part of the schema rather than a line spliced in for pasted payloads.
+    const optionGroupSchema =
+      ',\n                "optionGroups": [{ "name": "Group name, in the menu\'s language", "type": "radio", "isRequired": false, "options": [{ "name": "Choice name", "price": 0 }] }]';
+    const ingredientSchema = terseDescriptions
+      ? ""
+      : ',\n                "ingredients": ["ingredient", "ingredient"]';
 
     const prompt = `
       You are an expert menu digitizer and OCR extractor.
@@ -875,11 +931,15 @@ export async function POST(request: Request) {
       12. For every item add an 'imageQuery': a short stock-photo search phrase of 2 to 5 words describing what the dish LOOKS like, so we can find a photo for items the menu has no picture for.
       13. 'imageQuery' must ALWAYS be written in ENGLISH, even when the rest of the output is Arabic. Translate the dish for this field only (e.g. name "شاورما دجاج" -> imageQuery "chicken shawarma wrap").
       14. Keep 'imageQuery' generic and visual: no restaurant names, no brand names, no prices, no sizes. Prefer "grilled lamb kebab skewers" over "Chef Special #4".
-${imageRule}${pastedRules}
+${imageRule}${modifierRules}${ingredientRules}${pastedRules}
 
       You must respond strictly with a valid JSON matching this schema:
       {
-        "language": "ISO 639-1 code of the detected menu language, e.g. \"en\" or \"ar\"",
+        "language": "ISO 639-1 code of the detected menu language, e.g. \"en\" or \"ar\"",${
+          terseDescriptions
+            ? ""
+            : '\n        "removeIngredientsLabel": "the phrase Remove ingredients, in the menu\'s language",'
+        }
         "categories": [
           {
             "name": "Category Name, in the menu's language",
@@ -889,11 +949,7 @@ ${imageRule}${pastedRules}
                 "description": "Item Description, in the menu's language",
                 "price": 12.99,
                 "category": "Category Name, in the menu's language",
-                "imageQuery": "english stock photo search phrase"${
-                  pastedJson
-                    ? ',\n                "optionGroups": [{ "name": "Group name, in the menu\'s language", "type": "radio", "isRequired": false, "options": [{ "name": "Choice name", "price": 0 }] }]'
-                    : ""
-                }${
+                "imageQuery": "english stock photo search phrase"${optionGroupSchema}${ingredientSchema}${
                   structuredText
                     ? ',\n                "image": "exactly as written in the data"'
                     : sourceImages.length

@@ -62,6 +62,12 @@ export interface AdaptedMenu {
           isRequired: boolean;
           options: { name: string; price: number }[];
         }[];
+        /**
+         * What the dish is made of, when the platform lists it separately from
+         * the description. `normalizeParsedMenu` turns these into the dish's
+         * description and into the group a customer removes them with.
+         */
+        ingredients?: string[];
       }[];
     }[];
   };
@@ -156,6 +162,150 @@ function sizeLabel(size: string, arabic: boolean): string {
   const known = labels[key];
   if (known) return arabic ? known[1] : known[0];
   return size.trim();
+}
+
+/** A modifier group, in the shape the normalizer reads. */
+type AdaptedGroup = NonNullable<
+  AdaptedMenu["data"]["categories"][number]["items"][number]["optionGroups"]
+>[number];
+
+/**
+ * Keys a platform keeps a dish's modifier groups under.
+ *
+ * Deliberately not `options`, `choices` or `variations`: those name the
+ * choices *inside* a group far more often than the groups themselves, and a
+ * storec dish's `priceOptions` are its sizes, which this file has always
+ * imported as one dish each.
+ */
+const GROUP_KEYS = [
+  "optionGroups",
+  "option_groups",
+  "modifierGroups",
+  "modifier_groups",
+  "modifiers",
+  "addons",
+  "add_ons",
+  "addOns",
+  "additions",
+  "extras",
+  "optionSets",
+  "choiceGroups",
+];
+
+/** And the keys the choices themselves sit under, inside such a group. */
+const OPTION_KEYS = ["choices", "options", "items", "values", "modifiers", "addons"];
+
+/** Where a dish's components live, when they are not just its description. */
+const INGREDIENT_KEYS = ["ingredients", "components", "contents"];
+
+/** First key that actually holds a non-empty array. */
+function firstArray(record: Record<string, unknown>, keys: string[]): unknown[] {
+  for (const key of keys) {
+    const value = asArray(record[key]);
+    if (value.length > 0) return value;
+  }
+  return [];
+}
+
+/** A name under whichever of the usual keys this platform chose. */
+function anyName(record: Record<string, unknown>): string {
+  return (
+    text(record.name) ||
+    text(record.title) ||
+    text(record.label) ||
+    text(record.nameEn) ||
+    text(record.name_en) ||
+    ""
+  );
+}
+
+/** What a choice adds to the dish. Anything unreadable or negative is free. */
+function surcharge(record: Record<string, unknown>): number {
+  for (const key of ["price", "extraPrice", "additionalPrice", "amount", "cost"]) {
+    const value = Number(text(record[key]) || record[key]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
+/**
+ * Read a dish's modifiers out of a payload whose exact shape we do not know.
+ *
+ * Every platform this file imports from spells them differently, and the one
+ * with a mapper written against its real payload — a categories-with-items
+ * store, which nests `optionGroups.choices` — does its own thing. This is for
+ * the rest: a best-effort pass that recognises the usual key names, and
+ * returns nothing at all when a payload does not carry modifiers, so a store
+ * imports exactly as it did before.
+ */
+function readOptionGroups(item: Record<string, unknown>): AdaptedGroup[] {
+  const groups: AdaptedGroup[] = [];
+
+  for (const rawGroup of firstArray(item, GROUP_KEYS)) {
+    const group = asRecord(rawGroup);
+    const name = anyName(group);
+    if (!name) continue;
+
+    const seen = new Set<string>();
+    const options = firstArray(group, OPTION_KEYS)
+      .map((rawOption) => asRecord(rawOption))
+      .flatMap((option) => {
+        const optionName = anyName(option);
+        // Sold out is not a state one of our options can be in, so a choice
+        // nobody can pick is better left out than imported unpickable.
+        if (!optionName || option.available === false || option.isAvailable === false) {
+          return [];
+        }
+        const key = optionName.toLowerCase();
+        if (seen.has(key)) return [];
+        seen.add(key);
+
+        return [{ name: optionName, price: surcharge(option) }];
+      });
+
+    if (options.length === 0) continue;
+
+    const isRequired =
+      group.required === true || group.isRequired === true || group.mandatory === true;
+    // How many may be picked is the only thing that decides the control, and
+    // `max === 1` says it outright where a platform bothers to.
+    const max = Number(group.maxSelect ?? group.max ?? group.maximum ?? NaN);
+    const claimed = text(group.type || group.selectionType).toLowerCase();
+    const type: AdaptedGroup["type"] =
+      claimed === "radio" || claimed === "single"
+        ? "radio"
+        : claimed === "checkbox" || claimed === "multiple"
+          ? "checkbox"
+          : max === 1 || isRequired
+            ? "radio"
+            : "checkbox";
+
+    groups.push({ name, type, isRequired, options });
+  }
+
+  return groups;
+}
+
+/** The same best-effort read for a dish's ingredient list. */
+function readIngredients(item: Record<string, unknown>): string[] {
+  // Deduplication, length and the ceiling are the normalizer's job — it does
+  // the same for a scanned menu, and one place to change is enough.
+  return firstArray(item, INGREDIENT_KEYS)
+    .map((entry) => (typeof entry === "string" ? text(entry) : anyName(asRecord(entry))))
+    .filter(Boolean);
+}
+
+/** Modifiers and ingredients, ready to spread onto an adapted dish. */
+function readExtras(item: Record<string, unknown>): {
+  optionGroups?: AdaptedGroup[];
+  ingredients?: string[];
+} {
+  const optionGroups = readOptionGroups(item);
+  const ingredients = readIngredients(item);
+  return {
+    ...(optionGroups.length ? { optionGroups } : {}),
+    ...(ingredients.length ? { ingredients } : {}),
+  };
 }
 
 /** storec.app — `https://storec.app/store/<slug>`. */
@@ -289,8 +439,12 @@ export function mapStorecMenu(
             .map((option) => asRecord(option))
             .filter((option) => Number.isFinite(Number(option.price)));
 
+          // Whatever else this dish lets a customer choose. Sizes are not part
+          // of it — they are `priceOptions`, and they become dishes below.
+          const extras = readExtras(item);
+
           if (options.length === 0) {
-            return [{ name, description, price: 0, imageRef, isAvailable }];
+            return [{ name, description, price: 0, imageRef, isAvailable, ...extras }];
           }
 
           // One dish per size, because the menu we import into prices a dish
@@ -303,6 +457,8 @@ export function mapStorecMenu(
               price: Number(option.price),
               imageRef,
               isAvailable,
+              // Every size is the same dish, so each carries the same choices.
+              ...extras,
             };
           });
         });
@@ -502,6 +658,8 @@ export function mapCategoryItemsMenu(
               ];
             });
 
+          const ingredients = readIngredients(item);
+
           return [
             {
               name,
@@ -510,6 +668,7 @@ export function mapCategoryItemsMenu(
               imageRef: registerImage(text(item.image)),
               isAvailable: item.available !== false,
               ...(optionGroups.length ? { optionGroups } : {}),
+              ...(ingredients.length ? { ingredients } : {}),
             },
           ];
         });
@@ -615,6 +774,7 @@ export function mapFlatMenu(
         price: Number.isFinite(price) && price > 0 ? price : 0,
         imageRef: registerImage(text(item.image) || text(item.croppedImage)),
         isAvailable: item.isAvailable !== false,
+        ...readExtras(item),
       },
     ];
   };
@@ -921,6 +1081,7 @@ async function adaptOmega(origin: string, slug: string): Promise<StorefrontResul
           text(item.ITEMDESCRIPTION) || text(item.AITEMDESCRIPTION) || undefined;
         const imageRef = registerImage(item.PIC);
         const sizes = asArray(item.sizes).map((size) => asRecord(size));
+        const extras = readExtras(item);
 
         if (sizes.length > 1) {
           return sizes.map((size) => {
@@ -934,6 +1095,7 @@ async function adaptOmega(origin: string, slug: string): Promise<StorefrontResul
               price: Number(size.PRICE) || 0,
               imageRef,
               isAvailable: true,
+              ...extras,
             };
           });
         }
@@ -945,6 +1107,7 @@ async function adaptOmega(origin: string, slug: string): Promise<StorefrontResul
             price: Number(item.PRICE) || Number(sizes[0]?.PRICE) || 0,
             imageRef,
             isAvailable: true,
+            ...extras,
           },
         ];
       }),
@@ -1091,6 +1254,7 @@ async function adaptMoviyum(origin: string): Promise<AdaptedMenu> {
         imageRef: registerImage(text(product.image)),
         // `status` is 0 for a dish the store has switched off.
         isAvailable: Number(product.status) !== 0,
+        ...readExtras(product),
       };
 
       const subName = subNames.get(String(product.sub_category_id)) ?? "";
@@ -1110,6 +1274,253 @@ async function adaptMoviyum(origin: string): Promise<AdaptedMenu> {
   const label = await moviyumStoreName(origin);
   return {
     label: label || new URL(origin).hostname,
+    data: { categories },
+    images,
+  };
+}
+
+
+/* ── Menugic ──────────────────────────────────────────────────────────────────
+   `https://<store>.menugic.com`, or `https://menugic.com/<store>`. A React
+   storefront that renders everything client-side: the page is 1.8 KB of markup
+   with no dishes in it, so every scanner read an empty document and the
+   operator was told to screenshot the site instead.
+
+   It doesn't need reading at all. The API its own front end calls is public:
+   the store record by slug — which carries its categories, its language and
+   its id — and then every product in one request.
+--------------------------------------------------------------------------- */
+
+const MENUGIC_API = "https://api.menugic.com";
+
+/** Subdomains of menugic.com that serve the platform, not a store. */
+const MENUGIC_INTERNAL = new Set(["api", "staging-api"]);
+
+/** Product photos are keys in one public bucket, stored without their host. */
+const MENUGIC_IMAGES = "https://storage.googleapis.com/ecommerce-bucket-testing/";
+
+/**
+ * The store a menugic link points at.
+ *
+ * Their own page picks the slug the same way: the subdomain when there is a
+ * real one, and otherwise the first path segment, which is how the platform's
+ * own domain serves a store (`menugic.com/<store>`).
+ */
+function menugicSlug(url: URL): string | null {
+  const host = url.hostname.toLowerCase();
+  if (!/(^|\.)menugic\.com$/.test(host)) return null;
+
+  const sub = host.split(".")[0];
+  // The platform's own API is not a store, and its path is not a slug — a
+  // link to one is simply not something this adapter can import.
+  if (MENUGIC_INTERNAL.has(sub)) return null;
+
+  if (host !== "menugic.com" && sub !== "www") {
+    return SLUG.test(sub) ? sub : null;
+  }
+
+  // The platform's own domain serves a store under its first path segment.
+  const [first] = url.pathname.split("/").filter(Boolean);
+  return first && SLUG.test(first) ? first : null;
+}
+
+/**
+ * Descriptions are stored as the rich text the owner typed, tags and all.
+ *
+ * A dish description reaching the storefront as "<p><strong>Fuel your
+ * power</strong></p>" is worse than one with no formatting at all.
+ */
+function stripHtml(value: unknown): string {
+  return text(value)
+    .replace(/<br\s*\/?>|<\/p>|<\/div>|<\/li>/gi, " ")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Modifiers, out of the form builder menugic attaches to a dish.
+ *
+ * `form_json` is a Form.io definition — the same thing that renders the
+ * "customise your order" step — so the questions a customer answers are its
+ * select, radio and checkbox components, and their answers are the values
+ * underneath. A form holding nothing but its Submit button, which is what a
+ * store that never used the feature has, produces no groups at all.
+ *
+ * Form.io has no price on a value, so every choice imports free. That is the
+ * honest reading: the surcharge is not in the payload to be found.
+ */
+function menugicOptionGroups(formJson: unknown): AdaptedGroup[] {
+  let components: unknown[];
+  try {
+    components = asArray(asRecord(JSON.parse(text(formJson) || "{}")).components);
+  } catch {
+    return [];
+  }
+
+  const groups: AdaptedGroup[] = [];
+
+  for (const rawComponent of components) {
+    const component = asRecord(rawComponent);
+    const type = text(component.type).toLowerCase();
+    if (!["select", "radio", "selectboxes", "checkbox"].includes(type)) continue;
+
+    const name = text(component.label) || text(component.key);
+    if (!name) continue;
+
+    // A `select` keeps its answers one level deeper than the others do.
+    const values = asArray(component.values).length
+      ? asArray(component.values)
+      : asArray(asRecord(component.data).values);
+
+    const seen = new Set<string>();
+    const options = values.flatMap((rawValue) => {
+      const value = asRecord(rawValue);
+      const optionName = text(value.label) || text(value.value);
+      if (!optionName) return [];
+
+      const key = optionName.toLowerCase();
+      if (seen.has(key)) return [];
+      seen.add(key);
+
+      return [{ name: optionName, price: surcharge(value) }];
+    });
+
+    if (options.length === 0) continue;
+
+    groups.push({
+      name,
+      // "selectboxes" is Form.io's multi-select; the rest are one answer each.
+      type: type === "selectboxes" ? "checkbox" : "radio",
+      isRequired: asRecord(component.validate).required === true,
+      options,
+    });
+  }
+
+  return groups;
+}
+
+async function adaptMenugic(slug: string): Promise<AdaptedMenu> {
+  const store = asRecord(await getJson(`${MENUGIC_API}/restaurants/${slug}`));
+  const restaurantId = text(store.id) || String(store.id ?? "");
+
+  if (!restaurantId || restaurantId === "undefined") {
+    throw new MenuSourceError("That menugic store doesn't exist any more.", 404);
+  }
+
+  const products = asArray(
+    await getJson(`${MENUGIC_API}/products?restaurantId=${encodeURIComponent(restaurantId)}`),
+  );
+
+  if (products.length === 0) {
+    throw new MenuSourceError("That store's menu has no dishes in it yet.", 422);
+  }
+
+  // A store publishes in one language and keeps the other as a translation;
+  // `default_language` is which. Names are per-language columns, and a dish
+  // translated on one side only still has to import with a name.
+  const arabic = text(store.default_language).toLowerCase().startsWith("ar");
+  const localized = (record: Record<string, unknown>, key: string): string => {
+    const arabicText = text(record[`ar_${key}`]);
+    const latinText = text(record[`en_${key}`]);
+    return arabic ? arabicText || latinText : latinText || arabicText;
+  };
+
+  const images: string[] = [];
+  const imageRefs = new Map<string, number>();
+
+  const registerImage = (key: string): number | undefined => {
+    const clean = text(key);
+    if (!clean) return undefined;
+
+    let href: string;
+    try {
+      href = new URL(clean, MENUGIC_IMAGES).href;
+    } catch {
+      return undefined;
+    }
+    const existing = imageRefs.get(href);
+    if (existing) return existing;
+
+    images.push(href);
+    imageRefs.set(href, images.length);
+    return images.length;
+  };
+
+  type Item = AdaptedMenu["data"]["categories"][number]["items"][number];
+  const grouped = new Map<string, Item[]>();
+  // Categories come back on the store record too, but a product carries its
+  // own copy — and that is the one that cannot disagree with where the dish
+  // actually sits.
+  const order: string[] = [];
+
+  for (const rawProduct of products) {
+    const product = asRecord(rawProduct);
+    const name = localized(product, "name");
+    // `hide` is the store's own switch for a dish it has taken off the menu.
+    if (!name || product.hide === true) continue;
+
+    /*
+     * Which of a dish's photos is its cover.
+     *
+     * `new_cover_id` is an image's id and is what the storefront uses now;
+     * `cover_id` is the tail of the file name it used to be. Both are checked
+     * before falling back to the first photo, because a dish importing with
+     * the wrong one of its three pictures is a thing the operator then has to
+     * notice.
+     */
+    const photos = asArray(product.images).map((image) => asRecord(image));
+    const coverId = text(product.cover_id);
+    const cover =
+      photos.find((photo) => photo.id === product.new_cover_id) ??
+      (coverId ? photos.find((photo) => text(photo.url).endsWith(coverId)) : undefined) ??
+      photos[0];
+
+    // Only `en_price` exists — the price is not translated, just stored once.
+    const price = Number(text(product.en_price) || product.en_price);
+
+    const groups = menugicOptionGroups(product.form_json);
+
+    const item: Item = {
+      name,
+      description: stripHtml(localized(product, "description")) || undefined,
+      // `discount` is on the record but nothing says whether it is a
+      // percentage or an amount, and guessing wrong publishes a wrong price.
+      // The listed price imports; a sale is set in the admin afterwards.
+      price: Number.isFinite(price) && price > 0 ? price : 0,
+      imageRef: registerImage(text(cover?.url)),
+      isAvailable: product.out_of_stock !== true,
+      ...(groups.length ? { optionGroups: groups } : {}),
+    };
+
+    const category = asRecord(product.category);
+    const categoryName = localized(category, "category") || text(category.en_category);
+    const key = categoryName || String(product.category_id ?? "");
+
+    const bucket = grouped.get(key);
+    if (bucket) bucket.push(item);
+    else {
+      grouped.set(key, [item]);
+      order.push(key);
+    }
+  }
+
+  const categories = order
+    .map((key) => ({ name: key, items: grouped.get(key) ?? [] }))
+    .filter((category) => category.items.length > 0);
+
+  if (categories.length === 0) {
+    throw new MenuSourceError("That store's menu has no dishes in it yet.", 422);
+  }
+
+  return {
+    label: text(store.name) || slug,
     data: { categories },
     images,
   };
@@ -1139,6 +1550,9 @@ export async function tryStorefrontMenu(rawUrl: string): Promise<StorefrontResul
 
   const moviyum = moviyumOrigin(url);
   if (moviyum) return { kind: "menu", ...(await adaptMoviyum(moviyum)) };
+
+  const menugic = menugicSlug(url);
+  if (menugic) return { kind: "menu", ...(await adaptMenugic(menugic)) };
 
   return null;
 }

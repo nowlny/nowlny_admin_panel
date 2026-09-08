@@ -898,6 +898,9 @@ export default function RestaurantMenuSection({
               description: item.description,
               price: item.price,
               isAvailable: true,
+              // An extras list printed under a section, read as the add-ons it
+              // is rather than as dishes nobody can order.
+              ...(item.optionGroups?.length ? { optionGroups: item.optionGroups } : {}),
             })),
           })),
         };
