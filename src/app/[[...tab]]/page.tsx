@@ -11,6 +11,7 @@ import OrdersSection from "../components/OrdersSection";
 import SystemUsersSection from "../components/SystemUsersSection";
 import RestaurantCategoriesSection from "../components/RestaurantCategoriesSection";
 import MenuTagsPanel from "../components/MenuTagsPanel";
+import MenuAgentSection from "../components/MenuAgentSection";
 import CurrenciesSection from "../components/CurrenciesSection";
 import NotificationsSection from "../components/NotificationsSection";
 import SmsGatewaySection from "../components/SmsGatewaySection";
@@ -409,6 +410,8 @@ export default function Home() {
         return <RestaurantCategoriesSection />;
       case "menu_tags":
         return <MenuTagsPanel />;
+      case "menu_agent":
+        return <MenuAgentSection />;
       case "delivery_companies":
         return <DeliveryCompaniesSection searchQuery={searchQuery} />;
       case "customers":

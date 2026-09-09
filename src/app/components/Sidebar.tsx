@@ -14,6 +14,7 @@ import {
   Smartphone,
   Truck,
   Tags,
+  Bot,
   MessageSquare,
 } from "lucide-react";
 import { SystemUser } from "../../services/users";
@@ -55,6 +56,7 @@ export const TAB_KEYS = [
   "restaurants",
   "restaurant_categories",
   "menu_tags",
+  "menu_agent",
   "delivery_companies",
   "reels",
   "customers",
@@ -140,6 +142,7 @@ export default function Sidebar({
           icon: Store,
         },
         { id: "menu_tags", label: t("nav.menu_tags"), icon: Tags },
+        { id: "menu_agent", label: t("nav.menu_agent"), icon: Bot },
         {
           id: "delivery_companies",
           label: t("nav.delivery_companies"),

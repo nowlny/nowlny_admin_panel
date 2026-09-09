@@ -133,6 +133,25 @@ export const menuService = {
       body: JSON.stringify(data),
     }),
 
+  /**
+   * Every section with its items, in one request.
+   *
+   * The per-section endpoint is one call per section, and a menu with thirteen
+   * of them is fourteen round trips before anything can be shown — fine for a
+   * page that renders a section at a time, far too slow for the assistant,
+   * which has to hold the whole menu in its head before it can plan anything.
+   *
+   * This is the public storefront read, so it returns what a customer would
+   * see: hidden sections and items are not in it.
+   */
+  getFullMenu: async (restaurantId: string) => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/restaurants/${restaurantId}/full`,
+    );
+    const menu = (payload as { menu?: unknown } | null)?.menu;
+    return toList<MenuSection>(Array.isArray(menu) ? menu : payload);
+  },
+
   getItemsBySection: async (sectionId: string) => {
     const payload = await apiClient<unknown>(
       `/api/v1/menu/items/section/${sectionId}`,
