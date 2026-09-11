@@ -20,6 +20,7 @@ import {
   FolderPlus,
   ToggleLeft,
   ToggleRight,
+  GripVertical,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { RestaurantResponse } from "../../services/restaurants";
@@ -60,6 +61,67 @@ interface ParsedMenuData {
       isAvailable: boolean;
     }[];
   }[];
+}
+
+/** Immutably move the entry at `from` to `to`. */
+function moveInArray<T>(list: T[], from: number, to: number): T[] {
+  const next = [...list];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/**
+ * Grab affordance for a sortable row.
+ *
+ * The handle — not the whole card — carries `draggable`, because a draggable
+ * ancestor stops the inline price input inside each dish card from being
+ * text-selectable. Arrow keys move the row too, since native HTML5 drag and
+ * drop is entirely unreachable from the keyboard.
+ */
+function DragHandle({
+  label,
+  disabled,
+  disabledHint,
+  onDragStart,
+  onDragEnd,
+  onKeyDown,
+  className = "",
+}: {
+  /** Already-translated accessible name, e.g. "Reorder the Grills category". */
+  label: string;
+  disabled?: boolean;
+  disabledHint?: string;
+  onDragStart: (e: React.DragEvent<HTMLSpanElement>) => void;
+  onDragEnd: () => void;
+  onKeyDown: (e: React.KeyboardEvent<HTMLSpanElement>) => void;
+  className?: string;
+}) {
+  const { t } = useI18n();
+  return (
+    <span
+      role="button"
+      aria-disabled={disabled || undefined}
+      tabIndex={disabled ? -1 : 0}
+      draggable={!disabled}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onKeyDown={disabled ? undefined : onKeyDown}
+      aria-label={
+        disabled
+          ? t("sort.handle_aria_disabled", { label })
+          : t("sort.handle_aria", { label })
+      }
+      title={disabled ? disabledHint : t("sort.handle_title")}
+      className={`shrink-0 inline-flex items-center justify-center rounded-lg text-zinc-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 ${
+        disabled
+          ? "opacity-25 cursor-not-allowed"
+          : "cursor-grab active:cursor-grabbing hover:text-orange-500 hover:bg-zinc-150 dark:hover:bg-zinc-800"
+      } ${className}`}
+    >
+      <GripVertical className="w-3.5 h-3.5" aria-hidden />
+    </span>
+  );
 }
 
 export default function RestaurantMenuSection({
@@ -707,6 +769,199 @@ export default function RestaurantMenuSection({
     }
   };
 
+  // ─── Drag-and-drop sorting ───────────────────────────────────────────────
+  //
+  // The rendered list is what gets sent as the new order, so sorting is only
+  // offered while that list is complete: a search query or a single-category
+  // tab hides rows, and the API rejects a partial `orderedIds`.
+  const isFiltering = searchQuery.trim() !== "";
+  const canSortSections =
+    !isFiltering && selectedCategoryTab === "all" && sections.length > 1;
+  // After a partial load some sections hold `[]` rather than their real dishes,
+  // and reordering off that cache would renumber a list we never saw.
+  const canSortItems = !isFiltering && !itemsError;
+  const searchBlockedHint = itemsError
+    ? t("sort.blocked_items_error")
+    : t("sort.blocked_search");
+  const sectionSortHint = isFiltering
+    ? searchBlockedHint
+    : selectedCategoryTab !== "all"
+      ? t("sort.blocked_tab")
+      : t("sort.blocked_one_section");
+
+  type DragRef =
+    | { kind: "section"; id: string }
+    | { kind: "item"; id: string; sectionId: string };
+
+  const [dragging, setDragging] = useState<DragRef | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [isSavingOrder, setIsSavingOrder] = useState(false);
+
+  const clearDrag = () => {
+    setDragging(null);
+    setDropTargetId(null);
+  };
+
+  /** Uses the whole row as the drag ghost rather than the tiny grip icon. */
+  const startDrag = (e: React.DragEvent<HTMLSpanElement>, ref: DragRef) => {
+    e.dataTransfer.effectAllowed = "move";
+    // Firefox aborts a drag that carries no payload.
+    e.dataTransfer.setData("text/plain", ref.id);
+    const card = (e.currentTarget as HTMLElement).closest("[data-drag-card]");
+    if (card) e.dataTransfer.setDragImage(card, 16, 16);
+    setDragging(ref);
+  };
+
+  const persistSectionOrder = async (next: MenuSection[]) => {
+    const previous = sections;
+    setSections(next);
+    setIsSavingOrder(true);
+    try {
+      await menuService.reorderSections(next.map((sec) => sec.id));
+    } catch (err: any) {
+      setSections(previous); // the server still has the old order
+      toast.error(err?.message || t("sort.section_failed"));
+    } finally {
+      setIsSavingOrder(false);
+    }
+  };
+
+  const moveSection = (sectionId: string, toIndex: number) => {
+    const from = sections.findIndex((sec) => sec.id === sectionId);
+    if (from < 0 || toIndex < 0 || toIndex >= sections.length || from === toIndex) return;
+    persistSectionOrder(moveInArray(sections, from, toIndex));
+  };
+
+  const persistItemOrder = async (sectionId: string, next: ApiMenuItem[]) => {
+    const previous = itemsBySection;
+    setItemsBySection({ ...previous, [sectionId]: next });
+    setIsSavingOrder(true);
+    try {
+      await menuService.reorderItems(sectionId, next.map((item) => item.id));
+    } catch (err: any) {
+      setItemsBySection(previous);
+      toast.error(err?.message || t("sort.item_failed"));
+    } finally {
+      setIsSavingOrder(false);
+    }
+  };
+
+  const moveItem = (sectionId: string, itemId: string, toIndex: number) => {
+    const list = itemsBySection[sectionId] || [];
+    const from = list.findIndex((item) => item.id === itemId);
+    if (from < 0 || toIndex < 0 || toIndex >= list.length || from === toIndex) return;
+    persistItemOrder(sectionId, moveInArray(list, from, toIndex));
+  };
+
+  /** Dropping a dish on another section re-parents it, then renumbers both. */
+  const moveItemToSection = async (
+    itemId: string,
+    fromSectionId: string,
+    toSectionId: string,
+    toIndex: number,
+  ) => {
+    if (fromSectionId === toSectionId) return;
+    const previous = itemsBySection;
+    const source = previous[fromSectionId] || [];
+    const item = source.find((i) => i.id === itemId);
+    if (!item) return;
+
+    const nextSource = source.filter((i) => i.id !== itemId);
+    const nextDest = [...(previous[toSectionId] || [])];
+    nextDest.splice(Math.max(0, Math.min(toIndex, nextDest.length)), 0, {
+      ...item,
+      sectionId: toSectionId,
+    });
+
+    setItemsBySection({
+      ...previous,
+      [fromSectionId]: nextSource,
+      [toSectionId]: nextDest,
+    });
+    setIsSavingOrder(true);
+    try {
+      await menuService.updateItem(itemId, { sectionId: toSectionId });
+      if (nextDest.length > 0) {
+        await menuService.reorderItems(toSectionId, nextDest.map((i) => i.id));
+      }
+      if (nextSource.length > 0) {
+        await menuService.reorderItems(fromSectionId, nextSource.map((i) => i.id));
+      }
+      const target = sections.find((sec) => sec.id === toSectionId);
+      toast.success(
+        t("sort.moved", {
+          name: item.name,
+          section: target ? target.name : t("sort.the_new_section"),
+        }),
+      );
+    } catch (err: any) {
+      toast.error(err?.message || t("sort.move_failed"));
+      // The re-parent may already have landed before a reorder failed, so the
+      // optimistic state can't simply be rolled back — refetch the truth.
+      await loadMenu();
+    } finally {
+      setIsSavingOrder(false);
+    }
+  };
+
+  /** True when the row currently under the pointer can accept what's dragged. */
+  const sectionAcceptsDrag = (sectionId: string) => {
+    if (!dragging) return false;
+    if (dragging.kind === "section") return canSortSections && dragging.id !== sectionId;
+    return canSortItems && dragging.sectionId !== sectionId;
+  };
+
+  const itemAcceptsDrag = (itemId: string) =>
+    !!dragging && dragging.kind === "item" && canSortItems && dragging.id !== itemId;
+
+  const handleDropOnSection = (sectionId: string) => {
+    const source = dragging;
+    clearDrag();
+    if (!source) return;
+    if (source.kind === "section") {
+      if (!canSortSections || source.id === sectionId) return;
+      moveSection(source.id, sections.findIndex((sec) => sec.id === sectionId));
+      return;
+    }
+    // A dish dropped on the section's header or empty space lands at the end.
+    if (!canSortItems || source.sectionId === sectionId) return;
+    moveItemToSection(
+      source.id,
+      source.sectionId,
+      sectionId,
+      (itemsBySection[sectionId] || []).length,
+    );
+  };
+
+  const handleDropOnItem = (targetId: string, targetSectionId: string) => {
+    const source = dragging;
+    clearDrag();
+    if (!source || source.kind !== "item" || !canSortItems || source.id === targetId) return;
+    const toIndex = (itemsBySection[targetSectionId] || []).findIndex(
+      (i) => i.id === targetId,
+    );
+    if (toIndex < 0) return;
+    if (source.sectionId === targetSectionId) {
+      moveItem(targetSectionId, source.id, toIndex);
+    } else {
+      moveItemToSection(source.id, source.sectionId, targetSectionId, toIndex);
+    }
+  };
+
+  const handleSectionKeys = (e: React.KeyboardEvent, sectionId: string) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    const from = sections.findIndex((sec) => sec.id === sectionId);
+    moveSection(sectionId, from + (e.key === "ArrowUp" ? -1 : 1));
+  };
+
+  const handleItemKeys = (e: React.KeyboardEvent, sectionId: string, itemId: string) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    const from = (itemsBySection[sectionId] || []).findIndex((i) => i.id === itemId);
+    moveItem(sectionId, itemId, from + (e.key === "ArrowUp" ? -1 : 1));
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-200">
       {/* Banner / Store Header Info Card */}
@@ -1130,10 +1385,26 @@ t("rmenu.no_categories")}{" "}
             <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
               Store Menu Catalog
               {isLoadingMenu && <Loader2 className="w-4 h-4 animate-spin text-orange-500" />}
+              {isSavingOrder && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-orange-500 normal-case">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  {t("sort.saving")}
+                </span>
+              )}
             </h3>
             <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
               Search, edit pricing, or toggle availability of dishes listed in
               your store menu.
+            </p>
+            <p className="text-[10px] text-zinc-400 mt-0.5 flex items-center gap-1">
+              <GripVertical className="w-3 h-3 shrink-0" aria-hidden />
+              {itemsError
+                ? t("sort.hint_items_error")
+                : isFiltering
+                  ? t("sort.hint_search")
+                  : selectedCategoryTab !== "all"
+                    ? t("sort.hint_tab")
+                    : t("sort.hint_all")}
             </p>
           </div>
 
@@ -1238,12 +1509,47 @@ t("rmenu.no_categories")}{" "}
               .map(sec => {
                 const secItems = filteredItems.filter(item => item.sectionId === sec.id);
                 
+                const isSectionDragged = dragging?.kind === "section" && dragging.id === sec.id;
+                const isSectionDropTarget = dropTargetId === sec.id && sectionAcceptsDrag(sec.id);
+
                 return (
-                  <div key={sec.id} className="space-y-4">
+                  <div
+                    key={sec.id}
+                    data-drag-card
+                    onDragOver={(e) => {
+                      if (!sectionAcceptsDrag(sec.id)) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      setDropTargetId(sec.id);
+                    }}
+                    onDragLeave={() =>
+                      setDropTargetId((prev) => (prev === sec.id ? null : prev))
+                    }
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleDropOnSection(sec.id);
+                    }}
+                    className={`space-y-4 rounded-2xl transition-all ${
+                      isSectionDropTarget
+                        ? "ring-2 ring-orange-500/60 ring-offset-4 ring-offset-white dark:ring-offset-zinc-900 bg-orange-500/5"
+                        : ""
+                    } ${isSectionDragged ? "opacity-40" : ""}`}
+                  >
                     {/* Section Header */}
                     <div className="flex items-center justify-between pb-2 border-b border-zinc-200 dark:border-zinc-800">
-                      <h4 className="font-black text-sm text-zinc-900 dark:text-white uppercase tracking-wider">{sec.name}</h4>
-                      <div className="flex gap-3">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <DragHandle
+                          label={t("sort.reorder_category", { name: sec.name })}
+                          disabled={!canSortSections}
+                          disabledHint={sectionSortHint}
+                          className="p-1.5 -ml-1.5"
+                          onDragStart={(e) => startDrag(e, { kind: "section", id: sec.id })}
+                          onDragEnd={clearDrag}
+                          onKeyDown={(e) => handleSectionKeys(e, sec.id)}
+                        />
+                        <h4 className="font-black text-sm text-zinc-900 dark:text-white uppercase tracking-wider truncate">{sec.name}</h4>
+                      </div>
+                      <div className="flex gap-3 shrink-0">
                         <button
                           type="button"
                           onClick={() => {
@@ -1270,16 +1576,56 @@ t("rmenu.no_categories")}{" "}
 
                     {/* Items Grid for this Section */}
                     {secItems.length === 0 ? (
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400 italic">{t("rmenu.no_items_section")}</p>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400 italic">
+                        {t("rmenu.no_items_section")}
+                        {canSortItems && ` ${t("sort.drop_here")}`}
+                      </p>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {secItems.map((item) => (
+                        {secItems.map((item) => {
+                          const isItemDragged = dragging?.kind === "item" && dragging.id === item.id;
+                          const isItemDropTarget = dropTargetId === item.id && itemAcceptsDrag(item.id);
+
+                          return (
                           <div
                             key={item.id}
-                            className={`bg-zinc-50/50 dark:bg-zinc-950/20 border border-zinc-150 dark:border-zinc-800/80 p-4 rounded-2xl flex gap-4 hover:border-orange-500/20 hover:shadow-sm transition-all duration-200 group ${
-                              !item.isAvailable ? "opacity-60" : ""
-                            }`}
+                            data-drag-card
+                            onDragOver={(e) => {
+                              if (!itemAcceptsDrag(item.id)) return;
+                              // Without this the surrounding section also claims
+                              // the drop and the dish lands at the end instead.
+                              e.preventDefault();
+                              e.stopPropagation();
+                              e.dataTransfer.dropEffect = "move";
+                              setDropTargetId(item.id);
+                            }}
+                            onDragLeave={() =>
+                              setDropTargetId((prev) => (prev === item.id ? null : prev))
+                            }
+                            onDrop={(e) => {
+                              if (!itemAcceptsDrag(item.id)) return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleDropOnItem(item.id, item.sectionId);
+                            }}
+                            className={`bg-zinc-50/50 dark:bg-zinc-950/20 border p-4 rounded-2xl flex gap-3 hover:shadow-sm transition-all duration-200 group ${
+                              isItemDropTarget
+                                ? "border-orange-500 ring-2 ring-orange-500/40"
+                                : "border-zinc-150 dark:border-zinc-800/80 hover:border-orange-500/20"
+                            } ${!item.isAvailable ? "opacity-60" : ""} ${isItemDragged ? "opacity-40" : ""}`}
                           >
+                            <DragHandle
+                              label={t("sort.reorder_dish", { name: item.name })}
+                              disabled={!canSortItems}
+                              disabledHint={searchBlockedHint}
+                              className="self-stretch px-0.5 -ml-1.5"
+                              onDragStart={(e) =>
+                                startDrag(e, { kind: "item", id: item.id, sectionId: item.sectionId })
+                              }
+                              onDragEnd={clearDrag}
+                              onKeyDown={(e) => handleItemKeys(e, item.sectionId, item.id)}
+                            />
+
                             {/* Item Image placeholder or loaded */}
                             <div className="w-16 h-16 rounded-xl bg-zinc-200 dark:bg-zinc-800 overflow-hidden shrink-0 border border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-2xl">
                               {item.image ? (
@@ -1390,7 +1736,8 @@ t("rmenu.no_categories")}{" "}
                               </div>
                             </div>
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1417,6 +1764,7 @@ t("rmenu.no_categories")}{" "}
         onClose={() => setIsItemModalOpen(false)}
         item={editingItem}
         sections={sections}
+        restaurantId={restaurant.id}
         onSuccess={() => {
           setIsItemModalOpen(false);
           loadMenu();

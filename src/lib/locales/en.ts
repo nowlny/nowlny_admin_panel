@@ -1250,6 +1250,50 @@ export const en = {
   "error.title": "Something went wrong",
   "error.retry": "Try again",
   "page.dismiss_notification": "Dismiss notification",
+
+  // ── Drag-and-drop sorting ──
+  "sort.handle_aria": "{label}. Drag to sort, or press the up and down arrow keys.",
+  "sort.handle_aria_disabled": "{label} (sorting unavailable)",
+  "sort.handle_title": "Drag to sort, or focus and press \u2191 / \u2193",
+  "sort.saving": "Saving order\u2026",
+  "sort.reorder_category": "Reorder the {name} category",
+  "sort.reorder_dish": "Reorder {name}",
+  "sort.blocked_search": "Clear the search box to sort.",
+  "sort.blocked_items_error": "Reload the menu before sorting.",
+  "sort.blocked_tab": "Switch to \u201cAll Items\u201d to sort sections.",
+  "sort.blocked_one_section": "Sorting needs at least two categories.",
+  "sort.hint_items_error": "Some dishes didn't load, so dish sorting is off. Sections can still be dragged.",
+  "sort.hint_search": "Clear the search box to sort sections and dishes.",
+  "sort.hint_tab": "Drag a dish by its grip to sort it. Switch to \u201cAll Items\u201d to sort sections.",
+  "sort.hint_all": "Drag by the grip to sort sections and dishes, or drop a dish on another section to move it.",
+  "sort.drop_here": "Drag a dish here to move it in.",
+  "sort.section_failed": "Couldn't save the new section order.",
+  "sort.item_failed": "Couldn't save the new dish order.",
+  "sort.moved": "\u201c{name}\u201d moved to {section}.",
+  "sort.move_failed": "Couldn't move that dish into the section.",
+  "sort.the_new_section": "the new section",
+
+  // ── Image picker ──
+  "image.label": "Photo",
+  "image.hint": "PNG, JPG, WebP or AVIF up to 5 MB.",
+  "image.use_url": "Use a URL instead",
+  "image.hide_url": "Hide URL field",
+  "image.url_label": "Image URL",
+  "image.drop_prompt": "Drag a photo here, paste it, or",
+  "image.browse": "browse your computer",
+  "image.uploading": "Uploading\u2026",
+  "image.upload_cta": "Upload photo",
+  "image.replace_cta": "Replace photo",
+  "image.remove": "Remove",
+  "image.preview_failed": "That URL didn't load as an image.",
+  "image.upload_failed": "The upload failed. Please try again.",
+  "image.bad_type": "Choose a JPEG, PNG, WebP, or AVIF image.",
+  "image.too_large": "That image is {size} MB. The limit is 5 MB.",
+
+  // ── Menu item photo ──
+  "mi.dish_photo": "Dish Photo",
+  "mi.uploading_photo": "Uploading photo\u2026",
+  "mi.wait_for_upload": "Wait for the photo to finish uploading.",
 };
 
 export type MessageKey = keyof typeof en;

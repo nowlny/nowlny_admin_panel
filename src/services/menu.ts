@@ -211,4 +211,43 @@ export const menuService = {
 
   deleteTag: (id: string) =>
     apiClient<void>(`/api/v1/menu/tags/${id}`, { method: "DELETE" }),
+
+  // ─── Media ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Upload a dish photo from the operator's machine and get back a hosted URL
+   * to store on the item. JPEG/PNG/WebP/AVIF up to 5 MB.
+   */
+  uploadImage: (file: File, restaurantId?: string) => {
+    const body = new FormData();
+    body.append("file", file);
+    if (restaurantId) body.append("restaurantId", restaurantId);
+    return apiClient<{ url: string }>("/api/v1/menu/media", {
+      method: "POST",
+      body,
+    });
+  },
+};
+
+export const MENU_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+export const MENU_IMAGE_MIME_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/avif",
+];
+export const MENU_IMAGE_ACCEPT = MENU_IMAGE_MIME_TYPES.join(",");
+
+/** Why a picked file was rejected; the caller turns this into a message. */
+export type MenuImageProblem = "type" | "size";
+
+/**
+ * Mirrors the API's own checks so a bad pick fails instantly, before upload.
+ * Returns the reason rather than a sentence — the wording is localised at the
+ * call site, where the translator is available.
+ */
+export const checkMenuImage = (file: File): MenuImageProblem | null => {
+  if (!MENU_IMAGE_MIME_TYPES.includes(file.type)) return "type";
+  if (file.size > MENU_IMAGE_MAX_BYTES) return "size";
+  return null;
 };
