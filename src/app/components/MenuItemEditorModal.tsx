@@ -3,9 +3,18 @@
 import React, { useState, useEffect, useId } from "react";
 import { X, Loader2, Store, Plus, Trash2, Edit2, Check } from "lucide-react";
 import toast from "react-hot-toast";
-import { menuService, MenuItem as ApiMenuItem, MenuSection, MenuOptionGroup, MenuOption } from "../../services/menu";
+import {
+  menuService,
+  MenuItem as ApiMenuItem,
+  MenuSection,
+  MenuOptionGroup,
+  MenuOption,
+  MENU_IMAGE_ACCEPT,
+  checkMenuImage,
+} from "../../services/menu";
 import { formatMoney } from "../../lib/format";
 import Modal from "./ui/Modal";
+import ImagePicker from "./ui/ImagePicker";
 import { useConfirm } from "./ui/ConfirmDialog";
 import { ErrorState } from "./ui/States";
 
@@ -15,6 +24,8 @@ interface MenuItemEditorModalProps {
   onClose: () => void;
   item: ApiMenuItem | null;
   sections: MenuSection[];
+  /** Folders the uploaded dish photo under this store in the media library. */
+  restaurantId?: string;
   onSuccess: () => void;
 }
 
@@ -23,6 +34,7 @@ export default function MenuItemEditorModal({
   onClose,
   item,
   sections,
+  restaurantId,
   onSuccess,
 }: MenuItemEditorModalProps) {
   const { t } = useI18n();
@@ -43,6 +55,8 @@ export default function MenuItemEditorModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Guards Escape / backdrop-click from discarding typing.
   const [isDirty, setIsDirty] = useState(false);
+  // Saving mid-upload would store the old image and silently drop the new one.
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
   // Option Groups State (Only available if editing an existing item)
   const [optionGroups, setOptionGroups] = useState<MenuOptionGroup[]>([]);
@@ -98,6 +112,7 @@ export default function MenuItemEditorModal({
       setOptionsError(null);
     }
     setIsDirty(false);
+    setIsUploadingImage(false);
     resetGroupEditor();
     resetOptionEditor();
   }, [item, isOpen, sections]);
@@ -149,6 +164,10 @@ export default function MenuItemEditorModal({
     e.preventDefault();
     if (!name.trim() || !price || !sectionId) {
       toast.error(t("mi.required_fields"));
+      return;
+    }
+    if (isUploadingImage) {
+      toast.error(t("mi.wait_for_upload"));
       return;
     }
 
@@ -303,7 +322,7 @@ export default function MenuItemEditorModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      dismissable={!isDirty && !isSubmitting}
+      dismissable={!isDirty && !isSubmitting && !isUploadingImage}
       maxWidth="max-w-2xl"
       title={item ? t("mi.edit_title") : t("mi.add_title")}
       description={item ? item.name : t("mi.add_desc")}
@@ -325,11 +344,11 @@ export default function MenuItemEditorModal({
             <button
               form="basic-form"
               type="submit"
-              disabled={isSubmitting}
-              className="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold px-4 py-2 rounded-xl shadow-lg shadow-orange-500/10 transition-all flex items-center gap-2 text-xs"
+              disabled={isSubmitting || isUploadingImage}
+              className="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold px-4 py-2 rounded-xl shadow-lg shadow-orange-500/10 transition-all flex items-center gap-2 text-xs"
             >
               {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              {t("mi.save")}
+              {isUploadingImage ? t("mi.uploading_photo") : t("mi.save")}
             </button>
           </>
         ) : undefined
@@ -384,10 +403,27 @@ export default function MenuItemEditorModal({
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <label htmlFor={`${fieldId}-image`} className={labelClass}>{t("mi.image_url")}</label>
-            <input id={`${fieldId}-image`} type="text" placeholder="https://..." value={image} onChange={(e) => setImage(e.target.value)} className={inputClass} />
-          </div>
+          <ImagePicker
+            label={t("mi.dish_photo")}
+            value={image}
+            onChange={(url) => {
+              setImage(url);
+              setIsDirty(true);
+            }}
+            upload={async (file) => (await menuService.uploadImage(file, restaurantId)).url}
+            validate={(file) => {
+              const problem = checkMenuImage(file);
+              if (!problem) return null;
+              return problem === "type"
+                ? t("image.bad_type")
+                : t("image.too_large", {
+                    size: (file.size / 1024 / 1024).toFixed(1),
+                  });
+            }}
+            accept={MENU_IMAGE_ACCEPT}
+            disabled={isSubmitting}
+            onUploadingChange={setIsUploadingImage}
+          />
 
           <div className="space-y-1.5">
             <label htmlFor={`${fieldId}-section`} className={labelClass}>{t("mi.category_section")}</label>
