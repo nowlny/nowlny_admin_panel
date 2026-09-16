@@ -8,7 +8,7 @@ export interface AppNotification {
   timestamp: string;
   userId?: string;
   type?: string;
-  data?: any;
+  data?: Record<string, string> | null;
 }
 
 export interface PaginatedNotifications {
@@ -17,6 +17,35 @@ export interface PaginatedNotifications {
   page: number;
   limit: number;
   unreadCount: number;
+}
+
+/** The entity as `/notifications/me` actually returns it. */
+interface ApiNotification {
+  id: string;
+  userId: string;
+  title: string;
+  body: string;
+  data: Record<string, string> | null;
+  isRead: boolean;
+  createdAt: string;
+}
+
+/**
+ * The API names these `isRead` / `createdAt`; the UI was reading `read` /
+ * `timestamp`, which never existed, so every notification rendered as unread
+ * with a blank time and "mark all read" appeared to do nothing on reload.
+ */
+function toAppNotification(n: ApiNotification): AppNotification {
+  return {
+    id: n.id,
+    userId: n.userId,
+    title: n.title,
+    body: n.body,
+    read: n.isRead,
+    timestamp: n.createdAt,
+    type: n.data?.type,
+    data: n.data,
+  };
 }
 
 export const notificationsService = {
@@ -34,7 +63,10 @@ export const notificationsService = {
       ...(unreadOnly ? { unreadOnly: "true" } : {}),
     });
     
-    return apiClient<PaginatedNotifications>(`/api/v1/notifications/me?${queryParams}`);
+    const res = await apiClient<
+      Omit<PaginatedNotifications, "data"> & { data: ApiNotification[] }
+    >(`/api/v1/notifications/me?${queryParams}`);
+    return { ...res, data: (res.data ?? []).map(toAppNotification) };
   },
 
   /**
