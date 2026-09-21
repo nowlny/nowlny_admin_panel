@@ -105,8 +105,17 @@ const INNER_TABS: [InnerTab, MessageKey][] = [
  * suspended" chips filtered client side over a single page of a list endpoint
  * that only ever returns *active* merchants, so "suspended" was always empty
  * and "all" was never all.
+ *
+ * "suspended" is back, but sourced from its own sweep
+ * (`getSuspendedRestaurants`) rather than from that endpoint.
  */
-type MerchantFilter = "all" | "featured" | "hasOffer" | "topRated" | "freeDelivery";
+type MerchantFilter =
+  | "all"
+  | "featured"
+  | "hasOffer"
+  | "topRated"
+  | "freeDelivery"
+  | "suspended";
 
 const MERCHANT_FILTERS: { value: MerchantFilter; key: MessageKey }[] = [
   { value: "all", key: "common.all" },
@@ -114,6 +123,7 @@ const MERCHANT_FILTERS: { value: MerchantFilter; key: MessageKey }[] = [
   { value: "hasOffer", key: "rests.filter_offer" },
   { value: "topRated", key: "rests.filter_top" },
   { value: "freeDelivery", key: "rests.filter_free" },
+  { value: "suspended", key: "rests.filter_suspended" },
 ];
 
 const APP_STATUS_FILTERS = [
@@ -226,6 +236,24 @@ export default function RestaurantsSection({
   const fetchMerchants = useCallback(async () => {
     try {
       setIsLoading(true);
+
+      // The sweep returns every suspended merchant at once, so search and
+      // paging happen here rather than in the API.
+      if (merchantFilter === "suspended") {
+        const query = debouncedSearch.toLowerCase();
+        const all = await restaurantsService.getSuspendedRestaurants();
+        const matching = query
+          ? all.filter((r) => searchable(r.name).includes(query))
+          : all;
+        setRestaurants(
+          matching.slice((merchantPage - 1) * PAGE_SIZE, merchantPage * PAGE_SIZE),
+        );
+        setMerchantTotal(matching.length);
+        setMerchantTotalPages(Math.max(1, Math.ceil(matching.length / PAGE_SIZE)));
+        setError(null);
+        return;
+      }
+
       const params = {
         name: debouncedSearch || undefined,
         page: merchantPage,

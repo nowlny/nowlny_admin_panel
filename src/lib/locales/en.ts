@@ -768,6 +768,7 @@ export const en = {
   "rests.filter_offer": "Has offer",
   "rests.filter_top": "Top rated",
   "rests.filter_free": "Free delivery",
+  "rests.filter_suspended": "Suspended",
   "rests.view_list": "List",
   "rests.view_map": "Map",
   "rests.map_placed": "{count} on the map",

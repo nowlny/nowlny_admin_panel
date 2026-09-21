@@ -766,6 +766,7 @@ export const ar: Record<MessageKey, string> = {
   "rests.filter_offer": "لديه عرض",
   "rests.filter_top": "الأعلى تقييمًا",
   "rests.filter_free": "توصيل مجاني",
+  "rests.filter_suspended": "موقوف",
   "rests.view_list": "قائمة",
   "rests.view_map": "خريطة",
   "rests.map_placed": "{count} على الخريطة",
