@@ -106,8 +106,8 @@ const INNER_TABS: [InnerTab, MessageKey][] = [
  * that only ever returns *active* merchants, so "suspended" was always empty
  * and "all" was never all.
  *
- * "suspended" is back, but sourced from its own sweep
- * (`getSuspendedRestaurants`) rather than from that endpoint.
+ * "suspended" is back, sourced from the admin list
+ * (`GET /restaurants/admin?status=suspended`) rather than from that endpoint.
  */
 type MerchantFilter =
   | "all"

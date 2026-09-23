@@ -5,7 +5,6 @@ import {
   toList,
   toPaginated,
 } from "./apiClient";
-import { reelsService } from "./reels";
 
 /* ---------------------------------------------------------------------------
    Types mirror `GET /api/v1/restaurants` and friends as the API actually
@@ -303,12 +302,6 @@ export interface StoryPayload {
 const MAX_SWEEP_PAGES = 20;
 const SWEEP_PAGE_SIZE = 100;
 
-/** How many single-merchant lookups run at once in a status sweep. */
-const LOOKUP_BATCH_SIZE = 6;
-
-/** Off the public list, but one "make available again" away from it. */
-const REACTIVATABLE_STATUSES: RestaurantStatus[] = ["suspended", "inactive"];
-
 async function sweepPages<T>(
   fetchPage: (page: number) => Promise<Paginated<T>>,
 ): Promise<T[]> {
@@ -351,72 +344,38 @@ export const restaurantsService = {
     ),
 
   /**
-   * Suspended and inactive merchants — the ones `GET /restaurants` leaves out.
+   * `GET /api/v1/restaurants/admin` (admin) — merchants of any status.
    *
-   * That endpoint is "List active restaurants", it answers a `status` filter
-   * with `400 property status should not exist`, and the API has no admin
-   * list of merchants. So a merchant vanished from this app the moment it was
-   * suspended, and with it the only button that could make it available again.
-   *
-   * Two admin endpoints still name every merchant: an approved application
-   * carries the `restaurantId` it created, and `/reels/admin/restaurants`
-   * lists every restaurant. Each id they know that the active sweep does not
-   * return is looked up on its own for its real status; ids that 404 are
-   * deleted merchants and drop out.
+   * The public list is "List active restaurants" and answers a `status`
+   * filter with `400 property status should not exist`, so a suspended
+   * merchant vanished from this app the moment it was suspended, and with it
+   * the only button that could make it available again.
+   */
+  getAdminRestaurants: async (params?: {
+    status?: RestaurantStatus;
+    page?: number;
+    limit?: number;
+  }): Promise<Paginated<RestaurantResponse>> => {
+    const payload = await apiClient<unknown>(
+      `/api/v1/restaurants/admin${buildQuery({ ...params })}`,
+    );
+    return toPaginated<RestaurantResponse>(payload, params?.limit ?? 20);
+  },
+
+  /**
+   * Every suspended merchant in one list. Walked in full so the section can
+   * search by name without relying on a `name` filter this endpoint may not
+   * whitelist (the API rejects unknown query params).
    */
   getSuspendedRestaurants: async (): Promise<RestaurantResponse[]> => {
-    const [active, approved, withReels] = await Promise.allSettled([
-      restaurantsService.getAllRestaurants(),
-      sweepPages((page) =>
-        restaurantsService.getSubmissions({
-          status: "approved",
-          page,
-          limit: SWEEP_PAGE_SIZE,
-        }),
-      ),
-      sweepPages((page) =>
-        reelsService.getRestaurantsWithReels({ page, limit: SWEEP_PAGE_SIZE }),
-      ),
-    ]);
-
-    // Without the active set every live merchant would be looked up one by
-    // one; without either source there is nothing to look up, and an empty
-    // result would claim "no suspended merchants" when it means "don't know".
-    if (active.status === "rejected") throw active.reason;
-    if (approved.status === "rejected" && withReels.status === "rejected") {
-      throw approved.reason;
-    }
-
-    const liveIds = new Set(active.value.map((r) => r.id));
-    const candidates = new Set<string>();
-    if (approved.status === "fulfilled") {
-      for (const s of approved.value) {
-        if (s.restaurantId) candidates.add(s.restaurantId);
-      }
-    }
-    if (withReels.status === "fulfilled") {
-      for (const r of withReels.value) candidates.add(r.id);
-    }
-    const ids = [...candidates].filter((id) => !liveIds.has(id));
-
-    const found: RestaurantResponse[] = [];
-    for (let i = 0; i < ids.length; i += LOOKUP_BATCH_SIZE) {
-      const batch = await Promise.allSettled(
-        ids
-          .slice(i, i + LOOKUP_BATCH_SIZE)
-          .map((id) => restaurantsService.getRestaurantById(id)),
-      );
-      for (const result of batch) {
-        if (
-          result.status === "fulfilled" &&
-          result.value?.status &&
-          REACTIVATABLE_STATUSES.includes(result.value.status)
-        ) {
-          found.push(result.value);
-        }
-      }
-    }
-    return found.sort((a, b) => a.name.localeCompare(b.name));
+    const suspended = await sweepPages((page) =>
+      restaurantsService.getAdminRestaurants({
+        status: "suspended",
+        page,
+        limit: SWEEP_PAGE_SIZE,
+      }),
+    );
+    return suspended.sort((a, b) => a.name.localeCompare(b.name));
   },
 
   /** `GET /api/v1/restaurants/featured` */
