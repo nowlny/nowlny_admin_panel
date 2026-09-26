@@ -70,9 +70,23 @@ export default function Modal({
   const titleId = useId();
   const descriptionId = useId();
 
+  /*
+   * Read through a ref, not listed as an effect dependency. Callers pass
+   * `onClose={() => setOpen(false)}` — a new function every render — so with
+   * it in the deps the effect below re-ran on every keystroke in the form: its
+   * cleanup handed focus back to the button that opened the modal and its
+   * setup re-focused the first field, yanking the caret out of whatever input
+   * was being typed in.
+   */
+  const closeRef = useRef({ onClose, dismissable });
+  useEffect(() => {
+    closeRef.current = { onClose, dismissable };
+  });
+
   const requestClose = useCallback(() => {
-    if (dismissable) onClose();
-  }, [dismissable, onClose]);
+    const { onClose: close, dismissable: canDismiss } = closeRef.current;
+    if (canDismiss) close();
+  }, []);
 
   // Lock body scroll, trap focus, and restore focus on close.
   useEffect(() => {
@@ -130,7 +144,7 @@ export default function Modal({
       document.body.style.overflow = previousOverflow;
       previouslyFocused.current?.focus?.();
     };
-  }, [isOpen, requestClose, instanceId]);
+  }, [isOpen, requestClose, instanceId]); // requestClose is stable
 
   if (!isOpen) return null;
   if (typeof document === "undefined") return null;

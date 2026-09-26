@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   Unsigned Cloudinary image uploads.
+   Unsigned Cloudinary image and video uploads.
 
    The API stores image *links*: `logo` and `backgroundImageUrl` on a restaurant
    are plain URLs, and the one upload endpoint the backend exposes —
@@ -53,7 +53,7 @@ export interface UploadImageOptions {
   signal?: AbortSignal;
 }
 
-/** True for links already served by our own Cloudinary cloud. */
+/** True for links already served by our own Cloudinary cloud (image or video). */
 export function isHostedImage(url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -97,20 +97,23 @@ export async function uploadImageFromUrl(
   return send(trimmed, options);
 }
 
-/** `File` or remote URL — Cloudinary takes either as `file`. */
+/** `File`/`Blob` or remote URL — Cloudinary takes either as `file`. */
 async function send(
-  file: File | string,
+  file: Blob | string,
   { signal }: UploadImageOptions,
+  resourceType: "image" | "video" = "image",
+  filename?: string,
 ): Promise<string> {
   const body = new FormData();
-  body.append("file", file);
+  if (typeof file !== "string" && filename) body.append("file", file, filename);
+  else body.append("file", file);
   body.append("upload_preset", UPLOAD_PRESET);
   body.append("cloud_name", CLOUD_NAME);
 
-  let payload: { secure_url?: string; url?: string; error?: { message?: string } };
+  let payload: UploadResponse;
   try {
     const res = await fetch(
-      `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`,
+      `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/${resourceType}/upload`,
       { method: "POST", body, signal },
     );
     payload = await res.json();
@@ -124,6 +127,16 @@ async function send(
     );
   }
 
+  return hostedUrl(payload);
+}
+
+type UploadResponse = {
+  secure_url?: string;
+  url?: string;
+  error?: { message?: string };
+};
+
+function hostedUrl(payload: UploadResponse): string {
   const url = payload.secure_url || payload.url;
   if (!url) {
     throw new ImageUploadError(
@@ -132,6 +145,110 @@ async function send(
     );
   }
   return url;
+}
+
+/* ─── Video ────────────────────────────────────────────────────────────────
+   Reels are video, and the backend has no upload endpoint for them either —
+   `CreateReelDto.videoUrl` is documented as "uploaded to the CDN by the
+   client". The restaurant dashboard posts reels to this same cloud, so a reel
+   created here sits next to the ones merchants make themselves.
+──────────────────────────────────────────────────────────────────────────── */
+
+/** Cloudinary's cap on a single (non-chunked) video upload. */
+export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+
+export interface UploadVideoOptions extends UploadImageOptions {
+  /** 0–1, as the bytes leave the browser. */
+  onProgress?: (fraction: number) => void;
+}
+
+export function assertUploadableVideo(file: File): void {
+  if (!file.type.startsWith("video/")) {
+    throw new ImageUploadError("type", "That file is not a video.");
+  }
+  if (file.size > MAX_VIDEO_BYTES) {
+    throw new ImageUploadError("size", "That video is too large.");
+  }
+}
+
+/**
+ * Uploads a video from the operator's machine.
+ *
+ * XHR rather than `fetch` because a reel is tens of megabytes and `fetch` has
+ * no upload progress — a spinner that sits there for a minute reads as a hang.
+ */
+export function uploadVideo(
+  file: File,
+  { signal, onProgress }: UploadVideoOptions = {},
+): Promise<string> {
+  assertUploadableVideo(file);
+
+  return new Promise((resolve, reject) => {
+    const body = new FormData();
+    body.append("file", file);
+    body.append("upload_preset", UPLOAD_PRESET);
+    body.append("cloud_name", CLOUD_NAME);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/video/upload`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      try {
+        resolve(hostedUrl(JSON.parse(xhr.responseText)));
+      } catch (err) {
+        reject(
+          err instanceof ImageUploadError
+            ? err
+            : new ImageUploadError("upload", "Upload failed."),
+        );
+      }
+    };
+    xhr.onerror = () => reject(new ImageUploadError("upload", "Upload failed."));
+    xhr.onabort = () => reject(new DOMException("Upload aborted", "AbortError"));
+
+    if (signal?.aborted) return xhr.onabort?.(new ProgressEvent("abort"));
+    signal?.addEventListener("abort", () => xhr.abort(), { once: true });
+    xhr.send(body);
+  });
+}
+
+/** Copies a video that lives at a public link onto our cloud. */
+export async function uploadVideoFromUrl(
+  remoteUrl: string,
+  options: UploadImageOptions = {},
+): Promise<string> {
+  const trimmed = remoteUrl.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new ImageUploadError("type", "That is not a video link.");
+  }
+  return send(trimmed, options, "video");
+}
+
+/**
+ * Uploads bytes already in hand — the server side of an Instagram import,
+ * which has to download the clip itself because its link is signed.
+ */
+export function uploadBlob(
+  blob: Blob,
+  resourceType: "image" | "video",
+  filename: string,
+  options: UploadImageOptions = {},
+): Promise<string> {
+  return send(blob, options, resourceType, filename);
+}
+
+/**
+ * A poster frame for a video on our cloud: Cloudinary renders any video as a
+ * still when asked for it with an image extension. `null` for other hosts.
+ */
+export function videoPosterUrl(videoUrl: string): string | null {
+  if (!isHostedImage(videoUrl)) return null;
+  const url = new URL(videoUrl);
+  if (!url.pathname.includes("/video/upload/")) return null;
+  url.pathname = url.pathname.replace(/\.[a-z0-9]+$/i, "") + ".jpg";
+  return url.toString();
 }
 
 /** Bytes as the whole-or-one-decimal MB figure the size warning quotes. */

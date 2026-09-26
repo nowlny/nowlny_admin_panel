@@ -24,6 +24,8 @@ import { EmptyState, ErrorState, Skeleton } from "./ui/States";
 import { statusLabel } from "./ui/StatusPill";
 
 import { useI18n } from "../../lib/i18n";
+import VideoUploadField, { ImportedReelDetails } from "./ui/VideoUploadField";
+import ImageUploadField from "./ui/ImageUploadField";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_PATTERN =
@@ -151,9 +153,12 @@ export default function RestaurantReelsSection() {
   const [menuItemOptions, setMenuItemOptions] = useState<MenuItemOption[]>([]);
   const [isLoadingMenuItems, setIsLoadingMenuItems] = useState(false);
 
-  // Debounced so the browser doesn't request a new video on every keystroke.
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [previewFailed, setPreviewFailed] = useState(false);
+  const [isUploadingVideo, setIsUploadingVideo] = useState(false);
+  const [isUploadingThumb, setIsUploadingThumb] = useState(false);
+  const isUploading = isUploadingVideo || isUploadingThumb;
+  // The thumbnail we filled in ourselves, so a replaced video can replace it
+  // too — but never one the owner chose.
+  const autoThumbRef = useRef("");
 
   const fetchReels = async () => {
     try {
@@ -213,14 +218,17 @@ export default function RestaurantReelsSection() {
     };
   }, [isModalOpen, menuItemOptions.length]);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setPreviewUrl(videoUrl.trim()), 500);
-    return () => clearTimeout(timer);
-  }, [videoUrl]);
-
-  useEffect(() => {
-    setPreviewFailed(false);
-  }, [previewUrl]);
+  /** Fills the cover and caption from an upload or Instagram import, if still blank. */
+  const applyImported = ({ thumbnailUrl: thumb, caption: text }: ImportedReelDetails) => {
+    if (thumb) {
+      setThumbnailUrl((current) => {
+        if (current.trim() && current !== autoThumbRef.current) return current;
+        autoThumbRef.current = thumb;
+        return thumb;
+      });
+    }
+    if (text) setCaption((current) => (current.trim() ? current : text.slice(0, 300)));
+  };
 
   const menuItemsBySection = useMemo(() => {
     const map = new Map<string, MenuItemOption[]>();
@@ -234,6 +242,7 @@ export default function RestaurantReelsSection() {
 
   const handleOpenModal = (reel?: Reel) => {
     setFieldErrors({});
+    autoThumbRef.current = "";
     if (reel) {
       setEditingReelId(reel.id);
       setVideoUrl(reel.videoUrl || "");
@@ -254,9 +263,10 @@ export default function RestaurantReelsSection() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isUploading) return;
 
     const errors: Record<string, string> = {};
-    if (!videoUrl.trim()) errors.videoUrl = "A video URL is required.";
+    if (!videoUrl.trim()) errors.videoUrl = t("reels.video_required");
     if (!caption.trim()) errors.caption = "A caption is required.";
     if (!UUID_RE.test(menuItemId.trim()))
       errors.menuItemId = t("reels.select_item_error");
@@ -513,7 +523,7 @@ export default function RestaurantReelsSection() {
             <button
               type="submit"
               form="own-reel-form"
-              disabled={isSubmitting}
+              disabled={isSubmitting || isUploading}
               className="px-4 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -527,68 +537,25 @@ export default function RestaurantReelsSection() {
         }
       >
         <form id="own-reel-form" onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="own-reel-video-url" className={LABEL_CLASS}>
-              {t("reels.f_video")}
-            </label>
-            <input
-              id="own-reel-video-url"
-              type="url"
-              required
-              value={videoUrl}
-              onChange={(e) => setVideoUrl(e.target.value)}
-              placeholder={t("reels.video_placeholder")}
-              aria-invalid={!!fieldErrors.videoUrl}
-              className={FIELD_CLASS}
-            />
-            {fieldErrors.videoUrl && (
-              <p className="text-[11px] font-semibold text-red-500 mt-1.5">
-                {fieldErrors.videoUrl}
-              </p>
-            )}
-            {/* There is no upload endpoint, so the URL has to be pasted — at
-                least show what was pasted before it's submitted. */}
-            {/^https?:\/\/\S+/i.test(previewUrl) && (
-              <div className="mt-3 flex items-start gap-3">
-                <video
-                  key={previewUrl}
-                  src={previewUrl}
-                  poster={thumbnailUrl.trim() || undefined}
-                  controls
-                  playsInline
-                  preload="metadata"
-                  onError={() => setPreviewFailed(true)}
-                  onLoadedMetadata={() => setPreviewFailed(false)}
-                  className="w-28 aspect-[9/16] shrink-0 bg-black rounded-xl object-contain"
-                />
-                <p
-                  className={`text-[11px] font-medium leading-relaxed ${
-                    previewFailed
-                      ? "text-red-500"
-                      : "text-zinc-500 dark:text-zinc-400"
-                  }`}
-                >
-                  {previewFailed
-                    ? t("reels.preview_failed")
-                    : t("reels.preview_live")}
-                </p>
-              </div>
-            )}
-          </div>
+          <VideoUploadField
+            id="own-reel-video-url"
+            label={t("reels.f_video")}
+            value={videoUrl}
+            onChange={setVideoUrl}
+            onImported={applyImported}
+            onUploadingChange={setIsUploadingVideo}
+            error={fieldErrors.videoUrl}
+            inputClassName={FIELD_CLASS}
+            labelClassName={LABEL_CLASS}
+          />
 
-          <div>
-            <label htmlFor="own-reel-thumbnail-url" className={LABEL_CLASS}>
-              {t("reels.f_thumb")}
-            </label>
-            <input
-              id="own-reel-thumbnail-url"
-              type="url"
-              value={thumbnailUrl}
-              onChange={(e) => setThumbnailUrl(e.target.value)}
-              placeholder={t("reels.thumb_placeholder")}
-              className={FIELD_CLASS}
-            />
-          </div>
+          <ImageUploadField
+            label={t("reels.f_thumb")}
+            value={thumbnailUrl}
+            onChange={setThumbnailUrl}
+            onUploadingChange={setIsUploadingThumb}
+            aspect="square"
+          />
 
           <div>
             <label htmlFor="own-reel-caption" className={LABEL_CLASS}>
@@ -600,6 +567,7 @@ export default function RestaurantReelsSection() {
               rows={3}
               value={caption}
               onChange={(e) => setCaption(e.target.value)}
+              maxLength={300}
               placeholder={t("reels.caption_placeholder_own")}
               aria-invalid={!!fieldErrors.caption}
               className={`${FIELD_CLASS} resize-none`}
