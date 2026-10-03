@@ -25,6 +25,7 @@ import {
   OrderResponse,
   OrderStatus,
   PaymentStatus,
+  orderCurrencyCode,
 } from "../../services/orders";
 import { formatMoney, formatDate, formatTime, shortId } from "../../lib/format";
 import Modal from "./ui/Modal";
@@ -90,9 +91,7 @@ function orderRef(order: OrderResponse): string {
  * platform). `formatMoney` was called without one everywhere, so a 750,000 LBP
  * order rendered as a bare "750,000.00" with no unit at all.
  */
-function orderCurrency(order?: OrderResponse | null): string | undefined {
-  return order?.currency?.code ?? order?.currencyCode ?? undefined;
-}
+const orderCurrency = orderCurrencyCode;
 
 function customerName(order: OrderResponse): string {
   return (

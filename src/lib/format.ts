@@ -37,6 +37,26 @@ export function setFormatterLocale(locale: "en" | "ar") {
 
 const tag = () => LOCALE_TAGS[activeLocale];
 
+/**
+ * Fraction digits by currency, matching the customer app (nowlny-web
+ * `formatMoney`): the lira is never written with piastres, dollars always
+ * show cents. Deciding by the value instead ("whole number → no decimals")
+ * put "$12" and "$12.50" side by side in the same list.
+ */
+export function currencyDecimals(currencyCode?: string | null): number {
+  const code = currencyCode?.toUpperCase();
+  if (!code) return 2;
+  if (code === "LBP") return 0;
+  try {
+    return (
+      new Intl.NumberFormat("en-US", { style: "currency", currency: code })
+        .resolvedOptions().maximumFractionDigits ?? 2
+    );
+  } catch {
+    return 2;
+  }
+}
+
 /** Formats money with the record's own currency. Falls back to a plain number. */
 export function formatMoney(
   value: unknown,
@@ -46,11 +66,13 @@ export function formatMoney(
   if (!Number.isFinite(n)) return EM_DASH;
 
   if (currencyCode) {
+    const digits = currencyDecimals(currencyCode);
     try {
       return new Intl.NumberFormat("en-US", {
         style: "currency",
-        currency: currencyCode,
-        maximumFractionDigits: Number.isInteger(n) ? 0 : 2,
+        currency: currencyCode.toUpperCase(),
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
       }).format(n);
     } catch {
       // Unknown / non-ISO code — fall through to the symbol-less form.

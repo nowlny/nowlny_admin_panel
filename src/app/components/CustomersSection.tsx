@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { customersService, CustomerStatus } from "../../services/customers";
-import { ordersService, OrderResponse } from "../../services/orders";
+import { ordersService, OrderResponse, orderCurrencyCode } from "../../services/orders";
 import AddCustomerModal from "./AddCustomerModal";
 import EditCustomerModal from "./EditCustomerModal";
 import Modal from "./ui/Modal";
@@ -609,7 +609,7 @@ export default function CustomersSection({
 
                       <div className="text-end shrink-0">
                         <span className="text-xs font-black text-zinc-900 dark:text-white">
-                          {formatMoney(order.total, "USD")}
+                          {formatMoney(order.total, orderCurrencyCode(order))}
                         </span>
                         <div className="mt-1">
                           <StatusPill status={order.status} />

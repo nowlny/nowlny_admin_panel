@@ -86,6 +86,8 @@ export interface OrderResponse {
     name?: string;
     phone?: string;
     logo?: string | null;
+    /** Where the API actually puts an order's currency (OrderRestaurantResponseDto). */
+    currency?: { code?: string; symbol?: string | null } | null;
   };
   addressId?: string;
   driverId?: string;
@@ -110,6 +112,23 @@ export interface OrderResponse {
 }
 
 export type PaginatedOrdersResponse = Paginated<OrderResponse>;
+
+/**
+ * The currency an order was priced in. The API nests it under the order's
+ * restaurant (`restaurant.currency`); the top-level fields are kept as
+ * fallbacks for older payloads. Reading only the top level left every order
+ * without a unit.
+ */
+export function orderCurrencyCode(
+  order?: Pick<OrderResponse, "restaurant" | "currency" | "currencyCode"> | null,
+): string | undefined {
+  return (
+    order?.restaurant?.currency?.code ??
+    order?.currency?.code ??
+    order?.currencyCode ??
+    undefined
+  );
+}
 
 export interface RestaurantStatistics {
   period: StatisticsPeriod;

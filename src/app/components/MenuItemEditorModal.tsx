@@ -12,7 +12,7 @@ import {
   MENU_IMAGE_ACCEPT,
   checkMenuImage,
 } from "../../services/menu";
-import { formatMoney } from "../../lib/format";
+import { currencyDecimals, formatMoney } from "../../lib/format";
 import Modal from "./ui/Modal";
 import ImagePicker from "./ui/ImagePicker";
 import { useConfirm } from "./ui/ConfirmDialog";
@@ -26,6 +26,8 @@ interface MenuItemEditorModalProps {
   sections: MenuSection[];
   /** Folders the uploaded dish photo under this store in the media library. */
   restaurantId?: string;
+  /** The restaurant's pricing currency, so add-on prices carry their unit. */
+  currencyCode?: string | null;
   onSuccess: () => void;
 }
 
@@ -35,9 +37,15 @@ export default function MenuItemEditorModal({
   item,
   sections,
   restaurantId,
+  currencyCode,
   onSuccess,
 }: MenuItemEditorModalProps) {
   const { t } = useI18n();
+  // Prices are typed in the restaurant's own currency; say which, and don't
+  // offer cents on a currency that has none (LBP).
+  const unit = currencyCode ? ` (${currencyCode.toUpperCase()})` : "";
+  const priceStep = currencyDecimals(currencyCode) === 0 ? "1" : "0.01";
+  const pricePlaceholder = currencyDecimals(currencyCode) === 0 ? "450000" : "9.99";
   const [activeTab, setActiveTab] = useState<"basic" | "options">("basic");
 
   // Basic Info State
@@ -394,12 +402,12 @@ export default function MenuItemEditorModal({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label htmlFor={`${fieldId}-price`} className={labelClass}>{t("mi.price")}</label>
-              <input id={`${fieldId}-price`} type="number" step="0.01" min="0" inputMode="decimal" required placeholder="9.99" value={price} onChange={(e) => setPrice(e.target.value)} className={inputClass} />
+              <label htmlFor={`${fieldId}-price`} className={labelClass}>{t("mi.price")}{unit}</label>
+              <input id={`${fieldId}-price`} type="number" step={priceStep} min="0" inputMode="decimal" required placeholder={pricePlaceholder} value={price} onChange={(e) => setPrice(e.target.value)} className={inputClass} />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor={`${fieldId}-discounted-price`} className={labelClass}>{t("mi.discounted")}</label>
-              <input id={`${fieldId}-discounted-price`} type="number" step="0.01" min="0" inputMode="decimal" placeholder={t("mi.optional")} value={discountedPrice} onChange={(e) => setDiscountedPrice(e.target.value)} className={inputClass} />
+              <label htmlFor={`${fieldId}-discounted-price`} className={labelClass}>{t("mi.discounted")}{unit}</label>
+              <input id={`${fieldId}-discounted-price`} type="number" step={priceStep} min="0" inputMode="decimal" placeholder={t("mi.optional")} value={discountedPrice} onChange={(e) => setDiscountedPrice(e.target.value)} className={inputClass} />
             </div>
           </div>
 
@@ -515,7 +523,7 @@ export default function MenuItemEditorModal({
                       <div key={opt.id} className="flex justify-between items-center text-xs p-2 hover:bg-zinc-50 dark:hover:bg-zinc-800 rounded-lg">
                         <span className="font-semibold text-zinc-700 dark:text-zinc-300">{opt.name}</span>
                         <div className="flex items-center gap-3">
-                          <span className="font-bold text-zinc-900 dark:text-white">+${formatMoney(opt.price ?? 0)}</span>
+                          <span className="font-bold text-zinc-900 dark:text-white">+{formatMoney(opt.price ?? 0, currencyCode)}</span>
                           <button
                             type="button"
                             aria-label={`Delete the ${opt.name} choice`}
@@ -532,7 +540,7 @@ export default function MenuItemEditorModal({
                     {addingOptionToGroup === group.id ? (
                       <div className="flex gap-2 items-center mt-2 p-2 bg-zinc-50 dark:bg-zinc-800/30 rounded-lg border border-zinc-200 dark:border-zinc-700">
                         <input type="text" aria-label={t("mi.option_name_aria")} placeholder={t("mi.option_name")} value={optionName} onChange={e => setOptionName(e.target.value)} className="flex-1 text-xs px-2 py-1.5 rounded bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700" />
-                        <input type="number" step="0.01" min="0" inputMode="decimal" aria-label={t("mi.option_price_aria")} placeholder={t("mi.option_price")} value={optionPrice} onChange={e => setOptionPrice(e.target.value)} className="w-20 text-xs px-2 py-1.5 rounded bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700" />
+                        <input type="number" step={priceStep} min="0" inputMode="decimal" aria-label={t("mi.option_price_aria")} placeholder={t("mi.option_price")} value={optionPrice} onChange={e => setOptionPrice(e.target.value)} className="w-20 text-xs px-2 py-1.5 rounded bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700" />
                         <button type="button" aria-label={t("mi.save_choice")} disabled={isSavingOption} onClick={() => handleSaveOption(group.id)} className="p-2 bg-orange-500 text-white rounded hover:bg-orange-600 disabled:opacity-50">
                           {isSavingOption ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                         </button>

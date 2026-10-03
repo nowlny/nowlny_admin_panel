@@ -2400,7 +2400,7 @@ export default function RestaurantMenuSection({
                             </div>
                           </div>
                           <span className="font-extrabold text-orange-500 shrink-0">
-                            ${Number(item.price ?? 0).toFixed(2)}
+                            {formatMoney(item.price ?? 0, restaurant.currency?.code)}
                           </span>
                         </div>
                       ))}
@@ -2886,6 +2886,7 @@ export default function RestaurantMenuSection({
         item={editingItem}
         sections={sections}
         restaurantId={restaurant.id}
+        currencyCode={restaurant.currency?.code}
         onSuccess={() => {
           setIsItemModalOpen(false);
           loadMenu();
